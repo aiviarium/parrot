@@ -1,0 +1,31 @@
+# Ground truth for codex-approval.cast: the state a person sees on the screen.
+# Spans by hand from text anchors: 'loading' under the logo, the update and trust dialogs, the approval question, the model pickers, 'esc to interrupt' until 'Worked for' or 'Conversation interrupted' (the turn also runs while the answer streams without a working line), the prompt row; the 60 ms between the logo and the update dialog is '*'.
+cast = "codex-approval.cast"
+profile = "../profiles/codex.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.117, "*"],
+  [0.171, "onboarding"],
+  [0.983, "idle"],
+  [9.547, "working"],
+  [15.540, "awaiting-approval"],
+  [18.369, "working"],
+  [23.678, "idle"],
+  [24.502, "working"],
+  [27.191, "awaiting-approval"],
+  [28.696, "working"],
+  [28.706, "idle"],
+  [31.214, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"working" = "working"
+"approval" = "awaiting-approval"
+"approval-option-2" = "awaiting-approval"
+"approved" = "working"
+"done" = "idle"
+"approval-2" = "awaiting-approval"
+"denied" = "idle"
+"exit" = "none"

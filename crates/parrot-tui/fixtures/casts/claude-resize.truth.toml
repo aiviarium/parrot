@@ -1,0 +1,22 @@
+# Ground truth for claude-resize.cast: the state a person sees on the screen.
+# Spans from text anchors (trust dialog, approval question, picker or question, 'esc to interrupt', the prompt between two rules), exact to the output event; blips under 50 ms are '*'.
+cast = "claude-resize.cast"
+profile = "../profiles/claude-code.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.539, "idle"],
+  [7.140, "working"],
+  [8.644, "*"],
+  [8.655, "working"],
+  [10.571, "idle"],
+  [14.488, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"working" = "working"
+"resized-80x24" = "working"
+"resized-120x36" = "idle"
+"done" = "idle"
+"exit-typed" = "idle"

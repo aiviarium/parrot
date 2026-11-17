@@ -1,0 +1,13 @@
+{
+  "name": "parrot",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "check": "biome check packages",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun run --filter '*' test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7"
+  }
+}

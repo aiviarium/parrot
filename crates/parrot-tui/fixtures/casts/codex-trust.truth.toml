@@ -1,0 +1,24 @@
+# Ground truth for codex-trust.cast: the state a person sees on the screen.
+# Spans by hand from text anchors: 'loading' under the logo, the update and trust dialogs, 'esc to interrupt' until 'Worked for', the prompt row (shown between the two dialogs); gaps under 50 ms are '*'.
+cast = "codex-trust.cast"
+profile = "../profiles/codex.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.098, "*"],
+  [0.142, "onboarding"],
+  [0.954, "idle"],
+  [1.394, "onboarding"],
+  [2.905, "*"],
+  [2.917, "idle"],
+  [5.491, "working"],
+  [7.249, "idle"],
+  [9.405, "none"],
+]
+
+[markers]
+"trust-dialog" = "onboarding"
+"idle" = "idle"
+"working" = "working"
+"done" = "idle"
+"exit" = "none"

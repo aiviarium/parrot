@@ -1,0 +1,24 @@
+# Ground truth for claude-prompt.cast: the state a person sees on the screen.
+# Spans from text anchors (trust dialog, approval question, picker or question, 'esc to interrupt', the prompt between two rules), exact to the output event; blips under 50 ms are '*'.
+cast = "claude-prompt.cast"
+profile = "../profiles/claude-code.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.375, "idle"],
+  [7.328, "working"],
+  [8.823, "idle"],
+  [11.393, "working"],
+  [12.976, "idle"],
+  [15.834, "*"],
+  [15.837, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"prompt-typed" = "idle"
+"working" = "working"
+"response" = "idle"
+"working-2" = "working"
+"interrupted" = "idle"
+"exit-typed" = "idle"

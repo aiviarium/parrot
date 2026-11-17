@@ -1,0 +1,4 @@
+data: {"id":"chatcmpl-stream-err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Starting..."}}]}
+
+data: {"error":{"message":"Upstream stream interrupted by rate limit","type":"rate_limit_error","code":"rate_limit_exceeded"}}
+

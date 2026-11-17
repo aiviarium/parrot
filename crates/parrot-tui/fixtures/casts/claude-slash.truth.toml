@@ -1,0 +1,19 @@
+# Ground truth for claude-slash.cast: the state a person sees on the screen.
+# Spans from text anchors (trust dialog, approval question, picker or question, 'esc to interrupt', the prompt between two rules), exact to the output event; blips under 50 ms are '*'.
+cast = "claude-slash.cast"
+profile = "../profiles/claude-code.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.564, "idle"],
+  [13.501, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"slash-menu" = "idle"
+"slash-menu-moved" = "idle"
+"slash-menu-filtered" = "idle"
+"slash-menu-closed" = "idle"
+"input-cleared" = "idle"
+"exit-typed" = "idle"

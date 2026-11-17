@@ -1,0 +1,3 @@
+data: {"id":"chatcmpl-stream-cut","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Partial "}}]}
+
+data: {"id":"chatcmpl-stream-cut","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"answer"}}]}

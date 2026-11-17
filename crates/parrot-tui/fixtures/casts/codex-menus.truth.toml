@@ -1,0 +1,26 @@
+# Ground truth for codex-menus.cast: the state a person sees on the screen.
+# Spans by hand from text anchors: 'loading' under the logo, the update and trust dialogs, the approval question, the model pickers, 'esc to interrupt' until 'Worked for' or 'Conversation interrupted' (the turn also runs while the answer streams without a working line), the prompt row; the 60 ms between the logo and the update dialog is '*'.
+cast = "codex-menus.cast"
+profile = "../profiles/codex.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.121, "*"],
+  [0.171, "onboarding"],
+  [0.983, "idle"],
+  [17.448, "awaiting-input"],
+  [19.959, "idle"],
+  [21.477, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"shortcuts" = "idle"
+"slash-menu" = "idle"
+"slash-menu-moved" = "idle"
+"slash-menu-filtered" = "idle"
+"slash-menu-closed" = "idle"
+"model-picker" = "awaiting-input"
+"model-picker-moved" = "awaiting-input"
+"model-picker-closed" = "idle"
+"exit" = "none"

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "response_format 'verbose_json' is not supported by this endpoint",
+    "type": "invalid_request_error",
+    "param": "response_format",
+    "code": "invalid_value"
+  }
+}

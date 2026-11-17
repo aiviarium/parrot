@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/parrot-term", "crates/parrot-tui", "crates/parrot-models"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aiviarium/parrot"
+
+[workspace.dependencies]
+parrot-term = { path = "crates/parrot-term" }
+parrot-tui = { path = "crates/parrot-tui" }
+parrot-models = { path = "crates/parrot-models" }
+bytes = "1.12.1"
+futures = "0.3.34"
+jsonschema = { version = "0.61.2", default-features = false }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["rt", "io"] }
+url = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+# Line numbers in backtraces, and quicker builds of the dependencies.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

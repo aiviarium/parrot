@@ -1,0 +1,26 @@
+# Ground truth for claude-holdout-2.cast: the state a person sees on the screen.
+# Held out: labelled after the profile was frozen (commit 5daa1fb), with the same text anchors as the development casts.
+cast = "claude-holdout-2.cast"
+profile = "../../profiles/claude-code.toml"
+holdout = true
+spans = [
+  [0.000, "starting"],
+  [0.474, "idle"],
+  [7.596, "awaiting-input"],
+  [9.149, "idle"],
+  [11.254, "working"],
+  [13.177, "awaiting-input"],
+  [14.732, "working"],
+  [15.909, "idle"],
+  [18.747, "*"],
+  [18.750, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"model-picker" = "awaiting-input"
+"model-picker-closed" = "idle"
+"working" = "working"
+"question" = "awaiting-input"
+"done" = "idle"
+"exit-typed" = "idle"

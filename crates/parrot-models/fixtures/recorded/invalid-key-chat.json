@@ -1,0 +1,35 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "accept": "application/json",
+      "content-type": "application/json"
+    },
+    "body": {
+      "model": "gpt-4o-mini",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello in five words."
+        }
+      ],
+      "max_tokens": 40
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "text/plain"
+    },
+    "body": {
+      "error": {
+        "message": "Incorrect API key provided: sk-fake-***************-key. You can find your API key at https://platform.openai.com/account/api-keys.",
+        "type": "invalid_request_error",
+        "code": "invalid_api_key",
+        "param": null
+      },
+      "status": 401
+    }
+  }
+}

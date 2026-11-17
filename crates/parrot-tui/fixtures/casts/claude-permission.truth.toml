@@ -1,0 +1,28 @@
+# Ground truth for claude-permission.cast: the state a person sees on the screen.
+# Spans from text anchors (trust dialog, approval question, picker or question, 'esc to interrupt', the prompt between two rules), exact to the output event; blips under 50 ms are '*'.
+cast = "claude-permission.cast"
+profile = "../profiles/claude-code.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.371, "idle"],
+  [7.130, "working"],
+  [8.860, "awaiting-approval"],
+  [11.930, "working"],
+  [14.183, "idle"],
+  [16.751, "working"],
+  [18.353, "awaiting-approval"],
+  [19.899, "idle"],
+  [23.259, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"working" = "working"
+"permission-prompt" = "awaiting-approval"
+"permission-option-2" = "awaiting-approval"
+"approved" = "working"
+"done" = "idle"
+"permission-prompt-2" = "awaiting-approval"
+"rejected" = "idle"
+"exit-typed" = "idle"

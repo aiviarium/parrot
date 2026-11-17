@@ -1,0 +1,24 @@
+# Ground truth for claude-startup.cast: the state a person sees on the screen.
+# Spans from text anchors (trust dialog, approval question, picker or question, 'esc to interrupt', the prompt between two rules), exact to the output event; blips under 50 ms are '*'.
+cast = "claude-startup.cast"
+profile = "../profiles/claude-code.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.268, "onboarding"],
+  [2.485, "starting"],
+  [2.752, "idle"],
+  [11.491, "*"],
+  [11.533, "idle"],
+  [15.366, "none"],
+]
+
+[markers]
+"trust-dialog" = "onboarding"
+"trust-yes-selected" = "onboarding"
+"idle" = "idle"
+"shortcuts" = "idle"
+"shortcuts-closed" = "*"
+"resized-80x24" = "idle"
+"resized-120x36" = "idle"
+"exit-typed" = "idle"

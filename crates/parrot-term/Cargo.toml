@@ -1,0 +1,25 @@
+[package]
+name = "parrot-term"
+description = "Terminal emulation, screen model, input encoding, recording and replay"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# No doc tests: the examples in the docs are `ignore`d sketches, and rustdoc costs a few seconds a crate.
+doctest = false
+
+[dependencies]
+alacritty_terminal = "0.26"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+regex.workspace = true
+bitflags = "2"
+portable-pty = "0.9"
+rustix = { version = "1", features = ["process", "termios", "stdio"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

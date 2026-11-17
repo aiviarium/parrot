@@ -1,0 +1,25 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "whisper-large-v3",
+      "object": "model",
+      "owned_by": "openai"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "object": "model",
+      "owned_by": "openai"
+    },
+    {
+      "id": "text-embedding-3-small",
+      "object": "model",
+      "owned_by": "openai"
+    },
+    {
+      "id": "tts-1",
+      "object": "model",
+      "owned_by": "openai"
+    }
+  ]
+}

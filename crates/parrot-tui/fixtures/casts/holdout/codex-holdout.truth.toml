@@ -1,0 +1,30 @@
+# Ground truth for codex-holdout.cast: the state a person sees on the screen.
+# Held out: labelled after the profile was frozen (commit 5daa1fb), with the same text anchors as the development casts.
+cast = "codex-holdout.cast"
+profile = "../../profiles/codex.toml"
+holdout = true
+spans = [
+  [0.000, "starting"],
+  [0.143, "*"],
+  [0.199, "onboarding"],
+  [1.004, "idle"],
+  [9.564, "working"],
+  [11.313, "idle"],
+  [13.787, "working"],
+  [20.856, "awaiting-approval"],
+  [22.362, "working"],
+  [23.711, "idle"],
+  [26.289, "awaiting-input"],
+  [27.795, "idle"],
+  [29.330, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"working" = "working"
+"answered" = "idle"
+"approval" = "awaiting-approval"
+"done" = "idle"
+"model-picker" = "awaiting-input"
+"model-picker-closed" = "idle"
+"exit" = "none"

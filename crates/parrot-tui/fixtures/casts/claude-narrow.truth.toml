@@ -1,0 +1,23 @@
+# Ground truth for claude-narrow.cast: the state a person sees on the screen.
+# Spans from text anchors (trust dialog, approval question, picker or question, 'esc to interrupt', the prompt between two rules), exact to the output event; blips under 50 ms are '*'.
+cast = "claude-narrow.cast"
+profile = "../profiles/claude-code.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.420, "idle"],
+  [7.180, "working"],
+  [8.907, "awaiting-approval"],
+  [10.477, "working"],
+  [12.000, "idle"],
+  [14.878, "*"],
+  [14.881, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"working" = "working"
+"permission-prompt" = "awaiting-approval"
+"approved" = "working"
+"done" = "idle"
+"exit-typed" = "idle"

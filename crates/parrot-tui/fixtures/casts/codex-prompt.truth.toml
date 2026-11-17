@@ -1,0 +1,25 @@
+# Ground truth for codex-prompt.cast: the state a person sees on the screen.
+# Spans by hand from text anchors: 'loading' under the logo, the update and trust dialogs, the approval question, the model pickers, 'esc to interrupt' until 'Worked for' or 'Conversation interrupted' (the turn also runs while the answer streams without a working line), the prompt row; the 60 ms between the logo and the update dialog is '*'.
+cast = "codex-prompt.cast"
+profile = "../profiles/codex.toml"
+holdout = false
+spans = [
+  [0.000, "starting"],
+  [0.102, "*"],
+  [0.165, "onboarding"],
+  [0.978, "idle"],
+  [9.810, "working"],
+  [11.548, "idle"],
+  [13.739, "working"],
+  [16.757, "idle"],
+  [18.753, "none"],
+]
+
+[markers]
+"idle" = "idle"
+"prompt-typed" = "idle"
+"working" = "working"
+"response" = "idle"
+"working-2" = "working"
+"interrupted" = "idle"
+"exit" = "none"
