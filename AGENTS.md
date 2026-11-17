@@ -29,7 +29,7 @@ bun run test
 vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md
 ```
 
-CI runs the Rust jobs for a change to `crates/`, `Cargo.toml` or `Cargo.lock`. It runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to the TUI profiles in `packages/parrot-agents/tui/` runs both. Started by hand, CI runs everything.
+CI runs the Rust jobs for a change to `crates/`, `Cargo.toml` or `Cargo.lock`. It runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
 
 ## Profiles and casts
 

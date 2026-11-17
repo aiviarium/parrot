@@ -1,0 +1,113 @@
+name: CI
+on:
+  # A pull request from a branch here would otherwise run everything twice.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_VERSION: 1.99.0
+  VALE_VERSION: 3.25.1
+jobs:
+  # Which areas the change touches. Started by hand, or with no base to
+  # compare with, every area runs.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.areas.outputs.rust }}
+      typescript: ${{ steps.areas.outputs.typescript }}
+      docs: ${{ steps.areas.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          all() { for a in rust typescript docs; do echo "$a=true" >> "$GITHUB_OUTPUT"; done; }
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            all; exit 0
+          fi
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          printf '%s\n' "$files"
+          # Markdown alone runs only the docs job.
+          code=$(printf '%s\n' "$files" | grep -v '\.md$' || true)
+          has() { printf '%s\n' "$3" | grep -qE "$1" && echo "$2=true" >> "$GITHUB_OUTPUT" || true; }
+          has '^(crates/|Cargo\.(toml|lock)$|rustfmt\.toml$|\.github/workflows/ci\.yml$)' rust "$code"
+          has '^(packages/|package\.json$|bun\.lock$|biome\.json$|tsconfig\.base\.json$|\.github/workflows/ci\.yml$)' typescript "$code"
+          has '(\.md$|^\.vale\.ini$|^\.vale/|^\.github/workflows/ci\.yml$)' docs "$files"
+
+  rust-lint:
+    needs: changes
+    if: needs.changes.outputs.rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  rust-tests:
+    needs: changes
+    if: needs.changes.outputs.rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --locked --workspace
+
+  typescript:
+    needs: changes
+    if: needs.changes.outputs.typescript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run typecheck
+      - run: bun run test
+
+  docs:
+    needs: changes
+    if: needs.changes.outputs.docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Vale
+        run: |
+          curl -fsSL "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" vale
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md
