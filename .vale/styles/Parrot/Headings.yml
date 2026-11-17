@@ -1,0 +1,27 @@
+extends: capitalization
+message: "Headings in sentence case: '%s'."
+level: warning
+scope: heading
+match: $sentence
+exceptions:
+  - Parrot
+  - Claude Code
+  - Codex
+  - Pi
+  - ACP
+  - TUI
+  - CLI
+  - CLIs
+  - API
+  - JSON
+  - TOML
+  - PTY
+  - Bun
+  - Biome
+  - Vale
+  - AGENTS.md
+  - parrot-term
+  - parrot-tui
+  - parrot-models
+  - parrot-term-tool
+  - parrot-agents
