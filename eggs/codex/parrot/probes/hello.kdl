@@ -1,0 +1,4 @@
+description "One short turn: a prompt, its answer, and the end of the turn."
+timeout-secs 180
+prompt "Reply with the single word: hello."
+wait "idle" timeout-secs=120

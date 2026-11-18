@@ -1,24 +1,24 @@
 //! Driver data (spec 31): the parts of the ACP mapping that change between agents.
 //!
 //! `driver.kdl` and `levels.kdl` ship with the egg. Without `PARROT_DRIVER_DATA`, or without a
-//! file, the built-in fallbacks below apply, so a fresh install works offline. An agent without a
-//! mode mapping counts as `host` with network (spec 15.2).
-//!
-//! The files are read with a small reader for the two shapes this driver uses, so the crate needs
-//! no KDL dependency: `mode "<id>" level="<level>" network=<bool>`, `level "<name>":` with
-//! `tool "<name>";` children, and top-level `driver`/`command`/`data-version` nodes.
+//! file, the copy of the egg's `levels.kdl` compiled in applies, so a fresh install works offline.
+//! An agent mode no `map` names counts as `host` with network (spec 15.2).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use parrot_proto::driver_data::{self, LevelsFile};
 use parrot_proto::option::PermissionLevel;
+use serde_json::json;
+
+/// The egg's `levels.kdl`, compiled in as the fallback.
+const BUILTIN_LEVELS: &str = include_str!("../../../eggs/acp/parrot/levels.kdl");
 
 /// What the data files say.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Data {
-    /// Mode id to level and network.
-    pub modes: Vec<ModeRule>,
-    /// Tool names or ACP tool kinds to the lowest level that allows them.
-    pub tools: Vec<ToolRule>,
+    /// Tools per level, and the level each agent mode gives (`levels.kdl`).
+    pub levels: LevelsFile,
     /// A command that starts the agent, from `driver.kdl`.
     pub command: Option<Vec<String>>,
     /// The agent's display name.
@@ -27,53 +27,11 @@ pub struct Data {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModeRule {
-    pub mode: String,
-    pub level: PermissionLevel,
-    pub network: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToolRule {
-    pub tool: String,
-    pub level: PermissionLevel,
-}
-
 impl Default for Data {
     fn default() -> Self {
         Data {
-            modes: [
-                ("bypassPermissions", PermissionLevel::Host, true),
-                ("acceptEdits", PermissionLevel::Write, false),
-                ("plan", PermissionLevel::Read, false),
-                ("default", PermissionLevel::Read, false),
-            ]
-            .into_iter()
-            .map(|(mode, level, network)| ModeRule {
-                mode: mode.into(),
-                level,
-                network,
-            })
-            .collect(),
-            tools: [
-                ("read", PermissionLevel::Read),
-                ("search", PermissionLevel::Read),
-                ("think", PermissionLevel::Read),
-                ("edit", PermissionLevel::Write),
-                ("write", PermissionLevel::Write),
-                ("delete", PermissionLevel::Write),
-                ("move", PermissionLevel::Write),
-                ("execute", PermissionLevel::Host),
-                ("fetch", PermissionLevel::Host),
-                ("other", PermissionLevel::Host),
-            ]
-            .into_iter()
-            .map(|(tool, level)| ToolRule {
-                tool: tool.into(),
-                level,
-            })
-            .collect(),
+            levels: driver_data::parse("levels.kdl", BUILTIN_LEVELS)
+                .expect("the compiled-in levels.kdl parses"),
             command: None,
             agent_name: "ACP agent".into(),
             version: "1".into(),
@@ -82,31 +40,36 @@ impl Default for Data {
 }
 
 impl Data {
-    /// The level a mode id gives; an unmapped mode is `host` with network.
+    /// The level a mode id gives; an unmapped mode is `host` with network. Before the agent
+    /// reports a mode, the mapping for `default` applies.
     pub fn level_of(&self, mode: Option<&str>) -> (PermissionLevel, bool) {
-        let Some(mode) = mode else {
-            // Before the agent reports a mode, driver data's mapping for `default` applies.
-            return self
-                .modes
-                .iter()
-                .find(|r| r.mode == "default")
-                .map_or((PermissionLevel::Host, true), |r| (r.level, r.network));
-        };
-        self.modes
-            .iter()
-            .find(|r| r.mode == mode)
-            .map_or((PermissionLevel::Host, true), |r| (r.level, r.network))
+        let values = BTreeMap::from([("mode".to_owned(), json!(mode.unwrap_or("default")))]);
+        self.levels.level_of(&values)
     }
 
     /// The level a tool call needs: its name first, which is more specific than its ACP kind.
+    /// Names match the data without regard to case.
     pub fn tool_level(&self, kind: &str, name: &str) -> PermissionLevel {
-        let find = |candidate: &str| {
-            self.tools
+        let listed = |candidate: &str| {
+            self.levels
+                .level
                 .iter()
-                .find(|r| r.tool.eq_ignore_ascii_case(candidate))
-                .map(|r| r.level)
+                .flat_map(|l| l.tool.iter())
+                .find(|t| !candidate.is_empty() && t.eq_ignore_ascii_case(candidate))
+                .cloned()
         };
-        find(name).or_else(|| find(kind)).unwrap_or(PermissionLevel::Host)
+        match listed(name).or_else(|| listed(kind)) {
+            Some(tool) => self.levels.tool_level(&tool),
+            None => PermissionLevel::Host,
+        }
+    }
+
+    /// The levels the mapped modes give, lowest first.
+    pub fn mode_levels(&self) -> Vec<PermissionLevel> {
+        let mut levels: Vec<PermissionLevel> = self.levels.map.iter().map(|m| m.level).collect();
+        levels.sort();
+        levels.dedup();
+        levels
     }
 }
 
@@ -146,37 +109,9 @@ pub fn load_from(dir: &Path) -> Data {
         }
     }
     if let Ok(text) = std::fs::read_to_string(dir.join("levels.kdl")) {
-        let mut level: Option<PermissionLevel> = None;
-        // Braces and semicolons only group the one level of nesting this file has.
-        for raw in text.replace(['{', '}', ';'], "\n").lines() {
-            let line = raw.split("//").next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-            if line.starts_with("mode ") {
-                let Some(mode) = strings(line).into_iter().next() else {
-                    continue;
-                };
-                let Some(mode_level) = property(line, "level").and_then(|l| level_of_name(&l)) else {
-                    continue;
-                };
-                let network = property(line, "network")
-                    .map(|n| n == "true")
-                    .unwrap_or(mode_level == PermissionLevel::Host);
-                data.modes.retain(|r| r.mode != mode);
-                data.modes.push(ModeRule {
-                    mode,
-                    level: mode_level,
-                    network,
-                });
-            } else if line.starts_with("level ") {
-                level = strings(line).into_iter().next().and_then(|l| level_of_name(&l));
-            } else if line.starts_with("tool ")
-                && let (Some(level), Some(tool)) = (level, strings(line).into_iter().next())
-            {
-                data.tools.retain(|r| r.tool != tool);
-                data.tools.push(ToolRule { tool, level });
-            }
+        // A malformed file leaves the compiled-in levels in place.
+        if let Ok(levels) = driver_data::parse("levels.kdl", &text) {
+            data.levels = levels;
         }
     }
     data
@@ -211,16 +146,6 @@ fn property(line: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_owned())
 }
 
-fn level_of_name(name: &str) -> Option<PermissionLevel> {
-    match name {
-        "read" => Some(PermissionLevel::Read),
-        "write" => Some(PermissionLevel::Write),
-        "sandboxed" => Some(PermissionLevel::Sandboxed),
-        "host" => Some(PermissionLevel::Host),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +166,7 @@ mod tests {
         std::fs::write(
             dir.path().join("levels.kdl"),
             r#"
-mode "careful" level="read" network=false
+map level="read" network=#false { when mode="careful"; }
 level "write" { tool "Change"; }
             "#,
         )

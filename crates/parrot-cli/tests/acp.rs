@@ -95,7 +95,8 @@ struct Acp {
 impl Acp {
     async fn start(socket: &Path) -> Self {
         let mut child = tokio::process::Command::new(PARROT)
-            .args(["acp", "--socket"])
+            // Named, since the first usable agent depends on which eggs are installed.
+            .args(["acp", "--agent", "claude", "--socket"])
             .arg(socket)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

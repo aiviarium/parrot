@@ -16,6 +16,7 @@ parrot-proto.workspace = true
 parrot-core.workspace = true
 parrot-store.workspace = true
 parrot-driver.workspace = true
+parrot-eggs.workspace = true
 parrot-workspace.workspace = true
 parrot-link.workspace = true
 parrot-driver-tui.workspace = true

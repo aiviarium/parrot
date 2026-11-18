@@ -84,6 +84,8 @@ pub async fn run(
         parrot_link::StaticKey::load_or_create(&dir).map_err(|e| format!("cannot read the link key: {e}"))?;
     let hub = parrot_serve::link_hub::LinkHub::new(key, Some(dir.join("links.json")));
     let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
+    let drivers = load_drivers(&dir);
+    parrot_core::agents::load(&mut core.state, drivers.agents());
     core.state.principals.runtime = hub.runtime_id();
     core.state.principals.env = hub.runtime_id().replacen("rt_", "env_", 1);
     // The injected MCP server is this program's `parrot mcp` (spec 26).
@@ -124,6 +126,7 @@ pub async fn run(
             .with_links(backend_hub)
             .with_scratch(scratch)
             .with_notifier(notifier)
+            .with_drivers(drivers)
             .with_tui(tui)
             .with_tokens(backend_tokens)
     });
@@ -170,6 +173,20 @@ pub async fn run(
     #[cfg(unix)]
     let _ = std::fs::remove_file(parrot_link::endpoint::link_socket_path(&socket));
     result
+}
+
+/// The driver eggs of this state directory, with refused ones reported on stderr.
+fn load_drivers(dir: &std::path::Path) -> parrot_serve::drivers::Drivers {
+    let (drivers, problems) = parrot_serve::drivers::Drivers::load(dir);
+    for p in problems {
+        eprintln!("parrot: {p}");
+    }
+    for egg in drivers.eggs() {
+        if let Err(e) = &egg.driver {
+            eprintln!("parrot: refused a driver egg: {e}");
+        }
+    }
+    drivers
 }
 
 /// The link endpoint `link.sock` beside the socket (E9).
