@@ -76,7 +76,7 @@ impl Eggs {
                 r.clone()
             } else {
                 let staged = tempfile::tempdir().map_err(|e| e.to_string())?;
-                publish_folder(&r, staged.path(), &self.target)?;
+                publish_folder(&r, staged.path(), &self.target, None)?;
                 let path = staged.path().to_path_buf();
                 held.push(staged);
                 path
@@ -290,28 +290,20 @@ pub fn pack(dir: &Path, target: &ParrotTarget) -> Result<Vec<hatchery::Egg>, Str
 }
 
 /// Packs every package folder under `src` (or `src` itself, when it is one) and publishes the
-/// eggs into the static registry at `registry`. Returns `group/id version` for each.
-pub fn publish_folder(src: &Path, registry: &Path, target: &ParrotTarget) -> Result<Vec<String>, String> {
-    let mut folders = Vec::new();
-    if src.join("package.kdl").is_file() {
-        folders.push(src.to_path_buf());
-    } else {
-        let entries = std::fs::read_dir(src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
-        for e in entries.flatten() {
-            if e.path().join("package.kdl").is_file() {
-                folders.push(e.path());
-            }
-        }
-        folders.sort();
-    }
-    if folders.is_empty() {
-        return Err(format!("{} has no packages", src.display()));
-    }
+/// eggs into the static registry at `registry`, signed with `key` when one is given. Returns
+/// `group/id version` for each.
+pub fn publish_folder(
+    src: &Path,
+    registry: &Path,
+    target: &ParrotTarget,
+    key: Option<&crate::signing::SigningKey>,
+) -> Result<Vec<String>, String> {
+    let folders = crate::build::package_folders(src)?;
     std::fs::create_dir_all(registry).map_err(|e| format!("cannot create {}: {e}", registry.display()))?;
     let mut out = Vec::new();
     for folder in folders {
         for egg in pack(&folder, target)? {
-            let published = hatchery::publish(&egg, &hatchery::PublishTo::Dir(registry.to_path_buf()), None)
+            let published = hatchery::publish(&egg, &hatchery::PublishTo::Dir(registry.to_path_buf()), key)
                 .map_err(|e| format!("cannot publish {}: {e}", egg.file_name()))?;
             out.push(format!("{} {}", published.name, published.version));
         }

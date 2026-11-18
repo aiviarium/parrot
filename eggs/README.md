@@ -112,10 +112,30 @@ The runtime installs eggs into `<state_dir>/eggs`. The runtime refuses an egg wh
 | `parrot eggs install ./eggs/acp` | Installs one package folder |
 | `parrot eggs list` | Lists each installed agent's egg |
 | `parrot eggs check [dir…]` | Checks package folders, or what the runtime would load |
-| `parrot eggs pack <dir…> --out DIR` | Writes `.egg` files. `--publish DIR` publishes them into a static registry instead |
+| `parrot eggs pack <dir…> --out DIR` | Writes `.egg` files. `--publish DIR` publishes them into a static registry instead, and `--sign-key-env VAR` signs them |
 | `parrot eggs remove aiviarium/claude` | Removes an installed package |
 
-`pack` leaves out a variant whose folder does not exist. `scripts/pack-eggs.sh` builds this machine's driver binaries, copies them into their variant folders and packs every egg into `target/eggs-registry`.
+`pack` leaves out a variant whose folder does not exist. `parrot eggs pack eggs --build --publish target/eggs-registry` builds this machine's driver binaries, copies them into their variant folders and packs every egg into `target/eggs-registry`. On another platform, add `--target <triple>`; a release builds once per platform and packs every variant together.
+
+## A signed registry
+
+A static registry can be signed, so an egg cannot change without the key. The release workflow signs the published registry with the key in the `PARROT_EGG_SIGNING_KEY` secret and prints the public key, which goes in the release notes.
+
+```bash
+hatchery keygen > keys.txt           # line 1 is the signing key, line 2 the public key
+PARROT_EGG_SIGNING_KEY="$(sed -n 1p keys.txt)" \
+  parrot eggs pack eggs --publish site/eggs --sign-key-env PARROT_EGG_SIGNING_KEY
+```
+
+The key travels only in the environment: the command takes the variable's name, not the key. To check eggs against it, give the public key to the registry line in `<state_dir>/hatchery.kdl`:
+
+```kdl
+registries {
+  http "https://aiviarium.github.io/parrot/eggs" key="ed25519:…"
+}
+```
+
+A registry with a key refuses an egg whose signature is missing or wrong. Without a key, eggs install on the checksum in the index.
 
 The schemas of `driver.kdl` and the probes are in `spec/schema/driver-data/`, with examples in `spec/examples/driver-data/`.
 

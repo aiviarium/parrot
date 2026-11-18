@@ -37,7 +37,7 @@ CI runs the Rust jobs for a change to `crates/`, `Cargo.toml` or `Cargo.lock`. I
 ## Drivers and eggs
 
 - `parrot` builds in only the ACP and TUI cores. The Claude, Codex, pi, opencode and T3 drivers are binaries, `parrot-driver-<agent>`, packed into the eggs in `eggs/`. `eggs/README.md` describes the eggs and `docs/drivers.md` the driver protocol for authors.
-- `scripts/pack-eggs.sh` builds this machine's driver binaries, copies them into `eggs/<agent>/parrot/variants/<os>-<arch>/` and packs every egg into a static registry in `target/eggs-registry`. Install from it with `parrot eggs install aiviarium/claude --registry target/eggs-registry`.
+- `parrot eggs pack eggs --build --publish target/eggs-registry` builds this machine's driver binaries, copies them into `eggs/<agent>/parrot/variants/<os>-<arch>/` and packs every egg into a static registry in `target/eggs-registry`. Install from it with `parrot eggs install aiviarium/claude --registry target/eggs-registry`.
 - The CLI tests install the in-repo eggs, with freshly built driver binaries, into each test's state directory. Start `parrot serve` through `common::Serve`, or pass the state directory through `common::with_eggs`.
 
 ## Profiles and casts
