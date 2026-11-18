@@ -59,9 +59,21 @@ pub fn run(program: OsString, args: Vec<OsString>) -> std::io::Result<i32> {
 
     let mut cmd = Command::new(program);
     cmd.args(args).process_group(0);
+    // SAFETY: getpgrp has no preconditions.
+    let guard_group = unsafe { libc::getpgrp() };
     // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
+            // On a terminal the guard holds in the foreground (a PTY under TUI control), the
+            // harness's own group takes the foreground; otherwise setting raw mode or reading
+            // would stop it with SIGTTOU or SIGTTIN. SIGTTOU is blocked for the handover.
+            if libc::isatty(0) == 1 && libc::tcgetpgrp(0) == guard_group {
+                let mut ttou: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut ttou);
+                libc::sigaddset(&mut ttou, libc::SIGTTOU);
+                libc::pthread_sigmask(libc::SIG_BLOCK, &ttou, std::ptr::null_mut());
+                libc::tcsetpgrp(0, libc::getpid());
+            }
             let mut empty: libc::sigset_t = std::mem::zeroed();
             libc::sigemptyset(&mut empty);
             libc::pthread_sigmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());

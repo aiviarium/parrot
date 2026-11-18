@@ -39,6 +39,7 @@ fn play() -> Vec<Value> {
             }
             Step::Expect(p) if p["request"]["subtype"] == "interrupt" => state.cancel(),
             Step::Expect(_) | Step::Exit(_) => {}
+            Step::Choose(_) | Step::McpCall { .. } | Step::Shell(_) => {}
             Step::Emit(m) => {
                 if m["type"] == "control_response" && m["response"]["response"]["models"].is_array() {
                     state.initialized(&m["response"]["response"]);

@@ -110,6 +110,15 @@ fn apply_egg(state: &State, id: &str, a: &mut Value) {
     }
     a["driver"]["kind"] = json!(egg.kind);
     a["driver"]["data"] = json!(egg.data);
+    // The egg's `controls` add what the runtime drives itself, such as TUI control (E4).
+    if let Some(list) = a.get_mut("controls").and_then(Value::as_array_mut) {
+        for c in &egg.controls {
+            let c = json!(c);
+            if !list.contains(&c) {
+                list.push(c);
+            }
+        }
+    }
     if let Some(r) = &egg.refused {
         a["usable"] = json!(false);
         a["detail"] = json!(r);

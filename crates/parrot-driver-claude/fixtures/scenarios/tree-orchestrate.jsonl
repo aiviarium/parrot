@@ -1,0 +1,3 @@
+// The tree proof over MCP: the orchestrator's first prompt picks the parent's steps, any other
+// prompt (a child's brief) the child's.
+{"choose":[{"when":{"type":"user","message":{"content":"Orchestrate the release notes."}},"steps":"tree-parent.jsonl"},{"when":{"type":"user"},"steps":"tree-child.jsonl"}]}

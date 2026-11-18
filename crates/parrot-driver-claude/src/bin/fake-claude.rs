@@ -37,6 +37,6 @@ fn main() {
             std::process::exit(64);
         }
     };
-    let code = fake::run(&steps, std::io::stdin().lock(), std::io::stdout().lock());
+    let code = fake::run_with_args(&steps, std::io::stdin().lock(), std::io::stdout().lock(), args);
     std::process::exit(code);
 }

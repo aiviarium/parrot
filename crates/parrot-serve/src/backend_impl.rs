@@ -255,8 +255,10 @@ impl Backend for RuntimeBackend {
         }
         let rt = self.rt.clone();
         let how = if start["control"] == "tui" {
-            match self.tui.get(&agent) {
-                Some(a) => crate::tui::driver_config(&agent, a).map(|c| Launch::Tui(Box::new(c))),
+            // `config.json` wins; otherwise the agent's egg supplies the profile and command.
+            let from_egg = || self.drivers.as_ref().and_then(|d| d.tui_agent(&agent));
+            match self.tui.get(&agent).cloned().or_else(from_egg) {
+                Some(a) => crate::tui::driver_config(&agent, &a).map(|c| Launch::Tui(Box::new(c))),
                 None => Err(format!("agent {agent} has no TUI profile")),
             }
         } else {

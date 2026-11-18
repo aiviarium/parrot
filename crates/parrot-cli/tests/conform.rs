@@ -64,9 +64,8 @@ fn driver_fixtures_pass_against_the_claude_driver() {
 #[test]
 fn runtime_fixtures_pass_against_parrot_serve() {
     let out = conform(&["--runtime"]);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let pending = stdout.lines().filter(|l| l.starts_with("skip ")).count();
-    assert_passes(&out, parrot_fixture_count("runtime") - pending);
+    assert_passes(&out, parrot_fixture_count("runtime"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(" 0 skipped"));
 }
 
 #[test]

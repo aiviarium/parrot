@@ -852,8 +852,12 @@ fn merge(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Resu
             ));
         }
     }
-    let busy = cx.state.sessions.info.iter().any(|(_, i)| {
-        i.workspace == p.into && matches!(i.state, SessionState::Running | SessionState::RequiresAction)
+    // The caller's own turn doesn't count: an orchestrator merges from inside its turn.
+    let me = session_principal(cx.state, conn).map(str::to_string);
+    let busy = cx.state.sessions.info.iter().any(|(s, i)| {
+        Some(s) != me.as_ref()
+            && i.workspace == p.into
+            && matches!(i.state, SessionState::Running | SessionState::RequiresAction)
     });
     if busy {
         return Err(RpcError::new(-32004, "a turn runs in the target workspace")
