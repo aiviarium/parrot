@@ -28,15 +28,65 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::dialog::{self, Dialog};
-use crate::transcript::{ClaudeTranscript, Tail};
+use crate::transcript::{ClaudeTranscript, CodexTranscript, Reader, Tail};
 
 /// Where a binding's transcript is written.
 #[derive(Debug, Clone)]
 pub enum TranscriptDir {
     /// Claude Code's folder for the binding's working directory.
     ClaudeProject,
+    /// Codex's rollout folder, kept by date.
+    CodexSessions,
     /// A fixed folder; the newest `.jsonl` written after the start is followed.
     Dir(PathBuf),
+}
+
+impl TranscriptDir {
+    /// The `transcript` node of an egg's `driver.kdl`: `claude`, `codex`, or `jsonl` with `dir`.
+    /// A `dir` given with `claude` or `codex` replaces the format's own folder.
+    pub fn from_data(format: &str, dir: Option<&str>) -> Option<(TranscriptDir, TranscriptFormat)> {
+        let dir = dir.map(expand_home);
+        match format {
+            "claude" => Some((
+                dir.map_or(TranscriptDir::ClaudeProject, TranscriptDir::Dir),
+                TranscriptFormat::Claude,
+            )),
+            "codex" => Some((
+                dir.map_or(TranscriptDir::CodexSessions, TranscriptDir::Dir),
+                TranscriptFormat::Codex,
+            )),
+            "jsonl" => dir.map(|d| (TranscriptDir::Dir(d), TranscriptFormat::Claude)),
+            _ => None,
+        }
+    }
+}
+
+/// The line format of a transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TranscriptFormat {
+    /// Claude Code's messages, which the plain `jsonl` format shares.
+    #[default]
+    Claude,
+    /// Codex rollout lines.
+    Codex,
+}
+
+impl McpStyle {
+    /// The `mcp` node of an egg's `driver.kdl`.
+    pub fn from_data(style: &str) -> Option<McpStyle> {
+        match style {
+            "mcp-config" => Some(McpStyle::Claude),
+            "config-override" => Some(McpStyle::Codex),
+            _ => None,
+        }
+    }
+}
+
+fn expand_home(dir: &str) -> PathBuf {
+    match dir.strip_prefix("~/") {
+        Some(rest) => parrot_driver::paths::home_dir().map_or_else(|| PathBuf::from(dir), |h| h.join(rest)),
+        None => PathBuf::from(dir),
+    }
 }
 
 /// How the driver starts and reads one harness.
@@ -61,6 +111,7 @@ pub struct Config {
     /// Profile states that are dialogs, and the request kind each one opens.
     pub dialogs: HashMap<String, RequestKind>,
     pub transcript: Option<TranscriptDir>,
+    pub transcript_format: TranscriptFormat,
     /// How the harness takes the injected MCP server (spec 26), if it takes one.
     pub mcp: Option<McpStyle>,
 }
@@ -142,13 +193,8 @@ impl Config {
             states: states.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             dialogs: dialogs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             transcript: None,
-            mcp: if agent.contains("codex") {
-                Some(McpStyle::Codex)
-            } else if agent.contains("claude") {
-                Some(McpStyle::Claude)
-            } else {
-                None
-            },
+            transcript_format: TranscriptFormat::Claude,
+            mcp: None,
         }
     }
 
@@ -184,6 +230,8 @@ struct OpenRequest {
 
 struct TurnInfo {
     key: String,
+    /// Token counts from the transcript: the latest request's input, every request's output.
+    usage: Option<parrot_proto::usage::TokenUsage>,
     input: Option<String>,
     started: String,
     at: Instant,
@@ -213,7 +261,7 @@ struct Binding {
     tui: Automation,
     inner: Mutex<Inner>,
     state_tx: watch::Sender<Option<State>>,
-    transcript: Mutex<ClaudeTranscript>,
+    transcript: Mutex<Reader>,
 }
 
 /// If a turn sees no busy screen at all, it ends once idle has held this long after the prompt.
@@ -435,20 +483,35 @@ impl Shared {
             tui,
             inner: Mutex::default(),
             state_tx,
-            transcript: Mutex::default(),
+            transcript: Mutex::new(match c.transcript_format {
+                TranscriptFormat::Claude => Reader::Claude(ClaudeTranscript::new()),
+                TranscriptFormat::Codex => Reader::Codex(CodexTranscript::new()),
+            }),
         });
         self.bindings.lock().unwrap().insert(b.id.clone(), b.clone());
         tokio::spawn(watch_screen(self.clone(), b.clone(), events));
         if let Some(t) = &c.transcript {
-            let dir = match t {
+            let tail = match t {
                 TranscriptDir::ClaudeProject => {
-                    crate::transcript::claude_project_dir(std::path::Path::new(&start.cwd))
+                    crate::transcript::claude_project_dir(std::path::Path::new(&start.cwd)).map(|dir| {
+                        let file = start.resume.as_ref().map(|r| dir.join(format!("{}.jsonl", r.id)));
+                        Tail::new(dir, file, started_at)
+                    })
                 }
-                TranscriptDir::Dir(d) => Some(d.clone()),
+                // Rollouts sit in a folder per day, named by time and thread id.
+                TranscriptDir::CodexSessions => crate::transcript::codex_sessions_dir().map(|dir| {
+                    let file = start
+                        .resume
+                        .as_ref()
+                        .and_then(|r| crate::transcript::codex_rollout(&dir, &r.id));
+                    Tail::new(dir, file, started_at).nested(3)
+                }),
+                TranscriptDir::Dir(dir) => {
+                    let file = start.resume.as_ref().map(|r| dir.join(format!("{}.jsonl", r.id)));
+                    Some(Tail::new(dir.clone(), file, started_at))
+                }
             };
-            if let Some(dir) = dir {
-                let file = start.resume.as_ref().map(|r| dir.join(format!("{}.jsonl", r.id)));
-                let tail = Tail::new(dir, file, started_at);
+            if let Some(tail) = tail {
                 tokio::spawn(follow_transcript(self.clone(), b.clone(), tail));
             }
         }
@@ -520,6 +583,7 @@ impl Shared {
             inner.turns += 1;
             let key = format!("turn-{}", inner.turns);
             inner.turn = Some(TurnInfo {
+                usage: None,
                 key: key.clone(),
                 input: Some(p.message.clone()),
                 started: crate::now(),
@@ -742,6 +806,10 @@ impl Shared {
             return;
         };
         let mut turn = turn_of(&t);
+        turn.usage = t.usage.clone().map(|tokens| parrot_proto::usage::Usage {
+            tokens: Some(tokens),
+            ..Default::default()
+        });
         let status = if t.cancelled && status == TurnStatus::Completed {
             TurnStatus::Interrupted
         } else {
@@ -1073,6 +1141,17 @@ async fn follow_transcript(shared: Arc<Shared>, b: Arc<Binding>, mut tail: Tail)
                     item.turn = turn.clone();
                 }
                 shared.emit(&b.id, DriverUpdateKind::Item { item });
+            }
+            if let Some(u) = ev
+                .usage
+                .and_then(|u| serde_json::from_value::<parrot_proto::usage::TokenUsage>(u).ok())
+                && let Some(t) = b.inner.lock().unwrap().turn.as_mut()
+            {
+                let output = t.usage.as_ref().map_or(0, |o| o.output);
+                t.usage = Some(parrot_proto::usage::TokenUsage {
+                    output: output + u.output,
+                    ..u
+                });
             }
             // The transcript says when a turn ended, before the screen settles.
             let busy = b.inner.lock().unwrap().turn.as_ref().is_some_and(|t| t.busy);

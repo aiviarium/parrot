@@ -3,7 +3,7 @@
 //! through it.
 
 use crate::config::TuiAgent;
-use parrot_driver_tui::{Config, TranscriptDir};
+use parrot_driver_tui::{Config, McpStyle, TranscriptDir};
 use parrot_term::screen::Size;
 use parrot_tui::Profile;
 use serde_json::{Value, json};
@@ -17,10 +17,17 @@ pub fn driver_config(agent: &str, a: &TuiAgent) -> Result<Config, String> {
         c.name = name.clone();
     }
     c.env = a.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    c.transcript = match a.transcript.as_deref() {
+    if let Some(t) = &a.transcript {
+        let (dir, format) = TranscriptDir::from_data(&t.format, t.dir.as_deref())
+            .ok_or_else(|| format!("transcript {:?} is not a format the TUI core reads", t.format))?;
+        c.transcript = Some(dir);
+        c.transcript_format = format;
+    }
+    c.mcp = match a.mcp.as_deref() {
         None => None,
-        Some("claude") => Some(TranscriptDir::ClaudeProject),
-        Some(dir) => Some(TranscriptDir::Dir(dir.into())),
+        Some(m) => Some(
+            McpStyle::from_data(m).ok_or_else(|| format!("mcp {m:?} is not a style the TUI core knows"))?,
+        ),
     };
     if let Some(ms) = a.unrecognised_after_ms {
         c.unrecognised_after = Duration::from_millis(ms);

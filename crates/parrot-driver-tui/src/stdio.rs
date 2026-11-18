@@ -5,11 +5,12 @@
 //! | --- | --- |
 //! | `profile.kdl` | The TUI profile |
 //! | `command "prog" "arg"…` in `driver.kdl` | The harness command. Without it, the `cli` name |
-//! | `transcript "claude"` or `transcript "<dir>"` in `driver.kdl` | Where the transcript is |
+//! | `transcript "claude"`, `"codex"` or `"jsonl" dir=…` in `driver.kdl` | Where the transcript is, and its format |
+//! | `mcp "mcp-config"` or `mcp "config-override"` in `driver.kdl` | How the harness takes the MCP server |
 //!
 //! The agent id and name come from `PARROT_DRIVER_AGENT` and `PARROT_DRIVER_AGENT_NAME`.
 
-use crate::driver::{Config, TranscriptDir, TuiDriver};
+use crate::driver::{Config, McpStyle, TranscriptDir, TuiDriver};
 use parrot_driver::traits::DriverContext;
 use parrot_proto::driver_data::{self, Children};
 use std::path::Path;
@@ -28,11 +29,13 @@ pub fn config_from_data(dir: &Path) -> Result<Config, String> {
     let agent = driver_data::agent_id("tui");
     let mut c = Config::new(&agent, command, profile);
     c.name = driver_data::agent_name(&c.name);
-    c.transcript = match json["transcript"][0].as_str() {
-        None => None,
-        Some("claude") => Some(TranscriptDir::ClaudeProject),
-        Some(d) => Some(TranscriptDir::Dir(d.into())),
-    };
+    let t = &json["transcript"][0];
+    let format = t.as_str().or_else(|| t["name"].as_str());
+    if let Some((dir, format)) = format.and_then(|f| TranscriptDir::from_data(f, t["dir"].as_str())) {
+        c.transcript = Some(dir);
+        c.transcript_format = format;
+    }
+    c.mcp = json["mcp"][0].as_str().and_then(McpStyle::from_data);
     Ok(c)
 }
 

@@ -43,6 +43,45 @@ pub struct DriverFile {
     /// versions. The last listed range that holds the detected version wins (spec 31).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shims: Vec<ShimSpec>,
+    /// Where the TUI core reads the harness's own transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<TranscriptSpec>,
+    /// How the TUI core hands the harness the `parrot` MCP server (spec 26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpStyle>,
+}
+
+/// `transcript "claude"`, `transcript "codex"` or `transcript "jsonl" dir="<folder>"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSpec {
+    pub format: TranscriptFormat,
+    /// The folder to watch, in place of the format's own. `~` is the home folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+/// The transcript formats the TUI core reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptFormat {
+    /// Claude Code's project transcripts, in the folder for the working directory.
+    Claude,
+    /// Codex rollout files under `sessions/`.
+    Codex,
+    /// Plain JSONL messages in `dir`.
+    Jsonl,
+}
+
+/// How the TUI core passes the `parrot` MCP server to the harness. The token is only ever in
+/// the environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpStyle {
+    /// `--mcp-config <json>`.
+    McpConfig,
+    /// `-c mcp_servers.parrot.*` config overrides.
+    ConfigOverride,
 }
 
 /// One `shim ">=2.2" dir="shims/2.2"` line.
@@ -115,6 +154,8 @@ impl DriverFile {
         let mut controls = None;
         let mut bindings = None;
         let mut shims = Vec::new();
+        let mut transcript = None;
+        let mut mcp = None;
         for node in doc.nodes() {
             match node.name().value() {
                 "driver" => driver = parse_run(node, &mut problems),
@@ -165,6 +206,28 @@ impl DriverFile {
                     }
                     _ => problems.push("shim needs a version range and dir=".into()),
                 },
+                "transcript" => {
+                    let dir = kdlx::prop_str(node, "dir").map(str::to_string);
+                    let format = match kdlx::arg_str(node) {
+                        Some("claude") => Some(TranscriptFormat::Claude),
+                        Some("codex") => Some(TranscriptFormat::Codex),
+                        Some("jsonl") if dir.is_some() => Some(TranscriptFormat::Jsonl),
+                        Some("jsonl") => {
+                            problems.push("transcript \"jsonl\" needs dir=".into());
+                            None
+                        }
+                        other => {
+                            problems.push(format!("transcript takes claude, codex or jsonl, not {other:?}"));
+                            None
+                        }
+                    };
+                    transcript = format.map(|format| TranscriptSpec { format, dir });
+                }
+                "mcp" => match kdlx::arg_str(node) {
+                    Some("mcp-config") => mcp = Some(McpStyle::McpConfig),
+                    Some("config-override") => mcp = Some(McpStyle::ConfigOverride),
+                    other => problems.push(format!("mcp takes mcp-config or config-override, not {other:?}")),
+                },
                 "bindings" => match kdlx::args(node).next().and_then(|v| v.as_integer()) {
                     Some(n) if n >= 1 && n <= i128::from(u32::MAX) => bindings = Some(n as u32),
                     _ => problems.push("bindings needs a positive number".into()),
@@ -186,6 +249,8 @@ impl DriverFile {
                 controls: controls.unwrap_or_else(native_only),
                 bindings,
                 shims,
+                transcript,
+                mcp,
             }),
             _ => Err(problems),
         }
@@ -326,6 +391,26 @@ data-version "1"
             d.command_for("macos", "aarch64").unwrap().unwrap().1,
             vec!["--stdio"]
         );
+    }
+
+    #[test]
+    fn reads_the_tui_core_nodes() {
+        let d = DriverFile::parse(
+            "driver \"builtin\" name=\"tui\"\ndata-version \"1\"\ntranscript \"codex\"\nmcp \"config-override\"\n",
+        )
+        .unwrap();
+        assert_eq!(d.transcript.as_ref().unwrap().format, TranscriptFormat::Codex);
+        assert_eq!(d.mcp, Some(McpStyle::ConfigOverride));
+        let d = DriverFile::parse(
+            "driver \"builtin\" name=\"tui\"\ndata-version \"1\"\ntranscript \"jsonl\" dir=\"~/.fake/log\"\n",
+        )
+        .unwrap();
+        assert_eq!(d.transcript.unwrap().dir.as_deref(), Some("~/.fake/log"));
+        let e = DriverFile::parse(
+            "driver \"builtin\" name=\"tui\"\ndata-version \"1\"\ntranscript \"jsonl\"\nmcp \"telepathy\"\n",
+        )
+        .unwrap_err();
+        assert_eq!(e.len(), 2, "{e:?}");
     }
 
     #[test]

@@ -54,3 +54,18 @@ action name="choose" {
   steps key="enter"
   expect not-exists="dialog" within="5s"
 }
+
+// A line typed while the fake works reaches the running turn.
+action name="steer" {
+  require state="working" hold="200ms"
+  steps type="$text"
+  steps key="enter"
+}
+
+action name="interrupt" {
+  require state="working" hold="200ms"
+  (array)steps key="ctrl+c"
+  expect within="5s" {
+    (array)not "working"
+  }
+}

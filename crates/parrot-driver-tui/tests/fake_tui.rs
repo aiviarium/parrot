@@ -422,3 +422,65 @@ fn mcp_is_injected_without_the_token_in_argv() {
     );
     assert!(!claude.iter().chain(&codex).any(|a| a.contains("tok-made-up")));
 }
+
+#[tokio::test]
+async fn a_prompt_while_working_steers_the_turn() {
+    let (mut h, started) = Harness::start(false).await;
+    started.unwrap();
+    h.state("idle").await;
+    h.prompt("msg_1", "slow count").await;
+    h.state("running").await;
+    let r = h
+        .call(
+            "binding/prompt",
+            json!({ "binding": "b1", "message": "msg_2", "text": "also tens", "steer": true }),
+        )
+        .await;
+    assert_eq!(r["disposition"], "steered");
+    let steered = h
+        .until("steer item", |u| u["update"]["item"]["id"] == "msg_2")
+        .await;
+    assert_eq!(steered["update"]["item"]["turn"], "turn-1");
+    let mut seen = false;
+    for _ in 0..30 {
+        let screen = h.screen().await;
+        if screen["text"].as_str().unwrap().contains("Steered: also tens") {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen, "the steer did not reach the harness");
+    // The transcript ends the turn; its echo of the steer is not reported again.
+    let turn = h.turn_done("turn-1").await;
+    assert_eq!(turn["status"], "completed");
+    assert!(
+        !h.seen
+            .iter()
+            .any(|u| u["update"]["item"]["source"] == "transcript" && u["update"]["item"]["kind"] == "user"),
+        "an echo was reported again"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn cancel_runs_the_interrupt_action() {
+    let (mut h, started) = Harness::start(false).await;
+    started.unwrap();
+    h.state("idle").await;
+    h.prompt("msg_1", "slow count").await;
+    h.state("running").await;
+    // The interrupt action waits for the working screen to hold.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let r = h.call("binding/cancel", json!({ "binding": "b1" })).await;
+    assert_eq!(r["interrupted"], true);
+    let turn = h.turn_done("turn-1").await;
+    assert_eq!(turn["status"], "interrupted");
+    assert!(
+        h.screen().await["text"]
+            .as_str()
+            .unwrap()
+            .contains("Interrupted.")
+    );
+    h.stop().await;
+}
