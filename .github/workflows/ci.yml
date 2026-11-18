@@ -89,7 +89,8 @@ jobs:
 
   # macOS and Windows build the whole workspace; their platform code (PTYs, guards, pipes) has
   # no test on Linux. Tests that need a shell are Unix only, so each OS runs what applies to it.
-  platform:    needs: changes
+  platform:
+    needs: changes
     if: needs.changes.outputs.rust
     strategy:
       fail-fast: false
