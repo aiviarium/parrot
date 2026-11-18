@@ -113,6 +113,14 @@ pub enum Pending {
     Hub { conn: String, id: Option<RequestId> },
     /// `link/update`: the link's live connection takes the new grant and offer once stored.
     LinkUpdate { conn: String, id: Option<RequestId> },
+    /// `link/remove`: the tokens the link minted go with it.
+    LinkRemove {
+        conn: String,
+        id: Option<RequestId>,
+        link: String,
+    },
+    /// Revoking every token a link minted; their connections close.
+    RevokeBy,
     /// A call forwarded to the session's owner.
     Forward { conn: String, id: Option<RequestId> },
     /// `binding/cancel` of a turn a move waited for; the move goes on once it is answered, or
@@ -244,10 +252,16 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
                 return Reply::Now(Err(e));
             }
             let op = method.replacen('/', ".", 1);
+            let params_link = params.get("link").and_then(Value::as_str).map(str::to_string);
             let call = cx.call_workspace(CallOwner::Links, &op, params);
             let (conn, id) = (conn.to_string(), id.cloned());
             let pending = match method {
                 "link/update" => Pending::LinkUpdate { conn, id },
+                "link/remove" => Pending::LinkRemove {
+                    conn,
+                    id,
+                    link: params_link.unwrap_or_default(),
+                },
                 _ => Pending::Hub { conn, id },
             };
             cx.state.links.pending.insert(call, pending);
@@ -1752,9 +1766,33 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                 cx.state.links.forwarded.remove(&local);
             }
         },
+        Pending::LinkRemove { conn, id, link } => {
+            if result.is_ok() {
+                revoke_by(cx, &link);
+            }
+            if let Some(id) = id {
+                cx.reply(&conn, id, result);
+            }
+        }
+        Pending::RevokeBy => {
+            let revoked: Vec<String> = result
+                .ok()
+                .and_then(|v| v["revoked"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect();
+            close_tokens(cx, &revoked);
+        }
         Pending::LinkUpdate { conn, id } => {
             if let Ok(v) = &result {
                 regrant(cx, &v["link"]);
+                // A link that offers no sessions any more keeps no tokens for them.
+                if LinkOffer::from_json(&v["link"]["offer"]).sessions == OfferedSessions::None
+                    && let Some(link) = v["link"]["id"].as_str()
+                {
+                    revoke_by(cx, link);
+                }
             }
             if let Some(id) = id {
                 cx.reply(&conn, id, result);
@@ -1762,17 +1800,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
         }
         Pending::Revoke { conn, id, token } => {
             if result.is_ok() {
-                let closing: Vec<String> = cx
-                    .state
-                    .principals
-                    .conns
-                    .iter()
-                    .filter(|(_, c)| matches!(&c.peer, Peer::Token { token: t, .. } if *t == token))
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                for c in closing {
-                    cx.emit(Effect::Close { conn: c });
-                }
+                close_tokens(cx, std::slice::from_ref(&token));
             }
             if let Some(id) = id {
                 cx.reply(&conn, id, result);
@@ -1954,6 +1982,31 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
             }
             Err(e) => fail_move(cx, &m, e),
         },
+    }
+}
+
+/// Revokes every token `link` minted, after the link went or stopped offering sessions.
+fn revoke_by(cx: &mut Cx, link: &str) {
+    let call = cx.call_workspace(
+        CallOwner::Links,
+        "token.revoke",
+        json!({ "by": link, "all": true }),
+    );
+    cx.state.links.pending.insert(call, Pending::RevokeBy);
+}
+
+/// Closes the connections of revoked tokens.
+fn close_tokens(cx: &mut Cx, tokens: &[String]) {
+    let closing: Vec<String> = cx
+        .state
+        .principals
+        .conns
+        .iter()
+        .filter(|(_, c)| matches!(&c.peer, Peer::Token { token: t, .. } if tokens.contains(t)))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for c in closing {
+        cx.emit(Effect::Close { conn: c });
     }
 }
 

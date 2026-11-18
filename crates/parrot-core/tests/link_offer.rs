@@ -409,3 +409,57 @@ fn an_all_offer_shows_every_session() {
         ["env_local"]
     );
 }
+
+fn host_call(effects: &[Effect], want: &str) -> Option<(u64, Value)> {
+    effects.iter().find_map(|e| match e {
+        Effect::Workspace { call, op, params } if op == want => Some((*call, params.clone())),
+        _ => None,
+    })
+}
+
+#[test]
+fn tokens_a_link_minted_go_with_the_link_or_its_offer() {
+    for (method, params) in [
+        ("link/remove", json!({ "link": "lnk_a" })),
+        (
+            "link/update",
+            json!({ "link": "lnk_a", "offer": { "env": true, "sessions": "none" } }),
+        ),
+    ] {
+        let mut sim = Sim::new();
+        sim.link("con_linked", "lnk_a", true, OfferedSessions::Linked);
+        // A phone holds a token the link minted.
+        sim.connect(
+            "con_phone",
+            Peer::Token {
+                token: "tok_phone".into(),
+                scopes: vec!["read".into()],
+                sessions: Some(vec!["ses_x".into()]),
+                provides: None,
+            },
+        );
+        let (_, effects) = sim.call("con_owner", method, params.clone());
+        let op = method.replacen('/', ".", 1);
+        let (call, _) = host_call(&effects, &op).expect("the hub is asked");
+        let record =
+            json!({ "link": { "id": "lnk_a", "grant": [], "offer": { "env": true, "sessions": "none" } } });
+        let effects = sim.core.handle(Input::WorkspaceReply {
+            call,
+            result: Ok(if method == "link/remove" {
+                json!({})
+            } else {
+                record
+            }),
+        });
+        let (call, revoke) = host_call(&effects, "token.revoke").expect("its tokens are revoked");
+        assert_eq!(revoke, json!({ "by": "lnk_a", "all": true }), "{method}");
+        let effects = sim.core.handle(Input::WorkspaceReply {
+            call,
+            result: Ok(json!({ "revoked": ["tok_phone"] })),
+        });
+        let closed = effects
+            .iter()
+            .any(|e| matches!(e, Effect::Close { conn } if conn == "con_phone"));
+        assert!(closed, "{method}: {effects:?}");
+    }
+}

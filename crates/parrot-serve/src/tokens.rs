@@ -226,6 +226,21 @@ impl TokenStore {
                     .map(|r| r.token.clone())
                     .collect::<Vec<_>>() }))
             }
+            // Every token a link minted, when the link goes or stops offering sessions.
+            "token.revoke" if params["all"].as_bool() == Some(true) => {
+                let by = params["by"]
+                    .as_str()
+                    .ok_or_else(|| RpcError::new(-32602, "invalid params: by"))?;
+                let mut records = self.records.lock().unwrap();
+                let revoked: Vec<Value> = records
+                    .iter()
+                    .filter(|r| r.token["createdBy"] == by)
+                    .map(|r| r.token["id"].clone())
+                    .collect();
+                records.retain(|r| r.token["createdBy"] != by);
+                self.save(&records)?;
+                Ok(json!({ "revoked": revoked }))
+            }
             "token.revoke" => {
                 let id = params["token"].as_str().unwrap_or_default();
                 // A link revokes only the tokens it created itself.
@@ -440,6 +455,18 @@ mod tests {
                 json!({ "name": "via", "scopes": ["read"], "sessions": ["ses_a"], "by": "lnk_a" }),
             )
             .unwrap();
+        let gone = store
+            .op(
+                "token.create",
+                json!({ "name": "gone", "scopes": ["read"], "sessions": ["ses_b"], "by": "lnk_b" }),
+            )
+            .unwrap();
+        let revoked = store
+            .op("token.revoke", json!({ "by": "lnk_b", "all": true }))
+            .unwrap();
+        assert_eq!(revoked["revoked"], json!([gone["token"]["id"]]));
+        assert!(store.check(gone["secret"].as_str().unwrap()).is_none());
+        assert!(store.check(linked["secret"].as_str().unwrap()).is_some());
         assert_eq!(linked["token"]["createdBy"], "lnk_a");
         let listed = store.op("token.list", json!({ "by": "lnk_a" })).unwrap();
         assert_eq!(listed["tokens"].as_array().unwrap().len(), 1);
