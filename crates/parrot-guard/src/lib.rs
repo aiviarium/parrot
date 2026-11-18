@@ -11,6 +11,8 @@ pub mod unix;
 #[cfg(windows)]
 pub mod windows;
 
+pub mod script;
+
 /// How long a forwarded SIGTERM or SIGINT has before the group is killed.
 pub const GRACE: Duration = Duration::from_secs(10);
 
