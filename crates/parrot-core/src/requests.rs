@@ -57,9 +57,14 @@ pub(crate) fn allows(state: &State, conn: &str, scope: &str) -> bool {
 
 use crate::principals::principal_of;
 
-/// The level of the ceiling over a session, if any (spec 22). Ceilings come later.
-pub fn ceiling_level(_state: &State, _session: &str) -> Option<PermissionLevel> {
-    None
+/// The level of the ceiling over a session, if any (spec 22).
+pub fn ceiling_level(state: &State, session: &str) -> Option<PermissionLevel> {
+    crate::ceilings::of(state, session).level
+}
+
+/// Answer a request on the runtime's behalf (`answeredBy` "ceiling" or "fallback").
+pub fn answer_as_runtime(cx: &mut Cx, request: &str, answer: Answer, by: &str) {
+    send_answer(cx, request, answer, by.to_string(), None, None);
 }
 
 /// The Parrot id for a driver key (spec 30.4).
@@ -406,8 +411,11 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             answer_key: None,
         },
     );
-    let _ = session;
     publish_request(cx, &id);
+    if !above {
+        crate::ceilings::on_request(cx, &id, &session);
+        crate::tasks::on_request(cx, &session);
+    }
     if above {
         let answer = Answer {
             choice: deny,

@@ -83,6 +83,10 @@ fn spec(name: &str, level: &str, effects: Value) -> Value {
 
 /// An owner, a provider of three functions, and an idle session whose binding is at `write`.
 fn setup() -> (Sim, String) {
+    setup_with(json!({ "functions": ["acme.*"] }), "write")
+}
+
+fn setup_with(ceiling: Value, level: &str) -> (Sim, String) {
     let mut sim = Sim::new();
     sim.connect("con_o", json!([]));
     sim.connect(
@@ -96,7 +100,7 @@ fn setup() -> (Sim, String) {
     let (r, effects) = sim.call(
         "con_o",
         "session/new",
-        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" } }),
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" }, "ceiling": ceiling }),
     );
     let session = r.unwrap()["session"]["id"].as_str().unwrap().to_string();
     let binding = effects
@@ -110,14 +114,9 @@ fn setup() -> (Sim, String) {
         binding: binding.clone(),
         call: u64::MAX,
         result: Ok(
-            json!({ "isolation": "none", "level": "write", "network": false, "options": [], "actions": [] }),
+            json!({ "isolation": "none", "level": level, "network": false, "options": [], "actions": [] }),
         ),
     });
-    sim.core
-        .state
-        .functions
-        .ceilings
-        .insert(session.clone(), json!({ "functions": ["acme.*"] }));
     sim.core.state.functions.wait_ms = Some(1_000);
     (sim, session)
 }
@@ -234,14 +233,7 @@ fn a_denied_call_returns_denied() {
 
 #[test]
 fn effects_the_ceiling_does_not_list_open_a_request() {
-    let (mut sim, session) = setup();
-    sim.core.state.functions.ceilings.insert(
-        session.clone(),
-        json!({ "functions": ["acme.*"], "effects": ["read"], "level": "host" }),
-    );
-    sim.core.state.bindings.info.values_mut().for_each(|b| {
-        b.level = Some(parrot_proto::option::PermissionLevel::Host);
-    });
+    let (mut sim, session) = setup_with(json!({ "functions": ["acme.*"], "effects": ["read"] }), "host");
     let (id, effects) = sim.send(
         "con_o",
         "function/call",

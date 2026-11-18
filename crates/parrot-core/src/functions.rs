@@ -25,9 +25,6 @@ pub struct Functions {
     pub tokens: BTreeMap<String, String>,
     /// The `parrot` program for `parrot mcp`; `None` turns the injected server off.
     pub mcp: Option<String>,
-    /// Ceilings over sessions, by session, as `Ceiling` JSON (spec 22). Absent is the empty
-    /// ceiling.
-    pub ceilings: BTreeMap<String, Value>,
     /// Calls waiting for an approval, by request id (E5, 27.2).
     pub approvals: BTreeMap<String, Approval>,
     /// The approval of each keyed call, by caller and key.
@@ -292,12 +289,7 @@ fn level_rank(level: &str) -> u8 {
 
 /// The ceiling over a session, as `Ceiling` JSON; `{}` is the empty ceiling.
 pub fn ceiling_of(state: &crate::State, session: &str) -> Value {
-    state
-        .functions
-        .ceilings
-        .get(session)
-        .cloned()
-        .unwrap_or_else(|| json!({}))
+    crate::ceilings::json_of(&crate::ceilings::of(state, session))
 }
 
 /// The level a session acts at: its binding's, under its ceiling's.

@@ -127,6 +127,10 @@ pub fn binding_json(state: &State, id: &str) -> Option<Value> {
     if let Some(s) = b.stopped_ms {
         v["stopped"] = json!(sessions::timestamp(s));
     }
+    let current = crate::directory::binding_of(state, &r.session).as_deref() == Some(id);
+    if current && crate::seeds::pending(state, &r.session) {
+        v["pending"] = json!("bundle");
+    }
     Some(v)
 }
 
@@ -190,6 +194,7 @@ pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) 
         Ok(v) => {
             started(cx, binding, &v);
             if !current {
+                crate::seeds::on_started(cx, &session, binding, true);
                 return;
             }
             let options: Vec<parrot_proto::option::ConfigOption> = v
@@ -240,6 +245,8 @@ pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) 
                     queue::on_idle(cx, &session);
                 }
             }
+            crate::seeds::on_started(cx, &session, binding, true);
+            crate::wakes::pump(cx, &session);
         }
         Err(e) => {
             if let Some(b) = cx.state.bindings.info.get_mut(binding) {
@@ -249,7 +256,8 @@ pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) 
             persist(cx, binding);
             crate::requests::binding_gone(cx, binding);
             queue::on_exit(cx, &session);
-            if !current {
+            crate::seeds::on_started(cx, &session, binding, false);
+            if crate::directory::binding_of(cx.state, &session).as_deref() != Some(binding) {
                 return;
             }
             if let Some(s) = cx.state.sessions.info.get_mut(&session) {
@@ -384,7 +392,10 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 sessions::changed(cx, &session);
             }
             if *state == SessionState::Idle {
+                crate::tasks::on_idle(cx, &session);
+                crate::seeds::on_idle(cx, &session);
                 queue::on_idle(cx, &session);
+                crate::wakes::pump(cx, &session);
             }
         }
         DriverUpdateKind::Item { item } => {
@@ -425,7 +436,18 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
         }
         DriverUpdateKind::Turn { turn } => {
             let mut turn = turn.clone();
+            let first = !cx
+                .state
+                .bindings
+                .info
+                .get(binding)
+                .is_some_and(|b| b.turns.contains_key(&turn.id));
             turn.id = map_key(cx, binding, "trn", &turn.id, None);
+            if first {
+                crate::seeds::on_turn(cx, &session, &turn.id);
+                crate::budgets::on_turn(cx, &session);
+            }
+            crate::tasks::on_turn(cx, &session, turn.status, first);
             turn.binding = binding.to_string();
             // Retry and continue read whether a turn runs and what a failed one was given.
             let running = turn.status == TurnStatus::Running;
