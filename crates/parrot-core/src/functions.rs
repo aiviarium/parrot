@@ -88,6 +88,40 @@ pub const SESSION_FUNCTIONS: [(&str, &str, &str); 16] = [
     ("parrot.envs.list", "env/list", "read"),
 ];
 
+/// The function a harness's tool call reached, when the tool is one the injected `parrot` server
+/// lists (spec 25.1, 26). Harnesses name such tools by the MCP name (dots as `__`), with or
+/// without a prefix of their own, so a tool matches when its name ends with an MCP name. A call of
+/// `parrot.functions.call` is reported as the function it called.
+pub fn function_of_tool(state: &crate::State, tool: &str, input: Option<&Value>) -> Option<String> {
+    let session = SESSION_FUNCTIONS.iter().map(|(n, _, _)| n.to_string());
+    // The search tools, and `parrot.workspaces.merge`, which `parrot mcp` maps to its method.
+    let meta = [
+        "parrot.functions.search",
+        "parrot.functions.describe",
+        "parrot.functions.call",
+        "parrot.workspaces.merge",
+    ]
+    .into_iter()
+    .map(String::from);
+    let provided = state.functions.provided.keys().map(|(n, _)| n.clone());
+    let runtime = state.functions.runtime.keys().cloned();
+    let found = session
+        .chain(meta)
+        .chain(provided)
+        .chain(runtime)
+        .filter(|name| {
+            let mcp = name.replace('.', "__");
+            tool == mcp || tool.ends_with(&format!("__{mcp}"))
+        })
+        .max_by_key(String::len)?;
+    if found == "parrot.functions.call"
+        && let Some(called) = input.and_then(|i| i.get("function")).and_then(Value::as_str)
+    {
+        return Some(called.to_string());
+    }
+    Some(found)
+}
+
 /// Checks a name against spec 27.1: dot-separated `[a-z][a-z0-9_]*` segments, none with `__`,
 /// at most four, and an MCP name of at most 64 characters.
 pub fn valid_name(name: &str) -> bool {
@@ -851,5 +885,37 @@ mod tests {
         assert!(matches("acme.*", "acme.files.read"));
         assert!(!matches("acme.*", "other.files"));
         assert!(matches("*.read", "acme.files.read"));
+    }
+
+    #[test]
+    fn tool_names_map_to_the_functions_they_reach() {
+        let mut state = crate::State::default();
+        state
+            .functions
+            .provided
+            .insert(("acme.deploy".into(), String::new()), ("con_p".into(), json!({})));
+        let f = |tool: &str, input: Value| function_of_tool(&state, tool, Some(&input));
+        assert_eq!(
+            f("mcp__parrot__parrot__sessions__spawn", json!({})).as_deref(),
+            Some("parrot.sessions.spawn")
+        );
+        assert_eq!(
+            f("parrot__tasks__wait", json!({})).as_deref(),
+            Some("parrot.tasks.wait")
+        );
+        assert_eq!(
+            f("mcp__parrot__acme__deploy", json!({})).as_deref(),
+            Some("acme.deploy")
+        );
+        assert_eq!(
+            f(
+                "mcp__parrot__parrot__functions__call",
+                json!({ "function": "acme.deploy" })
+            )
+            .as_deref(),
+            Some("acme.deploy")
+        );
+        assert_eq!(f("Bash", json!({})), None);
+        assert_eq!(f("mcp__other__sessions__spawn", json!({})), None);
     }
 }

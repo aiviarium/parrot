@@ -451,6 +451,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 patch.turn = Some(map_key(cx, binding, "trn", t, None));
             }
             patch.binding = Some(binding.to_string());
+            mark_function(cx.state, &mut patch);
             cx.publish(sid, json!({ "type": "item", "item": patch }));
         }
         DriverUpdateKind::Turn { turn } => {
@@ -553,6 +554,24 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             }));
         }
         _ => {}
+    }
+}
+
+/// A tool call into the injected `parrot` server is shown with the function it reached and the
+/// server, where the driver didn't say (spec 25.1).
+fn mark_function(state: &State, patch: &mut parrot_proto::item::ItemPatch) {
+    let Some(set) = patch.set.as_mut() else {
+        return;
+    };
+    if set.contains_key("function") {
+        return;
+    }
+    let Some(tool) = set.get("tool").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(function) = crate::functions::function_of_tool(state, tool, set.get("input")) {
+        set.insert("function".into(), json!(function));
+        set.entry("server").or_insert_with(|| json!("parrot"));
     }
 }
 
