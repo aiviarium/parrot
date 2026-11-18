@@ -433,6 +433,7 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "session/bundle" | "session/rebind" | "session/rewind" => {
             return crate::seeds::call(cx, conn, id, method, params);
         }
+        "session/read" => return crate::subscriptions::call(cx, conn, id, method, params),
         "session/new" => new(cx, conn, id, params),
         "session/list" => list(cx, conn, params),
         "session/get" => get(cx, conn, params),
@@ -808,7 +809,13 @@ pub fn list_page(state: &State, conn: &str, p: &SessionListParams) -> Result<Val
 
 fn get(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: SessionRef = parse(params)?;
-    check_session(cx.state, conn, Scope::Read, &p.session)?;
+    // A session may always read its own record, so its `parrot mcp` learns its task and
+    // workspace even when its grant is empty.
+    let own = crate::principals::principal_of(cx.state, conn) == p.session
+        && cx.state.sessions.by_id.contains_key(&p.session);
+    if !own {
+        check_session(cx.state, conn, Scope::Read, &p.session)?;
+    }
     Ok(json!({ "session": session_json(cx.state, &p.session) }))
 }
 

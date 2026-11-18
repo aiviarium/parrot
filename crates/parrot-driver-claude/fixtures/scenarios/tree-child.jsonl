@@ -1,0 +1,7 @@
+// A child of the tree proof: commits a file named after its branch in its worktree, then
+// finishes its task through the injected MCP server.
+{"emit":{"type":"system","subtype":"init","cwd":"/work/demo","session_id":"sess-fake-child","tools":["Bash"],"mcp_servers":[{"name":"parrot","status":"connected"}],"model":"claude-sonnet-5-5","permissionMode":"default","slash_commands":[],"apiKeySource":"none","claude_code_version":"2.1.325","output_style":"default","agents":[],"skills":[],"plugins":[],"uuid":"5d1f0000-0000-4000-8000-0000000000c1"}}
+{"shell":"b=$(git rev-parse --abbrev-ref HEAD) && echo notes > \"${b##*/}.txt\" && git add . && git -c user.name='Test Person' -c user.email=test@example.invalid commit -q -m \"add ${b##*/}\""}
+{"mcp_call":{"name":"parrot__task__finish","arguments":{"output":{"text":"Notes written."}}}}
+{"emit":{"type":"assistant","message":{"id":"msg_fake_c1","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"text","text":"Notes written."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":4}},"parent_tool_use_id":null,"session_id":"sess-fake-child","uuid":"a-c1"}}
+{"emit":{"type":"result","subtype":"success","is_error":false,"duration_ms":10,"duration_api_ms":10,"num_turns":1,"result":"Notes written.","session_id":"sess-fake-child","total_cost_usd":0.001,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4},"modelUsage":{},"permission_denials":[],"uuid":"r-c1"}}

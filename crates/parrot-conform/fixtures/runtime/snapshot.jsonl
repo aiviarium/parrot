@@ -1,4 +1,4 @@
-{"fixture": {"scenario": "text-turn", "pending": "snapshots carry no options or actions yet", "about": "A snapshot after a turn carries the binding's options and actions, the last turn's usage and the items."}}
+{"fixture": {"scenario": "text-turn", "about": "A snapshot after a turn carries the binding's options, its actions with the runtime's continue and retry, the last turn's usage and the items."}}
 {"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
 {"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
 {"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
@@ -9,4 +9,4 @@
 {"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "turn", "turn": {"status": "completed"}}}}}
 {"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
 {"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "subscribe", "params": {"target": {"session": "$id:session"}}}}
-{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"subscription": "$id:sub2", "snapshot": {"sessions": [{"session": {"id": "$id:session"}, "items": [{"id": "$id:msg"}, {"kind": "assistant", "text": "Hello there."}], "options": [{"id": "$any"}, {"id": "$any"}], "actions": [{"id": "$any"}, {"id": "$any"}], "usage": {"tokens": "$any"}}]}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"subscription": "$id:sub2", "snapshot": {"sessions": [{"session": {"id": "$id:session"}, "items": [{"id": "$id:msg"}, {"kind": "assistant", "text": "Hello there."}], "options": [{"id": "model", "role": "model"}, {"id": "permissionMode", "role": "mode"}], "actions": [{"id": "review", "source": "harness"}, {"id": "compact", "source": "harness"}, {"id": "continue", "source": "runtime"}, {"id": "retry", "source": "runtime"}], "usage": {"tokens": "$any"}}]}}}}

@@ -101,3 +101,49 @@ pub fn contains(state: &State, session: &str, item: &str) -> bool {
         .get(session)
         .is_some_and(|s| s.by_id.contains_key(item))
 }
+
+/// One page of `session/read` (spec 10.5). Cursors are item ids: reading back returns the items
+/// before the cursor (or the newest without one), reading forward those after it, oldest first in
+/// both directions. `before` and `after` are set when more items lie that way.
+pub fn read(state: &State, session: &str, cursor: Option<&str>, forward: bool, limit: usize) -> Value {
+    let order: &[String] = state
+        .items
+        .by_session
+        .get(session)
+        .map(|s| s.order.as_slice())
+        .unwrap_or(&[]);
+    let at = cursor.and_then(|c| order.iter().position(|i| i == c));
+    let (start, end) = if forward {
+        let start = match (cursor, at) {
+            (Some(_), Some(i)) => i + 1,
+            (Some(_), None) => order.len(),
+            (None, _) => 0,
+        };
+        (start, (start + limit).min(order.len()))
+    } else {
+        let end = match (cursor, at) {
+            (Some(_), Some(i)) => i,
+            (Some(_), None) => 0,
+            (None, _) => order.len(),
+        };
+        (end.saturating_sub(limit), end)
+    };
+    let page = &order[start..end];
+    let s = state.items.by_session.get(session);
+    let items: Vec<Value> = page
+        .iter()
+        .filter_map(|id| s.and_then(|s| s.by_id.get(id)).map(|m| Value::Object(m.clone())))
+        .collect();
+    let mut out = serde_json::json!({ "items": items });
+    if start > 0
+        && let Some(first) = page.first().or(order.get(start - 1))
+    {
+        out["before"] = Value::String(first.clone());
+    }
+    if end < order.len()
+        && let Some(last) = page.last().or(order.get(end))
+    {
+        out["after"] = Value::String(last.clone());
+    }
+    out
+}
