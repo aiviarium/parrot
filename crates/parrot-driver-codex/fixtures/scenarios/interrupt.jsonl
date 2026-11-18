@@ -1,0 +1,9 @@
+// A turn the driver interrupts while text streams.
+{"expect":{"method":"turn/start"}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-int-1","items":[],"status":"inProgress","error":null}}}}
+{"emit":{"method":"turn/started","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-int-1","items":[],"status":"inProgress"}}}}
+{"emit":{"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg_c","text":""},"threadId":"thr-fake-0001","turnId":"turn-int-1"}}}
+{"emit":{"method":"item/agentMessage/delta","params":{"threadId":"thr-fake-0001","turnId":"turn-int-1","itemId":"msg_c","delta":"One, two, "}}}
+{"expect":{"method":"turn/interrupt","params":{"threadId":"thr-fake-0001","turnId":"turn-int-1"}}}
+{"emit":{"id":"{{id}}","result":{}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-int-1","items":[],"status":"interrupted","error":null}}}}
