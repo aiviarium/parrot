@@ -1671,6 +1671,7 @@ name = "parrot-mcp"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "httparse",
  "parrot-proto",
  "regex",
  "rustls",

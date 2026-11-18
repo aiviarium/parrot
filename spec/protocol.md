@@ -1324,6 +1324,9 @@ interface FunctionResult {
 - With `functions.mcp`, the driver injects one MCP server named `parrot` into each binding, for that
   binding only and never in the harness's global configuration. It runs in the binding's environment,
   reached over loopback HTTP with a per-binding token, or through `parrot mcp --binding <id>` on stdio.
+  `parrot mcp --listen 127.0.0.1:0` serves the HTTP form and prints its URL. It takes the binding's
+  credential as `Authorization: Bearer`, answers each `POST` in its body, sends notifications on a
+  `GET` event stream, and refuses an `Origin` that is not loopback.
 - MCP tool names are function names with `.` replaced by `__` (`parrot__sessions__spawn`). Function
   names may not contain `__`.
 - **Listing.** Sorted by name, so the harness's prompt cache survives changes elsewhere:

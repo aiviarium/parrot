@@ -104,3 +104,56 @@ fn serves_tools_for_a_binding() {
         json!({ "id": "bnd_FAKE", "token": "made-up-binding-secret" })
     );
 }
+
+#[test]
+fn listens_on_loopback_http_with_the_binding_credential() {
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("sock");
+    let (tx, _rx) = mpsc::channel();
+    fake_runtime(UnixListener::bind(&socket).unwrap(), tx);
+
+    let mut mcp = Command::new(PARROT)
+        .args([
+            "mcp",
+            "--binding",
+            "bnd_FAKE",
+            "--listen",
+            "127.0.0.1:0",
+            "--socket",
+        ])
+        .arg(&socket)
+        .env("PARROT_MCP_TOKEN", "made-up-binding-secret")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("parrot mcp starts");
+    let mut out = BufReader::new(mcp.stdout.take().unwrap());
+    let mut url = String::new();
+    out.read_line(&mut url).unwrap();
+    let addr = url
+        .trim()
+        .strip_prefix("http://")
+        .and_then(|u| u.strip_suffix("/mcp"))
+        .unwrap_or_else(|| panic!("a URL, not {url:?}"))
+        .to_string();
+
+    let post = |token: &str, body: &str| -> String {
+        let mut s = std::net::TcpStream::connect(&addr).unwrap();
+        write!(
+            s,
+            "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut answer = String::new();
+        s.read_to_string(&mut answer).unwrap_or_default();
+        answer
+    };
+    let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+    assert!(post("not-it", list).starts_with("HTTP/1.1 401"));
+    let answer = post("made-up-binding-secret", list);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert!(answer.contains("parrot__envs__list"), "{answer}");
+    mcp.kill().unwrap();
+    let _ = mcp.wait();
+}

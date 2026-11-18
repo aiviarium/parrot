@@ -524,3 +524,137 @@ async fn bad_arguments_fail_locally_with_the_path() {
         "a bad call reached the runtime"
     );
 }
+
+/// Sends one HTTP request on a new connection and returns the status line and body.
+async fn http(port: u16, method: &str, auth: Option<&str>, extra: &str, body: &str) -> (String, String) {
+    use tokio::io::AsyncReadExt;
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let auth = auth
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let req = format!(
+        "{method} /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        s.read_exact(&mut byte).await.unwrap();
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).unwrap();
+    let len: usize = head
+        .lines()
+        .find_map(|l| l.strip_prefix("Content-Length: "))
+        .map(|v| v.trim().parse().unwrap())
+        .unwrap_or(0);
+    let mut body = vec![0u8; len];
+    s.read_exact(&mut body).await.unwrap();
+    (
+        head.lines().next().unwrap().to_string(),
+        String::from_utf8(body).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn the_server_runs_over_loopback_http_with_a_bearer_token() {
+    let (ours, theirs) = tokio::io::duplex(1 << 20);
+    let extra = Extra::default();
+    let runtime = fake_runtime(theirs, Calls::default(), extra.clone());
+    let (r, w) = tokio::io::split(ours);
+    let (up, notes) = Upstream::spawn(r, w);
+    let auth = Auth {
+        binding: "bnd_01FAKEBINDING000000000000".into(),
+        token: Some(TOKEN.into()),
+    };
+    let identity = server::handshake(&up, &auth).await.unwrap();
+    let (front, back) = tokio::io::duplex(1 << 20);
+    let (br, bw) = tokio::io::split(back);
+    tokio::spawn(server::serve(br, bw, up, notes, identity, Config::default()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(parrot_mcp::http::serve(listener, "/mcp", TOKEN.into(), front));
+
+    let init =
+        r#"{"jsonrpc":"2.0","id":"a1","method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
+    let (status, _) = http(port, "POST", None, "", init).await;
+    assert_eq!(status, "HTTP/1.1 401 Unauthorized");
+    let (status, _) = http(port, "POST", Some("wrong"), "", init).await;
+    assert_eq!(status, "HTTP/1.1 401 Unauthorized");
+    let (status, _) = http(
+        port,
+        "POST",
+        Some(TOKEN),
+        "Origin: https://pages.example.test\r\n",
+        init,
+    )
+    .await;
+    assert_eq!(status, "HTTP/1.1 403 Forbidden");
+
+    let (status, body) = http(port, "POST", Some(TOKEN), "", init).await;
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    let answer: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(answer["id"], "a1", "{answer}");
+    assert_eq!(answer["result"]["protocolVersion"], "2025-06-18", "{answer}");
+
+    let (status, body) = http(
+        port,
+        "POST",
+        Some(TOKEN),
+        "",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    )
+    .await;
+    assert_eq!((status.as_str(), body.as_str()), ("HTTP/1.1 202 Accepted", ""));
+
+    let (_, body) = http(
+        port,
+        "POST",
+        Some(TOKEN),
+        "",
+        r#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#,
+    )
+    .await;
+    let list: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list["id"], 7);
+    assert!(
+        list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "acme__notes__add")
+    );
+
+    // The event stream carries list_changed when a pinned function arrives.
+    let mut events = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    events
+        .write_all(format!("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {TOKEN}\r\nAccept: text/event-stream\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut events = BufReader::new(events).lines();
+    let first = events.next_line().await.unwrap().unwrap();
+    assert_eq!(first, "HTTP/1.1 200 OK");
+    while !events.next_line().await.unwrap().unwrap().is_empty() {}
+    extra.lock().unwrap().push(json!({
+        "name": "acme.notes.find", "description": "Find notes", "pinned": true, "effects": ["read"],
+        "provider": "con_X", "input": { "type": "object" }, "output": { "type": "object" },
+    }));
+    runtime
+        .send(json!({ "jsonrpc": "2.0", "method": "update", "params": {
+            "subscription": "sub_FAKE", "seq": 3, "at": "2026-01-01T00:00:00Z", "session": SESSION,
+            "update": { "type": "functions", "pinned": ["acme.notes.add", "acme.notes.find"] },
+        }}))
+        .unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let line = events.next_line().await.unwrap().unwrap();
+            if let Some(data) = line.strip_prefix("data: ") {
+                return serde_json::from_str::<Value>(data).unwrap();
+            }
+        }
+    })
+    .await
+    .expect("an event in time");
+    assert_eq!(event["method"], "notifications/tools/list_changed");
+}
