@@ -1,8 +1,11 @@
 //! The Codex driver: the Parrot driver protocol (spec 30) over the Codex app-server, with a fake
 //! Codex for tests.
 
+pub mod data;
 pub mod driver;
 pub mod fake;
+pub mod frame;
+pub mod input;
 pub mod mapping;
 pub mod wire;
 

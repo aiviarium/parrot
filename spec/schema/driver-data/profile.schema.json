@@ -1,0 +1,999 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProfileFile",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "$ref": "#/$defs/Meta"
+    },
+    "node": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NodeRule"
+      },
+      "default": []
+    },
+    "state": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StateRule"
+      },
+      "default": []
+    },
+    "action": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ActionDef"
+      },
+      "default": []
+    },
+    "hook": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HookRule"
+      },
+      "default": []
+    },
+    "variant": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Variant"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "profile"
+  ],
+  "$defs": {
+    "Meta": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MatchSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version-from-screen": {
+          "description": "Capture group 1 is the CLI's version, read from the screen.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unrecognised-after": {
+          "description": "No state for this long marks the session `unrecognised`. Default 10s.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "MatchSpec": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Regex": {
+      "description": "A regular expression (Rust regex syntax)",
+      "type": "string"
+    },
+    "Duration": {
+      "description": "A duration such as \"300ms\" or \"10s\", or seconds as a number",
+      "type": [
+        "string",
+        "number"
+      ]
+    },
+    "NodeRule": {
+      "description": "A rule that tags nodes of the raw tree, and can change their role, group rows into a new\nnode, or re-split a node into items.",
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string"
+        },
+        "name": {
+          "description": "Shown as the rule that produced the node; defaults to the tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "Sets the role of matched nodes.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Role"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "where": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Matcher"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inside": {
+          "description": "Only descendants of a node with this tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lines": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinesSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "first": {
+          "description": "Only the first match, in document order.",
+          "type": "boolean",
+          "default": false
+        },
+        "last": {
+          "type": "boolean",
+          "default": false
+        },
+        "label": {
+          "description": "Capture group 1 of this regex over the text becomes the label.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tag"
+      ]
+    },
+    "Role": {
+      "description": "What a node is, as far as interaction goes.",
+      "type": "string",
+      "enum": [
+        "screen",
+        "pane",
+        "dialog",
+        "input",
+        "menu",
+        "menuitem",
+        "list",
+        "listitem",
+        "table",
+        "row",
+        "text",
+        "heading",
+        "status",
+        "progress",
+        "hint",
+        "scroll",
+        "separator"
+      ]
+    },
+    "Matcher": {
+      "description": "Conditions on one node. All given keys must hold.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OneOrMany"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tag": {
+          "description": "Has this tag (from an earlier rule).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "The rule that produced it starts with this, such as `auto:box` or `auto:rule-section`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "box": {
+          "description": "Drawn as a box.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "contains-cursor": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "focused": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "busy": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text-matches": {
+          "description": "Regex over the node's text (rows joined with `\\n`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text-contains": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "starts-with": {
+          "description": "The text, without leading spaces, starts with this.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first-line-matches": {
+          "description": "Regex over the first line.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label-matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value-matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dim": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "reverse": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "fg": {
+          "description": "`#rrggbb` or a palette index.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min-rows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "max-rows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "below": {
+          "description": "Starts at or below the bottom of the first node with this tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "above": {
+          "description": "Ends at or above the top of the first node with this tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "has": {
+          "description": "Has a descendant matching this.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Matcher"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "not": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Matcher"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "any": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Matcher"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OneOrMany": {
+      "description": "One value or a list of them.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Role"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Role"
+          }
+        }
+      ]
+    },
+    "Position": {
+      "oneOf": [
+        {
+          "description": "Starts in the top third of the screen.",
+          "type": "string",
+          "const": "top"
+        },
+        {
+          "description": "Ends in the bottom third of the screen.",
+          "type": "string",
+          "const": "bottom"
+        }
+      ]
+    },
+    "LinesSpec": {
+      "description": "Groups rows into a new node: from the first row matching `from` to the first row at or\nafter it matching `to`, or to the last non-blank row of the scope.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Regex"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "through": {
+          "description": "To the last row at or after `from` matching this.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last": {
+          "description": "Search from the bottom: the last row matching `from`.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "from"
+      ]
+    },
+    "ItemSpec": {
+      "description": "Re-splits a node's rows into items.",
+      "type": "object",
+      "properties": {
+        "line-matches": {
+          "description": "A row matching this starts an item; other non-blank rows continue the previous one.",
+          "$ref": "#/$defs/Regex"
+        },
+        "selected-when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineMatcher"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "description": "Capture group 1 is the item's label.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "description": "Capture group 1 is the item's key.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ignore": {
+          "description": "Rows to skip. Rows made only of rule characters are always skipped.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "line-matches"
+      ]
+    },
+    "LineMatcher": {
+      "description": "Matches one line of text.",
+      "type": "object",
+      "properties": {
+        "starts-with": {
+          "description": "The line, without leading spaces, starts with this.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reverse": {
+          "description": "Most of the line is reverse video.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "bold": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "fg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StateRule": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/Cond"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "when"
+      ]
+    },
+    "Cond": {
+      "description": "A condition over the labelled tree, the screen and the tracker's memory. All given keys\nmust hold.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "description": "In a `[[state]]`: that state's rule holds. Elsewhere: the current state is this one\n(or one of these).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OneOrMany2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exists": {
+          "description": "Nodes with these tags exist.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OneOrMany2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "not-exists": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OneOrMany2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "find": {
+          "description": "A node matching this exists.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Matcher"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "any-text-matches": {
+          "description": "Regex over the whole screen text (rows joined with `\\n`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "no-text-matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title-matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alt-screen": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cursor-visible": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "focused": {
+          "description": "The node with this tag holds the cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text-in": {
+          "description": "With `contains` or `matches`: the text (an input's value, if it has one) of the node with\nthis tag. `contains` ignores whitespace and line wrapping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contains": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "empty": {
+          "description": "The node with this tag has an empty value (an input with nothing typed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected-in": {
+          "description": "With `index` or `label`: which item is selected in the menu with this tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "index": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndexSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed": {
+          "description": "In an action's `expect`: the node with this tag is gone, or its text differs from\nwhen the action started.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until-seen": {
+          "description": "The named state has never been current in this session.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seen": {
+          "description": "The named state has been current at some point.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotCond"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "any": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Cond"
+          }
+        },
+        "all": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Cond"
+          }
+        },
+        "within": {
+          "description": "For `expect` and `wait`: how long to wait.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold": {
+          "description": "For `require`, `expect` and `wait`: the condition must hold this long without a break\nbefore it counts, so a screen seen for one frame (a redraw, a dialog about to replace\nthe prompt) is not acted on.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OneOrMany2": {
+      "description": "One value or a list of them.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "IndexSpec": {
+      "description": "An index given as a number or as a string (after variable substitution).",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "NotCond": {
+      "description": "`not = [\"working\", \"idle\"]` (none of these states) or `not = { ... }`.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "$ref": "#/$defs/Cond"
+        }
+      ]
+    },
+    "ActionDef": {
+      "description": "A named input sequence. `require`, `steps` and `expect` may use `$name` variables, which\nare substituted before they are read.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "require": true,
+        "steps": {
+          "type": "array",
+          "items": true,
+          "default": []
+        },
+        "expect": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "HookRule": {
+      "description": "Names a function in the host program that receives the tree and returns tags.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "Variant": {
+      "description": "Rules for a range of CLI versions. Rules with the tag, state or action name of a base rule\nreplace it; others are added.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "node": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeRule"
+          },
+          "default": []
+        },
+        "state": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StateRule"
+          },
+          "default": []
+        },
+        "action": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionDef"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ]
+    }
+  }
+}

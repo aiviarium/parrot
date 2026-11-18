@@ -143,7 +143,12 @@ impl ClaudeTranscript {
         if t.is_empty() || t.starts_with("[Request interrupted") || t.starts_with('<') {
             return None;
         }
-        if let Some(pos) = self.echoes.iter().position(|e| e == t) {
+        // Attachments the driver pasted first show up ahead of the prompt's text.
+        if let Some(pos) = self
+            .echoes
+            .iter()
+            .position(|e| e == t || t.ends_with(&format!(" {e}")))
+        {
             self.echoes.remove(pos);
             return None;
         }

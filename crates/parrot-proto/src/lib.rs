@@ -4,6 +4,7 @@ pub mod action;
 pub mod agent;
 pub mod ceiling;
 pub mod driver;
+pub mod driver_data;
 pub mod env;
 pub mod error;
 pub mod function;
