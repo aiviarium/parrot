@@ -1,0 +1,3 @@
+carrier "relay" title="Made-up relay" max-message=16384 containment="restricted"
+run "bin/carrier"
+target "{\"type\":\"object\",\"required\":[\"parrot\",\"socket\"],\"properties\":{\"parrot\":{\"type\":\"string\"},\"socket\":{\"type\":\"string\"}}}"

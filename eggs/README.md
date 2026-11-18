@@ -48,6 +48,26 @@ The runtime marks a session `unverified` when the CLI reports a version outside 
 
 A program can live in a Hatchery variant folder, such as `variants/linux/driver`. Only the variant for this machine is installed. The runtime ignores nodes it does not know.
 
+## Carrier eggs
+
+A carrier egg gives links a channel of a platform's own, for machines that SSH, a command or TCP can't get to. Its `parrot` folder holds `carrier.kdl` and the program it runs, and no `driver.kdl`. The runtime loads installed carrier eggs at start, and the `carrier.kind` of a `link/add` selects one.
+
+```kdl
+carrier "relay" title="Relay" max-message=16384 containment="restricted"
+run "bin/carrier"
+target "{\"type\":\"object\"}"
+```
+
+| Node | Meaning |
+| --- | --- |
+| `carrier "kind"` | The kind that a link's carrier selects. `title`, `max-message`, `containment` and `listens` are optional |
+| `max-message=…` | The largest message on the channel, at least 4096 bytes |
+| `containment=…` | `restricted` or `shell` |
+| `run "path" args…` | The program, relative to the `parrot` folder |
+| `target "json"` | The JSON Schema of the carrier's target |
+
+The runtime starts `<program> dial` for each connection and writes the target as JSON on its first input line. The program answers `{"ready":true}` on its first output line, and from then on its standard input and output are the channel. A carrier egg that leaves out `containment` counts as `shell`.
+
 ## Probe scenarios
 
 A probe is a list of steps. `parrot probe <agent> <scenario>` runs `probes/<scenario>.kdl` through the agent's driver against the real CLI. It writes `transcript.jsonl`, `frames.jsonl` and `probe.json` into `--out`.

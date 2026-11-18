@@ -425,7 +425,9 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         // Prompts belong to the queue, which owns turn dispatch.
         "session/prompt" | "session/cancel" => return queue::call(cx, conn, id, method, params),
         // Moving a session between runtimes belongs to the links (E1).
-        "session/offer" | "session/commit" => return crate::links::call(cx, conn, id, method, params),
+        "session/offer" | "session/commit" | "workspace/receive" => {
+            return crate::links::call(cx, conn, id, method, params);
+        }
         // The tree and workspaces (spec 8, 18, E8).
         "session/tree" | "session/configure" => return crate::tree::call(cx, conn, id, method, params),
         m if m.starts_with("workspace/") => return crate::tree::call(cx, conn, id, method, params),

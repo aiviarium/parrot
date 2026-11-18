@@ -634,9 +634,24 @@ fn list_workspaces(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcE
 }
 
 /// Whether a session principal may touch a workspace: one its subtree uses or owns.
-fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
+/// Whether a connection may see a workspace: a session principal sees its subtree's, a token
+/// limited to some sessions sees only theirs (E8), everyone else sees all.
+pub fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
     let Some(me) = session_principal(state, conn) else {
-        return true;
+        if !token_limited(state, conn) {
+            return true;
+        }
+        let owner = state
+            .tree
+            .workspaces
+            .get(workspace)
+            .and_then(|m| m.owner.as_deref());
+        return owner.is_some_and(|o| crate::principals::sees(state, conn, o))
+            || state
+                .sessions
+                .info
+                .iter()
+                .any(|(s, i)| i.workspace == workspace && crate::principals::sees(state, conn, s));
     };
     let mine = subtree(state, me);
     let owner = state.tree.workspaces.get(workspace).and_then(|m| m.owner.clone());
@@ -648,6 +663,17 @@ fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
                 .get(s)
                 .is_some_and(|i| i.workspace == workspace)
         })
+}
+
+/// Whether the connection holds a token limited to some sessions.
+pub fn token_limited(state: &State, conn: &str) -> bool {
+    matches!(
+        state.principals.conns.get(conn).map(|c| &c.peer),
+        Some(crate::Peer::Token {
+            sessions: Some(_),
+            ..
+        })
+    )
 }
 
 fn own_workspace(state: &State, me: &str, workspace: &str) -> bool {
@@ -689,6 +715,10 @@ pub fn create_worktree(
 fn create(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result<Option<Value>, RpcError> {
     let p: WorkspaceCreateParams = parse(params)?;
     check(cx.state, conn, Scope::Workspace)?;
+    // A new workspace belongs to no session yet, so a session-limited token can't make one (E8).
+    if token_limited(cx.state, conn) {
+        return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "sessions" })));
+    }
     if p.env != cx.state.principals.env {
         return Err(RpcError::new(-32001, "unsupported").with_data(json!({ "feature": "profile.link" })));
     }
@@ -804,6 +834,9 @@ fn merge(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Resu
             .ok_or_else(|| not_found(w))
     };
     let (from, into) = (path(&p.from)?, path(&p.into)?);
+    if !visible_workspace(cx.state, conn, &p.from) || !visible_workspace(cx.state, conn, &p.into) {
+        return Err(not_found(&p.from));
+    }
     // `from` is the caller's own or a descendant's; `into` is its own (E8).
     if let Some(me) = session_principal(cx.state, conn).map(str::to_string) {
         if !visible_workspace(cx.state, conn, &p.from) {

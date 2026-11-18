@@ -212,6 +212,63 @@ pub fn unpack(repo: &Path, path: &Path, transfer: &Transfer) -> Result<Worktree,
     Ok(worktree)
 }
 
+/// Receives a transfer as a repository of its own at `path`, on the carried branch, for a
+/// machine that has no clone of the repository. `path` must not exist yet.
+pub fn unpack_new(path: &Path, transfer: &Transfer) -> Result<PathBuf, TransferError> {
+    if path.exists() {
+        return Err(TransferError::Io {
+            path: path.to_path_buf(),
+            source: io::Error::new(io::ErrorKind::AlreadyExists, "the target exists"),
+        });
+    }
+    if !valid_branch(&transfer.branch) {
+        return Err(TransferError::UnknownBranch(transfer.branch.clone()));
+    }
+    std::fs::create_dir_all(path).map_err(|source| TransferError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let result = (|| {
+        let bytes = transfer.bundle_bytes()?;
+        let file = TempFile::write("parrot-bundle", &bytes)?;
+        let git = Git::new(path);
+        // A placeholder initial branch, so the carried branch is never the one checked out
+        // while it is fetched.
+        git.run(&["init", "--quiet", "--initial-branch=parrot-receiving"])?;
+        let reference = format!("refs/heads/{}", transfer.branch);
+        git.run(&[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            &file.path.to_string_lossy(),
+            &format!("+{reference}:{reference}"),
+        ])?;
+        // The files arrive as they were committed, so the carried patches apply byte for byte
+        // whatever line-ending conversion this machine's git does.
+        git.run(&["config", "core.autocrlf", "false"])?;
+        git.run(&["checkout", "--quiet", &transfer.branch])?;
+        apply_changes(path, transfer)
+    })();
+    match result {
+        Ok(()) => Ok(path.to_path_buf()),
+        Err(e) => {
+            // A half-received workspace is worse than none.
+            let _ = std::fs::remove_dir_all(path);
+            Err(e)
+        }
+    }
+}
+
+/// Whether a carried branch name is one git accepts and that can't be read as an option.
+fn valid_branch(branch: &str) -> bool {
+    !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && branch
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
+}
+
 fn apply_changes(workspace: &Path, transfer: &Transfer) -> Result<(), TransferError> {
     if let Some(patch) = &transfer.staged {
         apply(workspace, "parrot-staged", patch, true)?;
@@ -526,6 +583,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, TransferError::NotARepository(_)));
+    }
+
+    #[test]
+    fn carries_into_a_machine_without_the_repository() {
+        let source = changed_workspace();
+        let transfer = pack(source.path(), "main", &all_carry()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("arrived");
+        unpack_new(&path, &transfer).unwrap();
+        assert_eq!(git::branch(&path).unwrap().as_deref(), Some("main"));
+        assert_eq!(
+            std::fs::read_to_string(path.join("README.md")).unwrap(),
+            "# Carried, staged and unstaged\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("draft.txt")).unwrap(),
+            "untracked\n"
+        );
+        // A second transfer into the same place is refused rather than mixed in.
+        assert!(unpack_new(&path, &transfer).is_err());
+        let mut bad = transfer.clone();
+        bad.branch = "--upload-pack=x".into();
+        assert!(unpack_new(&dir.path().join("bad"), &bad).is_err());
+        assert!(!dir.path().join("bad").exists());
     }
 
     #[test]
