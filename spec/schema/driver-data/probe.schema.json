@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Probe",
+  "description": "The driver data file probes/*.kdl, read from KDL into this shape.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "control": {
+      "description": "How the binding is driven; `native` when left out.",
+      "$ref": "#/$defs/Control",
+      "default": "native"
+    },
+    "timeoutSecs": {
+      "description": "The longest the whole scenario may take, in seconds. 300 when left out.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 300
+    },
+    "options": {
+      "description": "Option values for `binding/start`.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "steps": {
+      "description": "The steps, in order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProbeStep"
+      }
+    }
+  },
+  "required": [
+    "steps"
+  ],
+  "$defs": {
+    "Control": {
+      "type": "string",
+      "enum": [
+        "native",
+        "tui"
+      ]
+    },
+    "ProbeStep": {
+      "description": "One step of a probe.",
+      "oneOf": [
+        {
+          "description": "Send a prompt.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "prompt"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "text"
+          ]
+        },
+        {
+          "description": "Wait until the binding reaches a state, such as `idle`, or raises a request (`request`).",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "wait"
+            },
+            "until": {
+              "type": "string"
+            },
+            "timeout_secs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "step",
+            "until"
+          ]
+        },
+        {
+          "description": "Answer the newest open request with a choice id.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "answer"
+            },
+            "choice": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "step",
+            "choice"
+          ]
+        },
+        {
+          "description": "Cancel the running turn.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "cancel"
+            }
+          },
+          "required": [
+            "step"
+          ]
+        },
+        {
+          "description": "Type text and press keys (TUI control).",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "keys"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "press": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "step"
+          ]
+        },
+        {
+          "description": "Do nothing for a while.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "sleep"
+            },
+            "ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "step",
+            "ms"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -38,7 +38,7 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     let mut take = |kind: &str| by_kind.remove(kind).unwrap_or_default();
 
     for (id, value) in take("agent") {
-        cx.state.sessions.agents.insert(id, value);
+        crate::agents::restore(cx.state, id, value);
     }
     for (id, value) in take("workspace") {
         sessions::restore_workspace(cx.state, &id, &value);
@@ -93,6 +93,11 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     }
     for (message, value) in take("inflight") {
         uncertain(cx, &message, &value);
+    }
+    for kind in ["moved", "outbox"] {
+        for (id, value) in take(kind) {
+            crate::links::restore(cx, kind, &id, &value);
+        }
     }
 
     for binding in stopped {

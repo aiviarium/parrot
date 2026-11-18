@@ -39,6 +39,8 @@ pub struct Links {
     pub commits: BTreeMap<String, Value>,
     /// Messages for peers that are down, delivered when the link connects again (E2).
     pub outbox: BTreeMap<String, Vec<(String, Value)>>,
+    /// The stored ids of each link's outbox entries, deleted once delivered.
+    pub outbox_ids: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -59,6 +61,12 @@ pub enum Pending {
     Offer(Move),
     /// The commit of a move.
     Commit(Move),
+    /// `token/revoke`: the token's connections close once the hub has revoked it.
+    Revoke {
+        conn: String,
+        id: Option<RequestId>,
+        token: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +131,21 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
             );
             Reply::Later
         }
+        "token/create" | "token/list" | "token/revoke" => {
+            if let Err(e) = owner_only(cx, conn) {
+                return Reply::Now(Err(e));
+            }
+            let token = params.get("token").and_then(Value::as_str).map(str::to_string);
+            let op = method.replacen('/', ".", 1);
+            let call = cx.call_workspace(CallOwner::Links, &op, params);
+            let (conn, id) = (conn.to_string(), id.cloned());
+            let pending = match token.filter(|_| method == "token/revoke") {
+                Some(token) => Pending::Revoke { conn, id, token },
+                None => Pending::Hub { conn, id },
+            };
+            cx.state.links.pending.insert(call, pending);
+            Reply::Later
+        }
         "blob/put" => Reply::Now(blob_put(cx, conn, params)),
         "session/offer" => Reply::Now(offer(cx, conn, params)),
         "session/commit" => Reply::Now(commit(cx, conn, params)),
@@ -139,6 +162,21 @@ pub fn intercept(
     method: &str,
     params: &Value,
 ) -> Option<Reply> {
+    // A token limited to some sessions can't make roots (E8).
+    if method == "session/new"
+        && params.get("parent").is_none_or(Value::is_null)
+        && matches!(
+            cx.state.principals.conns.get(conn).map(|c| &c.peer),
+            Some(Peer::Token {
+                sessions: Some(_),
+                ..
+            })
+        )
+    {
+        return Some(Reply::Now(Err(
+            RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "sessions" }))
+        )));
+    }
     let session = params.get("session").and_then(Value::as_str)?.to_string();
     if let Some(runtime) = cx.state.links.moved.get(&session) {
         return Some(Reply::Now(Err(RpcError::new(MOVED, "the session moved")
@@ -459,6 +497,40 @@ pub fn connected(cx: &mut Cx, conn: &str, link: &str) {
             params,
         });
     }
+    for id in cx.state.links.outbox_ids.remove(link).unwrap_or_default() {
+        cx.persist(json!({ "op": "delete", "kind": "outbox", "id": id }));
+    }
+}
+
+/// Puts back what links persisted, after a restart (spec 34): redirects of moved sessions and
+/// undelivered outbox entries.
+pub fn restore(cx: &mut Cx, kind: &str, id: &str, value: &Value) {
+    match kind {
+        "moved" => {
+            if let Some(runtime) = value["runtime"].as_str() {
+                cx.state.links.moved.insert(id.to_string(), runtime.to_string());
+            }
+        }
+        "outbox" => {
+            let (Some(link), Some(method)) = (value["link"].as_str(), value["method"].as_str()) else {
+                return;
+            };
+            let entry = (method.to_string(), value["params"].clone());
+            cx.state
+                .links
+                .outbox
+                .entry(link.to_string())
+                .or_default()
+                .push(entry);
+            cx.state
+                .links
+                .outbox_ids
+                .entry(link.to_string())
+                .or_default()
+                .push(id.to_string());
+        }
+        _ => {}
+    }
 }
 
 /// A link connection closed.
@@ -477,10 +549,17 @@ pub fn notify_peer(cx: &mut Cx, link: &str, method: &str, mut params: Value) {
         }),
         None => {
             let entry = (method.to_string(), params);
-            cx.persist(
-                json!({ "op": "put", "kind": "outbox", "id": format!("{link}/{}", cx.now_ms),
-                "value": { "link": link, "method": entry.0, "params": entry.1 } }),
-            );
+            let n = cx.state.links.outbox.get(link).map_or(0, Vec::len);
+            // Zero-padded so stored entries list in the order they were sent.
+            let id = format!("{link}/{:016}-{n:06}", cx.now_ms);
+            cx.persist(json!({ "op": "put", "kind": "outbox", "id": id,
+                "value": { "link": link, "method": entry.0, "params": entry.1 } }));
+            cx.state
+                .links
+                .outbox_ids
+                .entry(link.to_string())
+                .or_default()
+                .push(id);
             cx.state
                 .links
                 .outbox
@@ -509,6 +588,24 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
     };
     match pending {
         Pending::Hub { conn, id } | Pending::Forward { conn, id } => {
+            if let Some(id) = id {
+                cx.reply(&conn, id, result);
+            }
+        }
+        Pending::Revoke { conn, id, token } => {
+            if result.is_ok() {
+                let closing: Vec<String> = cx
+                    .state
+                    .principals
+                    .conns
+                    .iter()
+                    .filter(|(_, c)| matches!(&c.peer, Peer::Token { token: t, .. } if *t == token))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for c in closing {
+                    cx.emit(Effect::Close { conn: c });
+                }
+            }
             if let Some(id) = id {
                 cx.reply(&conn, id, result);
             }

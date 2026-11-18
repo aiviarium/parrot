@@ -534,8 +534,10 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
         let Ok(msg) = wire::parse_line(&line) else {
             continue;
         };
+        // The frame and the updates share one time, so a rebuild from frames gives the same items.
+        let at = now();
         if let Ok(raw) = serde_json::from_str::<Value>(&line) {
-            driver.emit(vec![frame::frame(&b.id, &now(), json!({"out": raw}))]);
+            driver.emit(vec![frame::frame(&b.id, &at, json!({"out": raw}))]);
         }
         match &msg {
             Open::Known(wire::ClaudeOutMsg::ControlResponse(r)) => {
@@ -560,7 +562,7 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
                 let _ = b.write(&Open::Known(ClaudeInMsg::ControlResponse(resp))).await;
             }
             _ => {
-                let updates = b.state.lock().unwrap().step(&msg, &now());
+                let updates = b.state.lock().unwrap().step(&msg, &at);
                 driver.emit(updates);
             }
         }

@@ -1,0 +1,10 @@
+// driver.kdl for a driver that runs as a program in its egg.
+driver "command" {
+  run "bin/driver"
+  variant os="linux" arch="x86_64" run="variants/linux-x86_64/driver"
+  variant os="windows" run="bin/driver.exe"
+}
+cli "example" versions=">=1.0, <3"
+data-version "1"
+controls "native" "tui"
+bindings 1

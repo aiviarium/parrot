@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DriverFile",
+  "description": "The driver data file driver.kdl, read from KDL into this shape.",
+  "type": "object",
+  "properties": {
+    "driver": {
+      "description": "How the driver runs.",
+      "$ref": "#/$defs/DriverRun"
+    },
+    "cli": {
+      "description": "The harness CLI the driver talks to, and the versions this data covers.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CliSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dataVersion": {
+      "description": "The driver data version, reported as `driver.data` on the agent (spec 6).",
+      "type": "string"
+    },
+    "controls": {
+      "description": "How the agent can be driven; the first is the default. `native` when left out.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Control"
+      },
+      "default": [
+        "native"
+      ]
+    },
+    "bindings": {
+      "description": "How many bindings one driver process serves; any number when left out (spec 30.5).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "driver",
+    "dataVersion"
+  ],
+  "$defs": {
+    "DriverRun": {
+      "description": "How a driver runs.",
+      "oneOf": [
+        {
+          "description": "A driver compiled into the runtime, served by `parrot driver <name>`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "builtin"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "A program in the egg's `parrot` folder, with a variant per platform when it is a binary.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "run": {
+              "description": "The program, relative to the egg's `parrot` folder, when no variant matches.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "args": {
+              "description": "Arguments passed to the program.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "variants": {
+              "description": "Per-platform programs; the first that matches wins.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CommandVariant"
+              }
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "CommandVariant": {
+      "description": "One platform's program.",
+      "type": "object",
+      "properties": {
+        "os": {
+          "description": "The OS as Rust names it (`linux`, `macos`, `windows`); any when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "arch": {
+          "description": "The architecture as Rust names it (`x86_64`, `aarch64`); any when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "The program, relative to the egg's `parrot` folder.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ]
+    },
+    "CliSpec": {
+      "description": "The harness CLI.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The command name, such as `claude`.",
+          "type": "string"
+        },
+        "versions": {
+          "description": "A semver range of the CLI versions this data covers, such as `>=2.0`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Control": {
+      "type": "string",
+      "enum": [
+        "native",
+        "tui"
+      ]
+    }
+  }
+}

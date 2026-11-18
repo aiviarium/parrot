@@ -174,6 +174,7 @@ pub fn parse<T: serde::de::DeserializeOwned>(params: Value) -> Result<T, RpcErro
 pub fn call(cx: &mut Cx, conn: &str, _id: Option<&RequestId>, method: &str, params: Value) -> Reply {
     match method {
         "initialize" => Reply::Now(initialize(cx, conn, params)),
+        "token/create" | "token/list" | "token/revoke" => crate::links::call(cx, conn, _id, method, params),
         _ => Reply::Now(Err(RpcError::new(-32601, format!("method not found: {method}")))),
     }
 }
