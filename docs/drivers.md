@@ -68,7 +68,7 @@ A driver reads the version where the CLI reports one:
 | opencode | the first version `opencode --version` prints |
 
 The ranges in `eggs/` state the release line the data was checked against, such as
-`>=0.73.0, <0.74.0` for pi. A newer CLI runs with the newest data and unverified.
+`>=1.5.0, <1.6.0` for pi. A newer CLI runs with the newest data and unverified.
 
 ## Prompts and attachments
 
