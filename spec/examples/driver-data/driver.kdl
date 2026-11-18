@@ -8,3 +8,6 @@ cli "example" versions=">=1.0, <3"
 data-version "1"
 controls "native" "tui"
 bindings 1
+// What the TUI core reads and how it passes the MCP server, under TUI control.
+transcript "jsonl" dir="~/.example/transcripts"
+mcp "mcp-config"

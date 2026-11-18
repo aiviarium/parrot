@@ -1,40 +1,33 @@
 //! The Codex egg's data files (spec 31), read from `$PARROT_DRIVER_DATA` with the copies in
-//! `eggs/codex/parrot` compiled in as the fallback.
+//! `eggs/codex/parrot` compiled in as the fallback, for the Codex version the driver has seen.
 
-use std::sync::OnceLock;
-
+use parrot_driver::data::DataCell;
 use parrot_proto::driver_data::{Builtin, DriverData};
 
 pub const BUILTIN: Builtin = Builtin {
-    driver: "",
+    driver: include_str!("../../../eggs/codex/parrot/driver.kdl"),
     options: include_str!("../../../eggs/codex/parrot/options.kdl"),
     levels: include_str!("../../../eggs/codex/parrot/levels.kdl"),
     correlate: include_str!("../../../eggs/codex/parrot/correlate.kdl"),
     shims: &[],
 };
 
-static DATA: OnceLock<(DriverData, Option<String>)> = OnceLock::new();
-
-fn loaded() -> &'static (DriverData, Option<String>) {
-    DATA.get_or_init(|| match DriverData::load(BUILTIN) {
-        Ok(d) => (d, None),
-        Err(e) => (
-            DriverData::builtin(BUILTIN).expect("the compiled-in data parses"),
-            Some(format!(
-                "the egg's driver data is invalid, using the built-in copy: {e}"
-            )),
-        ),
-    })
-}
+static DATA: DataCell = DataCell::new(BUILTIN);
 
 /// The driver data in use.
 pub fn data() -> &'static DriverData {
-    &loaded().0
+    DATA.get()
 }
 
 /// Why the egg's data was not used, if it wasn't.
-pub fn load_error() -> Option<&'static str> {
-    loaded().1.as_deref()
+pub fn load_error() -> Option<String> {
+    DATA.load_error()
+}
+
+/// Takes the Codex version from `--version` or the `initialize` answer, which picks the egg's
+/// version shim (spec 31). Returns whether the data changed.
+pub fn observe_version(version: &str) -> bool {
+    DATA.observe(version)
 }
 
 #[cfg(test)]

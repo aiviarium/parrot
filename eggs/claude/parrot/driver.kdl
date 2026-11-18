@@ -6,3 +6,6 @@ data-version "1"
 // Files that replace the ones above for newer Claude Code versions (spec 31).
 shim ">=2.1.325" dir="shims/2.1.325"
 controls "native" "tui"
+// The TUI core reads the project transcript and passes the MCP server with --mcp-config.
+transcript "claude"
+mcp "mcp-config"

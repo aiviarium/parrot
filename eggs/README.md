@@ -49,7 +49,8 @@ egg states the release line its data was checked against, such as the pi egg's
 | `run "path" args…` | The program when no variant matches, with its arguments. `{os}`, `{arch}` and `{exe}` are filled in |
 | `variant os=… arch=… run=…` | The program for one platform. The first match wins. Either key may be left out |
 | `command "prog" "arg"…` | The CLI command, for the ACP and TUI cores |
-| `transcript "claude"` or `transcript "<dir>"` | Where the TUI core reads the transcript |
+| `transcript "claude"`, `"codex"` or `"jsonl" dir=…` | The transcript the TUI core reads, by format. `dir=` replaces the format's own folder |
+| `mcp "mcp-config"` or `mcp "config-override"` | How the TUI core passes the `parrot` MCP server: `--mcp-config` JSON or `-c` overrides |
 | `cli "name" versions=…` | The agent CLI and the semver range this data covers |
 | `data-version "1"` | The data version, reported as `driver.data` on the agent |
 | `controls "native" "tui"` | How the agent can be driven. The first is the default. `native` when left out |
