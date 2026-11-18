@@ -1,0 +1,150 @@
+name: Rookery plugins
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'eggs/*/rookery/**'
+      - 'eggs/*/package.kdl'
+      - '.github/workflows/rookery.yml'
+  pull_request:
+    paths:
+      - 'eggs/*/rookery/**'
+      - 'eggs/*/package.kdl'
+      - '.github/workflows/rookery.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rookery-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_VERSION: 1.99.0
+  # Pinned commit of aiviarium/rookery (no tagged release published yet).
+  ROOKERY_REF: a4f7a09fe55628d5296138a84bb4a8fb1d122ee7
+  ANSIBLE_CORE_VERSION: 2.21.6
+jobs:
+  plugin-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Checkout rookery
+        uses: actions/checkout@v7
+        with:
+          repository: aiviarium/rookery
+          ref: ${{ env.ROOKERY_REF }}
+          path: .rookery
+          persist-credentials: false
+      - name: Install toolchain with musl target
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target x86_64-unknown-linux-musl --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .rookery
+          shared-key: rookery-cli
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build rookery
+        run: cargo build --locked --manifest-path .rookery/Cargo.toml -p rookery
+      - name: Check rookery targets
+        run: |
+          rookery=".rookery/target/debug/rookery"
+          found=0
+          for dir in eggs/*/rookery; do
+            egg="${dir%/rookery}"
+            echo "Checking $egg"
+            "$rookery" plugin check "$egg"
+            found=$((found + 1))
+          done
+          [ "$found" -gt 0 ]
+
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply rookery tasks in Ubuntu 26.04 and verify commands
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -e ANSIBLE_CORE_VERSION="$ANSIBLE_CORE_VERSION" ubuntu:26.04 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -q
+            apt-get install -y --no-install-recommends \
+              ca-certificates curl gzip jq nodejs npm python3 python3-venv sudo tar xz-utils
+            id -u agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent
+
+            python3 -m venv /opt/ansible
+            /opt/ansible/bin/pip install --no-cache-dir "ansible-core==${ANSIBLE_CORE_VERSION}"
+            export PATH="/opt/ansible/bin:$PATH"
+            export ANSIBLE_NOCOLOR=1
+
+            work=$(mktemp -d)
+            trap "rm -rf $work" EXIT
+
+            python3 - /repo/eggs "$work" <<'\''PY'\''
+          import json
+          import pathlib
+          import sys
+
+          eggs_dir = pathlib.Path(sys.argv[1])
+          out_dir = pathlib.Path(sys.argv[2])
+
+          features = []
+          plays = []
+          checks = []
+
+          for manifest_path in sorted(eggs_dir.glob("*/rookery/rookery.json")):
+              plugin_dir = manifest_path.parent
+              plugin_id = plugin_dir.parent.name
+              manifest = json.loads(manifest_path.read_text())
+              for feature in manifest.get("features", []):
+                  fid = feature["id"]
+                  feat_id = f"{plugin_id}/{fid}"
+                  features.append(feat_id)
+                  tasks_rel = feature.get("tasks")
+                  if tasks_rel:
+                      plays.append({
+                          "name": f"Apply {feat_id}",
+                          "hosts": "localhost",
+                          "connection": "local",
+                          "become": True,
+                          "gather_facts": True,
+                          "vars": {
+                              "rookery_user": "agent",
+                              "rookery_home": "/home/agent",
+                              "rookery_tool_path": "/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin",
+                              "rookery_plugin_dir": str(plugin_dir),
+                              "rookery_plugin_features": features,
+                              "rookery_software_rendering": True,
+                              "rookery_profile": "container",
+                          },
+                          "tasks": [
+                              {"ansible.builtin.include_tasks": str(plugin_dir / tasks_rel)}
+                          ],
+                      })
+                  for cmd in feature.get("commands", []):
+                      checks.append((feat_id, cmd))
+
+          for play in plays:
+              play["vars"]["rookery_plugin_features"] = features
+
+          (out_dir / "play.yml").write_text(json.dumps(plays, indent=2))
+          (out_dir / "commands.tsv").write_text(
+              "".join(f"{feat}\t{cmd}\n" for feat, cmd in checks)
+          )
+          PY
+
+            ansible-playbook -i localhost, "$work/play.yml"
+
+            while IFS=$'\''\t'\'' read -r feat cmd; do
+              echo "Verifying $feat command: $cmd"
+              su -s /bin/bash agent -c "
+                set -euo pipefail
+                export HOME=/home/agent
+                export PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
+                command -v \"$cmd\"
+                \"$cmd\" --version
+              "
+            done < "$work/commands.tsv"
+          '

@@ -27,4 +27,9 @@ targets {
       variant os=windows arch=x86_64
     }
   }
+  rookery {
+    requires {
+      rookery ">=0.6"
+    }
+  }
 }
