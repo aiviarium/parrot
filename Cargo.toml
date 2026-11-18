@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/parrot-term", "crates/parrot-tui", "crates/parrot-models"]
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,25 @@ repository = "https://github.com/aiviarium/parrot"
 parrot-term = { path = "crates/parrot-term" }
 parrot-tui = { path = "crates/parrot-tui" }
 parrot-models = { path = "crates/parrot-models" }
+parrot-proto = { path = "crates/parrot-proto" }
+parrot-core = { path = "crates/parrot-core" }
+parrot-store = { path = "crates/parrot-store" }
+parrot-serve = { path = "crates/parrot-serve" }
+parrot-guard = { path = "crates/parrot-guard" }
+parrot-driver = { path = "crates/parrot-driver" }
+parrot-driver-claude = { path = "crates/parrot-driver-claude" }
+parrot-workspace = { path = "crates/parrot-workspace" }
+parrot-mcp = { path = "crates/parrot-mcp" }
+parrot-link = { path = "crates/parrot-link" }
+schemars = { version = "1", features = ["preserve_order"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+snow = "0.10"
+proptest = "1"
+tempfile = "3"
+sha2 = "0.10"
+clap = { version = "4", features = ["derive"] }
+tokio-tungstenite = "0.28"
+rand = "0.9"
 bytes = "1.12.1"
 futures = "0.3.34"
 jsonschema = { version = "0.61.2", default-features = false }

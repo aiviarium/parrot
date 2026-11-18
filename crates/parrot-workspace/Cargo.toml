@@ -1,0 +1,18 @@
+[package]
+name = "parrot-workspace"
+description = "Workspaces for the Parrot runtime: folders, git worktrees, merges, transfers and checkpoints"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

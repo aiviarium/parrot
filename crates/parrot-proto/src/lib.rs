@@ -1,0 +1,27 @@
+//! Wire types of the Parrot protocol, with the generated JSON Schema.
+
+pub mod action;
+pub mod agent;
+pub mod ceiling;
+pub mod driver;
+pub mod env;
+pub mod error;
+pub mod function;
+pub mod handshake;
+pub mod ids;
+pub mod item;
+pub mod link;
+pub mod open;
+pub mod option;
+pub mod patch;
+pub mod principal;
+pub mod prompt;
+pub mod request;
+pub mod rpc;
+pub mod seed;
+pub mod session;
+pub mod state;
+pub mod subscribe;
+pub mod task;
+pub mod usage;
+pub mod workspace;
