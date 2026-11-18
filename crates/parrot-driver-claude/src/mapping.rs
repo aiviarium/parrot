@@ -77,6 +77,10 @@ pub struct MapState {
     /// Tool keys by `tool_use_id`, for results and subagent parents.
     tools: HashMap<String, String>,
     unnamed: u64,
+    /// Context tokens of the latest top-level API request, from its assistant message.
+    context_used: Option<u64>,
+    /// Subagent keys (the `tool_use` id of the Task call that runs each).
+    subagents: Vec<String>,
 }
 
 impl MapState {
@@ -390,18 +394,26 @@ impl MapState {
             ClaudeOutMsg::StreamEvent(e) => {
                 let mut out = self.ensure_turn(now);
                 let parent = self.parent_of(e.parent_tool_use_id.as_ref());
-                out.extend(self.event(&e.event, parent));
+                let updates = self.event(&e.event, parent.clone());
+                out.extend(self.sidechain(parent, updates));
                 out
             }
             ClaudeOutMsg::Assistant(a) => {
                 let mut out = self.ensure_turn(now);
                 let parent = self.parent_of(a.parent_tool_use_id.as_ref());
-                out.extend(self.assistant(&a.message, parent));
+                if parent.is_none()
+                    && let Some(u) = &a.message.usage
+                {
+                    self.context_used = Some(context_tokens(u));
+                }
+                let updates = self.assistant(&a.message, parent.clone());
+                out.extend(self.sidechain(parent, updates));
                 out
             }
             ClaudeOutMsg::User(u) => {
                 let parent = self.parent_of(u.parent_tool_use_id.as_ref());
-                self.user(u, parent)
+                let updates = self.user(u, parent.clone());
+                self.sidechain(parent, updates)
             }
             ClaudeOutMsg::Result(r) => self.result(r, now),
             ClaudeOutMsg::ControlRequest(req) => match &req.request {
@@ -428,6 +440,63 @@ impl MapState {
             },
             _ => vec![],
         }
+    }
+
+    /// Updates from a Task call's sidechain (`parent_tool_use_id`) belong to its subagent
+    /// (spec 30.3): they carry `subagent` and no `parent`. The subagent item comes first.
+    fn sidechain(&mut self, parent: Option<String>, updates: Vec<DriverUpdate>) -> Vec<DriverUpdate> {
+        let Some(key) = parent else {
+            return updates;
+        };
+        let mut out = Vec::new();
+        if !self.subagents.contains(&key) {
+            self.subagents.push(key.clone());
+            out.push(self.subagent_item(&key, None, "running"));
+        }
+        for mut u in updates {
+            if let Open::Known(DriverUpdateKind::Item { item }) = &mut u.update {
+                item.parent = None;
+            }
+            u.subagent = Some(key.clone());
+            out.push(u);
+        }
+        out
+    }
+
+    /// The parent's item for the subagent that the Task call `key` runs.
+    fn subagent_item(&self, key: &str, title: Option<&str>, status: &str) -> DriverUpdate {
+        let mut set = Map::new();
+        set.insert("key".into(), json!(key));
+        if let Some(t) = title {
+            set.insert("title".into(), json!(t));
+        }
+        set.insert("status".into(), json!(status));
+        self.item(ItemPatch {
+            id: format!("{key}:subagent"),
+            kind: Some(Open::Known(ItemKind::Subagent)),
+            turn: self.turn_key(),
+            parent: Some(key.to_owned()),
+            set: Some(set),
+            ..Default::default()
+        })
+    }
+
+    /// For a Task tool call, the subagent item with its title.
+    fn task_started(&mut self, t: &wire::ToolUseBlock) -> Option<DriverUpdate> {
+        if !SUBAGENT_TOOLS.contains(&t.name.as_str()) {
+            return None;
+        }
+        let title = t
+            .input
+            .get("description")
+            .or_else(|| t.input.get("subagent_type"))
+            .and_then(Value::as_str)
+            .unwrap_or("Subagent")
+            .to_owned();
+        if !self.subagents.contains(&t.id) {
+            self.subagents.push(t.id.clone());
+        }
+        Some(self.subagent_item(&t.id, Some(&title), "running"))
     }
 
     fn fresh(&mut self, prefix: &str) -> String {
@@ -473,6 +542,12 @@ impl MapState {
                     }
                     _ => return vec![],
                 };
+                let task = match content_block {
+                    Open::Known(ContentBlock::ToolUse(t)) if !self.subagents.contains(&t.id) => {
+                        self.task_started(t)
+                    }
+                    _ => None,
+                };
                 self.blocks.insert(
                     *index,
                     StreamBlock {
@@ -481,7 +556,7 @@ impl MapState {
                         finalized: false,
                     },
                 );
-                vec![self.item(ItemPatch {
+                let mut out = vec![self.item(ItemPatch {
                     id: key,
                     kind: Some(Open::Known(kind)),
                     turn: self.turn_key(),
@@ -489,7 +564,9 @@ impl MapState {
                     set: Some(set),
                     streaming: Some(true),
                     ..Default::default()
-                })]
+                })];
+                out.extend(task);
+                out
             }
             Event::ContentBlockDelta { index, delta, .. } => {
                 let Some(block) = self.blocks.get(index) else {
@@ -530,12 +607,17 @@ impl MapState {
         };
         let same_message = message.id.is_some() && message.id == self.message;
         let mut out = Vec::new();
+        let mut tasks = Vec::new();
         for (i, block) in blocks.iter().enumerate() {
             let (kind, set) = match block {
                 Open::Known(ContentBlock::Text(t)) => (ItemKind::Assistant, text_set(&t.text)),
                 Open::Known(ContentBlock::Thinking(t)) => (ItemKind::Reasoning, text_set(&t.thinking)),
                 Open::Known(ContentBlock::ToolUse(t)) => {
                     self.tools.insert(t.id.clone(), t.id.clone());
+                    // The title is in the whole input, which only the final message has.
+                    if SUBAGENT_TOOLS.contains(&t.name.as_str()) {
+                        tasks.extend(self.task_started(t));
+                    }
                     (ItemKind::Tool, tool_set(&t.name, &t.input, "running"))
                 }
                 _ => continue,
@@ -582,6 +664,7 @@ impl MapState {
                 ..Default::default()
             }));
         }
+        out.extend(tasks);
         out
     }
 
@@ -602,16 +685,26 @@ impl MapState {
                         set.insert("output".into(), c.clone());
                     }
                     out.push(self.item(ItemPatch {
-                        id: key,
+                        id: key.clone(),
                         set: Some(set),
                         streaming: Some(false),
                         ..Default::default()
                     }));
+                    if self.subagents.contains(&key) {
+                        let mut set = Map::new();
+                        set.insert("status".into(), json!(status));
+                        out.push(self.item(ItemPatch {
+                            id: format!("{key}:subagent"),
+                            set: Some(set),
+                            ..Default::default()
+                        }));
+                    }
                 }
             }
         }
         let text = u.message.content.text();
-        if text.is_empty() {
+        // The CLI marks an interrupt with a user message of its own; the turn already says it.
+        if text.is_empty() || text.starts_with("[Request interrupted by user") {
             return out;
         }
         // An echo of a prompt this driver wrote is already reported under the runtime's id.
@@ -663,7 +756,7 @@ impl MapState {
                 .unwrap_or_else(|| "the turn failed".into()),
             retryable: true,
         });
-        let usage = usage_of(r);
+        let usage = usage_of(r, self.context_used.take());
         // Blocks cut off by an interrupt never get their final message.
         let mut open_blocks: Vec<_> = self.blocks.iter().filter(|(_, b)| !b.finalized).collect();
         open_blocks.sort_by_key(|(i, _)| **i);
@@ -938,7 +1031,17 @@ fn permission_result(p: &PendingRequest, a: &Answer) -> PermissionResult {
     }
 }
 
-fn usage_of(r: &ResultMsg) -> Usage {
+fn context_tokens(u: &wire::Usage) -> u64 {
+    u.input_tokens.unwrap_or(0)
+        + u.cache_read_input_tokens.unwrap_or(0)
+        + u.cache_creation_input_tokens.unwrap_or(0)
+        + u.output_tokens.unwrap_or(0)
+}
+
+/// The turn's usage. `used` is the context of the last API request: the result's last
+/// iteration, else the last assistant message's usage. The result's totals add up every request
+/// of the turn, which overstates the context.
+fn usage_of(r: &ResultMsg, last: Option<u64>) -> Usage {
     let tokens = r.usage.as_ref().map(|u| TokenUsage {
         input: u.input_tokens.unwrap_or(0),
         output: u.output_tokens.unwrap_or(0),
@@ -951,11 +1054,21 @@ fn usage_of(r: &ResultMsg) -> Usage {
             .filter_map(|v| v.get("contextWindow").and_then(Value::as_u64))
             .max()
     });
-    let context = match (window, &tokens) {
-        (Some(window), Some(t)) => Some(ContextUsage {
-            used: t.input + t.cache_read.unwrap_or(0) + t.cache_write.unwrap_or(0) + t.output,
-            window,
-        }),
+    let iteration = r
+        .usage
+        .as_ref()
+        .and_then(|u| u.extra.get("iterations"))
+        .and_then(Value::as_array)
+        .and_then(|i| i.last())
+        .and_then(|i| serde_json::from_value::<wire::Usage>(i.clone()).ok())
+        .map(|u| context_tokens(&u));
+    let used = iteration.or(last).or_else(|| {
+        tokens
+            .as_ref()
+            .map(|t| t.input + t.cache_read.unwrap_or(0) + t.cache_write.unwrap_or(0) + t.output)
+    });
+    let context = match (window, used) {
+        (Some(window), Some(used)) => Some(ContextUsage { used, window }),
         _ => None,
     };
     Usage {
@@ -968,6 +1081,9 @@ fn usage_of(r: &ResultMsg) -> Usage {
         ..Default::default()
     }
 }
+
+/// Tools whose calls run a subagent in a sidechain.
+const SUBAGENT_TOOLS: &[&str] = &["Task", "Agent"];
 
 fn tool_level(tool: &str) -> PermissionLevel {
     data().levels.tool_level(tool)

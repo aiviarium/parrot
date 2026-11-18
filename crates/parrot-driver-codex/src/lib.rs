@@ -7,6 +7,7 @@ pub mod fake;
 pub mod frame;
 pub mod input;
 pub mod mapping;
+pub mod rollout;
 pub mod wire;
 
 /// Serves the Codex driver on stdin and stdout until stdin closes (`parrot driver codex`).

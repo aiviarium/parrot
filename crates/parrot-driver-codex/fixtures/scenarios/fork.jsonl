@@ -1,0 +1,3 @@
+// binding/fork: the driver asks Codex for thread/fork and returns the new thread.
+{"expect": {"method": "thread/fork", "params": {"threadId": "thr-fake-0001"}}}
+{"emit": {"id": "{{id}}", "result": {"thread": {"id": "thr-fake-fork", "status": {"type": "idle"}}}}}
