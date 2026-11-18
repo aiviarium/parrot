@@ -1,0 +1,5 @@
+// An MCP server asks before the thread is open, so the start returns on the request.
+{"expect":{"method":"thread/start","params":{"config":{"mcp_servers":{"parrot":{"url":"http://127.0.0.1:9/mcp","bearer_token_env_var":"PARROT_MCP_TOKEN"}}}}}}
+{"emit":{"id":7,"method":"mcpServer/elicitation/request","params":{"threadId":null,"serverName":"parrot","message":"Sign in to the notes server","requestedSchema":null}}}
+{"await_response":7,"match":{"action":"accept"}}
+{"emit":{"id":"{{id}}","result":{"thread":{"id":"thr-late-0002"},"model":"gpt-fake-large","reasoningEffort":"low"}}}

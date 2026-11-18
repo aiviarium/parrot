@@ -1,0 +1,11 @@
+// A command that needs approval outside the sandbox, as CLI 0.167.1 asked for it; the driver accepts.
+{"expect":{"method":"turn/start"}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"01a1de18-b809-7723-900b-c585bea1163d","items":[],"status":"inProgress","error":null}}}}
+{"emit":{"method":"turn/started","params":{"threadId":"thr-fake-0001","turn":{"id":"01a1de18-b809-7723-900b-c585bea1163d","items":[],"status":"inProgress"}}}}
+{"emit":{"method":"thread/status/changed","params":{"threadId":"thr-fake-0001","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}}
+{"emit":{"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-5ff3","command":"/bin/bash -lc \"printf 'live' > live.txt\"","cwd":"/w","processId":null,"source":"agent","status":"inProgress","commandActions":[],"aggregatedOutput":null,"exitCode":null},"threadId":"thr-fake-0001","turnId":"01a1de18-b809-7723-900b-c585bea1163d"}}}
+{"emit":{"id":0,"method":"item/commandExecution/requestApproval","params":{"kind":"command","threadId":"thr-fake-0001","turnId":"01a1de18-b809-7723-900b-c585bea1163d","itemId":"exec-5ff3","startedAtMs":1,"environmentId":"local","reason":"Do you want to allow writing live.txt in the workspace outside the sandbox?","command":"/bin/bash -lc \"printf 'live' > live.txt\"","cwd":"/w","availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["printf"]}},"cancel"]}}}
+{"await_response":0,"match":{"decision":"accept"}}
+{"emit":{"method":"serverRequest/resolved","params":{"threadId":"thr-fake-0001","requestId":0}}}
+{"emit":{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-5ff3","command":"/bin/bash -lc \"printf 'live' > live.txt\"","cwd":"/w","status":"completed","aggregatedOutput":"","exitCode":0},"threadId":"thr-fake-0001","turnId":"01a1de18-b809-7723-900b-c585bea1163d"}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"01a1de18-b809-7723-900b-c585bea1163d","items":[],"status":"completed","error":null}}}}

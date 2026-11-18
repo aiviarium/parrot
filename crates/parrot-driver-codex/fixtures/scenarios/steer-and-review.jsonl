@@ -1,0 +1,13 @@
+// A prompt that steers the running turn, then a review started as an action.
+{"expect":{"method":"turn/start"}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-s-1","items":[],"status":"inProgress","error":null}}}}
+{"expect":{"method":"turn/steer","params":{"expectedTurnId":"turn-s-1","clientUserMessageId":"m2"}}}
+{"emit":{"id":"{{id}}","result":{"turnId":"turn-s-1"}}}
+{"emit":{"method":"item/completed","params":{"item":{"type":"userMessage","id":"u2","clientId":"m2","content":[{"type":"text","text":"Also count them"}]},"threadId":"thr-fake-0001","turnId":"turn-s-1"}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-s-1","items":[],"status":"completed","error":null}}}}
+{"expect":{"method":"review/start","params":{"target":{"type":"baseBranch","branch":"main"}}}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-r-1","items":[],"status":"inProgress"},"reviewThreadId":"thr-fake-0001"}}}
+{"emit":{"method":"turn/started","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-r-1","items":[],"status":"inProgress"}}}}
+{"emit":{"method":"item/completed","params":{"item":{"type":"enteredReviewMode","id":"rv-1","review":"changes against main"},"threadId":"thr-fake-0001","turnId":"turn-r-1"}}}
+{"emit":{"method":"item/completed","params":{"item":{"type":"exitedReviewMode","id":"rv-2","review":"No findings."},"threadId":"thr-fake-0001","turnId":"turn-r-1"}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-r-1","items":[],"status":"completed","error":null}}}}
