@@ -94,10 +94,15 @@ fn terminate(child: &Child) {
 }
 
 #[test]
-fn connect_link_is_not_supported() {
-    let out = Command::new(PARROT).args(["connect", "--link"]).output().unwrap();
+fn connect_link_needs_a_link_endpoint() {
+    let out = Command::new(PARROT)
+        .args(["connect", "--link", "--socket", "/nonexistent/parrot/sock"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not supported yet"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("/nonexistent/parrot/link.sock"), "{err}");
 }
 
 #[test]

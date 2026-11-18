@@ -12,8 +12,15 @@ doctest = false
 
 [dependencies]
 rand.workspace = true
+sha2.workspace = true
 snow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
