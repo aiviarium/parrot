@@ -529,6 +529,10 @@ fn not_found(what: &str, id: &str) -> RpcError {
 
 /// Returns `Value::Null` once it has replied itself, so the caller's reply precedes the updates.
 fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result<Value, RpcError> {
+    let params = crate::seeds::fill_workspace(cx.state, params);
+    if crate::seeds::summarize_first(cx, conn, id, &params)? {
+        return Ok(Value::Null);
+    }
     let p: SessionNewParams = parse(params)?;
     let mut plan = if p.parent.is_some()
         || p.seed.is_some()
@@ -714,13 +718,18 @@ pub fn finish_new(
     }
     let (subscription, head) =
         subscriptions::subscribe_conn(cx, conn, Target::Session { session: sid.clone() });
-    if p.start.unwrap_or(true) {
-        let binding = start_binding(cx, &sid, BindingVia::New);
-        if let (Some(b), Some(seed)) = (&binding, plan.as_ref().and_then(|p| p.seed.as_ref())) {
-            crate::seeds::after_seed(cx, b, seed);
+    let seed = plan.as_ref().and_then(|p| p.seed.clone());
+    match (p.start.unwrap_or(true), seed) {
+        (true, Some(seed)) => crate::seeds::start_seeded(cx, &sid, &seed),
+        (true, None) => {
+            start_binding(cx, &sid, BindingVia::New);
         }
-    } else {
-        changed(cx, &sid);
+        (false, seed) => {
+            if let Some(seed) = seed {
+                crate::seeds::defer_seeded(cx, &sid, &seed);
+            }
+            changed(cx, &sid);
+        }
     }
     let result = json!({
         "session": session_json(cx.state, &sid),

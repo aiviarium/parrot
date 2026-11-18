@@ -63,6 +63,7 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
             queue::tick(cx);
             tasks::tick(cx);
             seeds::tick(cx);
+            crate::budgets::tick(cx);
             crate::ceilings::tick(cx);
             links::tick(cx);
             functions::tick(cx);

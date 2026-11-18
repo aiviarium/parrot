@@ -19,6 +19,17 @@ use std::collections::{BTreeMap, VecDeque};
 pub struct Queues {
     pub by_session: BTreeMap<String, SessionQueue>,
     pub calls: BTreeMap<u64, PendingCall>,
+    /// Prompts waiting for their checkpoint, by the workspace call that records it.
+    pub deferred: BTreeMap<u64, Deferred>,
+}
+
+/// A prompt held until the workspace is recorded (spec 35).
+#[derive(Debug, Clone)]
+pub struct Deferred {
+    pub session: String,
+    pub binding: String,
+    pub entry: Entry,
+    pub params: Value,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -253,8 +264,9 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
             );
         }
         _ => {
+            let mut checkpoint = None;
             if !steer {
-                crate::seeds::before_prompt(cx, session, &mut params);
+                checkpoint = crate::seeds::before_prompt(cx, session, entry.message.as_deref(), &mut params);
                 // The prompt starts a turn: a client that looks before the driver reports it
                 // must not take the idle session for one that has finished.
                 set_state(cx, session, SessionState::Idle, SessionState::Running);
@@ -263,15 +275,20 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
             if let Some(m) = &entry.message {
                 inflight_begin(cx, session, m, &entry.text);
             }
-            let call = cx.call_driver(CallOwner::Queue, &binding, "binding/prompt", params);
-            cx.state.queue.calls.insert(
-                call,
-                PendingCall::Prompt {
-                    session: session.to_string(),
-                    entry: entry.clone(),
-                    steer,
-                },
-            );
+            match checkpoint {
+                Some(call) => {
+                    cx.state.queue.deferred.insert(
+                        call,
+                        Deferred {
+                            session: session.to_string(),
+                            binding,
+                            entry: entry.clone(),
+                            params,
+                        },
+                    );
+                }
+                None => prompt_driver(cx, session, &binding, entry.clone(), params, steer),
+            }
         }
     }
     if !steer {
@@ -281,6 +298,28 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
             .entry(session.to_string())
             .or_default()
             .busy = true;
+    }
+}
+
+fn prompt_driver(cx: &mut Cx, session: &str, binding: &str, entry: Entry, params: Value, steer: bool) {
+    let call = cx.call_driver(CallOwner::Queue, binding, "binding/prompt", params);
+    cx.state.queue.calls.insert(
+        call,
+        PendingCall::Prompt {
+            session: session.to_string(),
+            entry,
+            steer,
+        },
+    );
+}
+
+/// The checkpoint a prompt waited for was recorded (or failed): send the prompt.
+pub fn checkpointed(cx: &mut Cx, workspace_call: u64) {
+    if let Some(d) = cx.state.queue.deferred.remove(&workspace_call) {
+        if !cx.state.sessions.by_id.contains_key(&d.session) {
+            return;
+        }
+        prompt_driver(cx, &d.session, &d.binding, d.entry, d.params, false);
     }
 }
 
@@ -332,6 +371,7 @@ pub fn on_exit(cx: &mut Cx, session: &str) {
 /// A session was deleted.
 pub fn forget(cx: &mut Cx, session: &str) {
     cx.state.queue.by_session.remove(session);
+    cx.state.queue.deferred.retain(|_, d| d.session != session);
     cx.state.queue.calls.retain(|_, c| match c {
         PendingCall::Prompt { session: s, .. } | PendingCall::Action { session: s } => s != session,
         PendingCall::Cancel { session: s, .. } => s != session,
@@ -677,6 +717,7 @@ fn failed(cx: &mut Cx, session: &str, entry: &Entry, e: &RpcError) {
     });
     if let Some(m) = &entry.message {
         t["input"] = json!(m);
+        crate::seeds::on_prompt_failed(cx, session, m);
     }
     cx.publish(Some(session.to_string()), json!({ "type": "turn", "turn": t }));
     if let Some(q) = cx.state.queue.by_session.get_mut(session) {

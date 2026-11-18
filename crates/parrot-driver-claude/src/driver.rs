@@ -193,9 +193,11 @@ impl Driver {
                     .clone()
                     .ok_or_else(|| RpcError::new(-32004, "the session has no harness id yet"))?;
                 self.forks.lock().unwrap().insert(id.clone());
+                // The runtime may start the fork in another driver process, so the ref itself
+                // says it is a fork.
                 Ok(to_value(&BindingForkResult {
                     reference: Ref {
-                        id,
+                        id: format!("{FORK_PREFIX}{id}"),
                         strength: RefStrength::Strong,
                     },
                 }))
@@ -358,8 +360,12 @@ impl Driver {
         .map(OsString::from)
         .collect();
         if let Some(r) = &start.resume {
-            args.extend(["--resume".into(), r.id.clone().into()]);
-            if self.forks.lock().unwrap().remove(&r.id) {
+            let (id, fork) = match r.id.strip_prefix(FORK_PREFIX) {
+                Some(id) => (id.to_owned(), true),
+                None => (r.id.clone(), false),
+            };
+            args.extend(["--resume".into(), id.clone().into()]);
+            if fork || self.forks.lock().unwrap().remove(&id) {
                 args.push("--fork-session".into());
             }
         }
@@ -620,6 +626,9 @@ fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUp
         extra: Map::new(),
     }
 }
+
+/// Marks a ref from `binding/fork`: resuming it forks the harness session (`--fork-session`).
+pub const FORK_PREFIX: &str = "fork:";
 
 /// The `claude` agent as `agent/list` reports it.
 pub fn agent() -> Agent {
