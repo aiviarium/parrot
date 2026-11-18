@@ -243,6 +243,9 @@ pub fn unpack_new(path: &Path, transfer: &Transfer) -> Result<PathBuf, TransferE
             &file.path.to_string_lossy(),
             &format!("+{reference}:{reference}"),
         ])?;
+        // The files arrive as they were committed, so the carried patches apply byte for byte
+        // whatever line-ending conversion this machine's git does.
+        git.run(&["config", "core.autocrlf", "false"])?;
         git.run(&["checkout", "--quiet", &transfer.branch])?;
         apply_changes(path, transfer)
     })();
