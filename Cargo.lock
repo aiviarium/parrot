@@ -1605,9 +1605,11 @@ dependencies = [
 name = "parrot-tui"
 version = "0.1.0"
 dependencies = [
+ "parrot-proto",
  "parrot-term",
  "regex",
  "rustix",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

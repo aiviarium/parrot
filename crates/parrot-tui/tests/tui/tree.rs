@@ -86,7 +86,7 @@ fn frames(cast: &str) -> Vec<parrot_term::Frame> {
 
 #[test]
 fn the_prompt_keeps_its_id_across_frames() {
-    let mut t = Tracker::new(Some(profile("claude-code.toml")), Default::default());
+    let mut t = Tracker::new(Some(profile("claude-code.kdl")), Default::default());
     let mut ids = Vec::new();
     for f in frames("claude-prompt.cast") {
         t.update(f.time, &f.screen);
@@ -121,7 +121,7 @@ fn dialogs_are_generic_surfaces_without_a_profile() {
 
 #[test]
 fn trees_diff_into_events() {
-    let mut t = Tracker::new(Some(profile("codex.toml")), Default::default());
+    let mut t = Tracker::new(Some(profile("codex.kdl")), Default::default());
     let mut states = Vec::new();
     let mut added = 0;
     for f in frames("codex-approval.cast") {
@@ -228,7 +228,7 @@ async fn actions_drive_a_program_and_fail_loudly() {
     let (source, sink, out, inp) = channel();
     let session = Session::new(source, sink, SessionConfig::for_automation(Size::new(12, 40)));
     tokio::spawn(fake_cli(out, inp));
-    let tui = session.automate(Some(profile("claude-code.toml")));
+    let tui = session.automate(Some(profile("claude-code.kdl")));
     let t = Duration::from_secs(5);
     tui.wait_for_state("idle", t).await.unwrap();
 

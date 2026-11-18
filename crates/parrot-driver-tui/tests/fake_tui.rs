@@ -29,7 +29,7 @@ struct Harness {
 impl Harness {
     async fn start(trust: bool) -> (Harness, Result<Value, String>) {
         let dir = tempfile::tempdir().unwrap();
-        let profile = Profile::load(fake("fake-tui.toml")).unwrap();
+        let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
         let script = fake("fake-tui.sh").to_string_lossy().into_owned();
         let mut config = Config::new("fake-tui", vec!["sh".into(), script], profile);
         config.guard = None;
@@ -337,7 +337,7 @@ async fn keys_reach_the_terminal() {
 #[tokio::test]
 async fn agent_list_reports_tui_control() {
     let (tx, _rx) = mpsc::unbounded_channel();
-    let profile = Profile::load(fake("fake-tui.toml")).unwrap();
+    let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
     let mut d = TuiDriver::new(
         Config::new("fake-tui", vec!["sh".into()], profile),
         DriverContext { updates: tx },

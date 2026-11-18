@@ -35,4 +35,4 @@ not reported twice.
 ## Tests
 
 `tests/fake/fake-tui.sh` is a scripted TUI with a prompt, a busy line, a tool approval, a trust dialog
-at start, and a question the profile leaves out. `tests/fake/fake-tui.toml` is its profile.
+at start, and a question the profile leaves out. `tests/fake/fake-tui.kdl` is its profile.
