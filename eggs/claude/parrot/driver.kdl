@@ -1,0 +1,4 @@
+driver "builtin" name="claude"
+cli "claude" versions=">=2.0"
+data-version "1"
+controls "native" "tui"

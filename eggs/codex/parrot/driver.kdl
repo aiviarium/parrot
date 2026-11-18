@@ -1,0 +1,4 @@
+driver "builtin" name="codex"
+cli "codex" versions=">=0.100"
+data-version "1"
+controls "native"

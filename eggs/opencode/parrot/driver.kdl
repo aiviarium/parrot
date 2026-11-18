@@ -1,0 +1,4 @@
+driver "builtin" name="opencode"
+cli "opencode" versions=">=1.0"
+data-version "1"
+controls "native"

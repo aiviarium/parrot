@@ -1,7 +1,7 @@
 //! `parrot serve`: the runtime on the local socket, and on WebSocket with `--ws`.
 
-use parrot_core::{Clock, Core, Ids, Peer};
-use parrot_serve::{Runtime, RuntimeBackend, TokenCheck};
+use parrot_core::{Clock, Core, Ids};
+use parrot_serve::{Runtime, RuntimeBackend};
 use parrot_store::Store;
 use std::io;
 use std::path::PathBuf;
@@ -33,15 +33,6 @@ impl Ids for UlidIds {
             id.push(ALPHABET[((v >> (125 - 5 * i)) & 31) as usize] as char);
         }
         id
-    }
-}
-
-/// Refuses every client token until token storage exists.
-struct NoTokens;
-
-impl TokenCheck for NoTokens {
-    fn check(&self, _token: &str) -> Option<Peer> {
-        None
     }
 }
 
@@ -93,6 +84,8 @@ pub async fn run(
         parrot_link::StaticKey::load_or_create(&dir).map_err(|e| format!("cannot read the link key: {e}"))?;
     let hub = parrot_serve::link_hub::LinkHub::new(key, Some(dir.join("links.json")));
     let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
+    let drivers = load_drivers(&dir);
+    parrot_core::agents::load(&mut core.state, drivers.agents());
     core.state.principals.runtime = hub.runtime_id();
     core.state.principals.env = hub.runtime_id().replacen("rt_", "env_", 1);
     // The injected MCP server is this program's `parrot mcp` (spec 26).
@@ -103,15 +96,39 @@ pub async fn run(
             core.state.functions.runtime.insert(name, spec);
         }
     }
+    let config = parrot_serve::config::Config::load(&dir)?;
+    for (agent, a) in &config.tui {
+        core.state
+            .sessions
+            .agents
+            .insert(agent.clone(), parrot_serve::tui::agent_record(agent, a));
+    }
     let scratch = dir.join("files");
     let _ = std::fs::create_dir_all(&scratch);
-    let notifier = parrot_serve::notify::Notifier::new(parrot_serve::notify::targets_from_env());
+    let mut targets = parrot_serve::notify::targets_from_env();
+    targets.extend(
+        config
+            .notify
+            .iter()
+            .filter_map(|t| parrot_serve::notify::parse_target(t)),
+    );
+    let mut notifier = parrot_serve::notify::Notifier::new(targets);
+    notifier.url = config.notify_url.clone();
+    let tui = config.tui.clone();
+    let tokens = Arc::new(
+        parrot_serve::tokens::TokenStore::open(dir.join("tokens.json"))
+            .map_err(|e| format!("cannot read the tokens: {e}"))?,
+    );
+    let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
             .with_links(backend_hub)
             .with_scratch(scratch)
             .with_notifier(notifier)
+            .with_drivers(drivers)
+            .with_tui(tui)
+            .with_tokens(backend_tokens)
     });
     hub.attach(rt.clone());
 
@@ -139,7 +156,7 @@ pub async fn run(
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
-        parrot_serve::websocket::serve_websocket(rt.clone(), listener, Arc::new(NoTokens))
+        parrot_serve::websocket::serve_websocket(rt.clone(), listener, tokens.clone())
             .await
             .map_err(|e| format!("websocket: {e}"))
     };
@@ -156,6 +173,20 @@ pub async fn run(
     #[cfg(unix)]
     let _ = std::fs::remove_file(parrot_link::endpoint::link_socket_path(&socket));
     result
+}
+
+/// The driver eggs of this state directory, with refused ones reported on stderr.
+fn load_drivers(dir: &std::path::Path) -> parrot_serve::drivers::Drivers {
+    let (drivers, problems) = parrot_serve::drivers::Drivers::load(dir);
+    for p in problems {
+        eprintln!("parrot: {p}");
+    }
+    for egg in drivers.eggs() {
+        if let Err(e) = &egg.driver {
+            eprintln!("parrot: refused a driver egg: {e}");
+        }
+    }
+    drivers
 }
 
 /// The link endpoint `link.sock` beside the socket (E9).

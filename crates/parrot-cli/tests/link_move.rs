@@ -56,7 +56,11 @@ struct Serve {
 impl Serve {
     /// Starts serve; with `scenario`, the `claude` agent runs the fake CLI on it.
     fn start(scenario: Option<&Path>) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        Self::start_in(tempfile::tempdir().unwrap(), scenario)
+    }
+
+    /// Starts serve on the state of `dir`, as after a restart.
+    fn start_in(dir: tempfile::TempDir, scenario: Option<&Path>) -> Self {
         let socket = dir.path().join("sock");
         let mut cmd = Command::new(PARROT);
         cmd.args(["serve", "--state-dir"])
@@ -74,6 +78,15 @@ impl Serve {
             std::thread::sleep(Duration::from_millis(50));
         }
         Serve { child, socket, dir }
+    }
+
+    /// Kills serve and starts it again on the same state.
+    fn restart(&mut self, scenario: Option<&Path>) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket);
+        let dir = std::mem::replace(&mut self.dir, tempfile::tempdir().unwrap());
+        *self = Self::start_in(dir, scenario);
     }
 
     fn work_dir(&self) -> PathBuf {
@@ -247,7 +260,7 @@ impl Serve {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_moves_over_a_link_and_outlives_its_first_runtime() {
-    let laptop = Serve::start(Some(&scenario("text-turn.jsonl")));
+    let mut laptop = Serve::start(Some(&scenario("text-turn.jsonl")));
     let server = Serve::start(Some(&scenario("text-turn.jsonl")));
 
     // The server invites; the laptop pairs through `parrot connect --link` as a command carrier.
@@ -339,6 +352,14 @@ async fn a_session_moves_over_a_link_and_outlives_its_first_runtime() {
     let redirect = l.call("session/get", json!({ "session": session })).await;
     assert_eq!(redirect["error"]["code"], -32050, "{redirect}");
     assert_eq!(redirect["error"]["data"]["runtime"], server_runtime.as_str());
+
+    // The redirect outlives a restart of the laptop.
+    drop(l);
+    laptop.restart(Some(&scenario("text-turn.jsonl")));
+    let mut l = Client::connect(&laptop, "laptop-again").await;
+    l.initialize().await;
+    let redirect = l.call("session/get", json!({ "session": session })).await;
+    assert_eq!(redirect["error"]["code"], -32050, "{redirect}");
 
     // The laptop closes; the session runs on at the server.
     drop(l);
