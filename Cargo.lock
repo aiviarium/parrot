@@ -1406,6 +1406,7 @@ dependencies = [
 name = "parrot-driver-codex"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
