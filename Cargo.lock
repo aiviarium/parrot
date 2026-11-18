@@ -1404,9 +1404,12 @@ name = "parrot-link"
 version = "0.1.0"
 dependencies = [
  "rand 0.9.5",
+ "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "snow",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
