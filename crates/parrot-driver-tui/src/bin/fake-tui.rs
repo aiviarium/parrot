@@ -28,8 +28,10 @@ impl Fake {
 
     fn idle(&mut self, line: &str) {
         self.clear();
+        // The hint sits below several free rows: a typed attachment path is long and wraps, and
+        // it starts on row 3.
         self.write(&format!(
-            "Fake TUI 1.0\r\n{line}\r\n\r\n? Type a prompt and press Enter\x1b[3;1H> "
+            "Fake TUI 1.0\r\n{line}\r\n\r\n\x1b[8;1H? Type a prompt and press Enter\x1b[3;1H> "
         ));
     }
 

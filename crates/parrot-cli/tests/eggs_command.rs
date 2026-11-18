@@ -67,12 +67,14 @@ fn ok(out: Output) -> String {
 /// A temporary state directory with the tiny egg installed.
 fn installed() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let src = tiny_package(dir.path());
+    // The working directory is the folder's parent and the spec is `./tiny`, because a Windows
+    // drive letter is not read as a path.
+    tiny_package(dir.path());
     let out = ok(Command::new(PARROT)
-        .args(["eggs", "install"])
-        .arg(&src)
+        .args(["eggs", "install", "./tiny"])
         .arg("--state-dir")
         .arg(dir.path().join("state"))
+        .current_dir(dir.path())
         .output()
         .unwrap());
     assert!(out.contains("installed example/tiny 1.0.0"), "{out}");

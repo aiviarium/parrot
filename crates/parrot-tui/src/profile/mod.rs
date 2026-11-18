@@ -1297,7 +1297,10 @@ mod schema_tests {
             std::fs::write(&path, &fresh).unwrap();
             return;
         }
-        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        // A Windows checkout may hold the same file with CRLF; the schema itself is LF.
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert_eq!(
             committed,
             fresh,
