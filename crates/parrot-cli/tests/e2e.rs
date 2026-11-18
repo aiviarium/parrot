@@ -229,7 +229,6 @@ async fn serve_answers_initialize_and_unknown_methods() {
 }
 
 #[tokio::test]
-#[ignore = "needs core sessions"]
 async fn approval_answered_by_a_second_client_after_the_first_leaves() {
     let serve = Serve::start(Some(&scenario("bash-allowed.jsonl")));
     let work = serve.work_dir();

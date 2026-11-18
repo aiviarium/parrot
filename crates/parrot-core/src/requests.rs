@@ -238,6 +238,13 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
     req.id = id.clone();
     req.session = session.clone();
     req.path = directory::path_of(cx.state, &session);
+    // The turn and item are driver keys; clients know them by their runtime ids.
+    if let Some(t) = &req.turn {
+        req.turn = Some(crate::bindings::map_key(cx, &update.binding, "trn", t, None));
+    }
+    if let Some(i) = &req.item {
+        req.item = Some(crate::bindings::map_key(cx, &update.binding, "itm", i, None));
+    }
 
     if let Some(rec) = cx.state.requests.by_id.get_mut(&id) {
         // A later report of a known request: the harness may have settled it itself.
