@@ -1153,13 +1153,17 @@ pub const VERIFIED: (&str, &str) = ("0.167.0", "0.168.0");
 /// skills and MCP server names. What can't be found out is left out.
 pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
     use parrot_driver::probe;
+    // The version picks the version shim, so it is read before the options are built.
+    let version = probe::version(bin).await;
+    if let Some(v) = &version {
+        crate::data::observe_version(v);
+    }
     let mut a = agent();
     let home = std::env::var_os("CODEX_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".codex")));
-    match probe::version(bin).await {
+    match version {
         Some(v) => {
-            crate::data::observe_version(&v);
             a.harness = Some(parrot_proto::agent::HarnessInfo {
                 verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
                 version: v,
