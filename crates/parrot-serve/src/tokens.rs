@@ -1,5 +1,6 @@
-//! Client tokens (spec 3.4, 35, E8): created, listed and revoked by the owner, checked on each
-//! WebSocket upgrade. Secrets are kept only as SHA-256 hashes, in `tokens.json` (mode `0600`).
+//! Client tokens (spec 3.4, 35, E8): created, listed and revoked by the owner or over a link, and
+//! checked on each WebSocket upgrade. Secrets are kept only as SHA-256 hashes, in the runtime's
+//! store as projections of kind `token`. A `tokens.json` of an older runtime is imported once.
 
 use parrot_core::Peer;
 use parrot_proto::rpc::RpcError;
@@ -49,11 +50,40 @@ struct Record {
     hash: String,
 }
 
-/// Tokens in memory, written through to a file when it has one.
+/// The store projection that holds tokens.
+const TOKEN_KIND: &str = "token";
+
+/// Where tokens are written through to.
+#[derive(Default)]
+enum Backing {
+    #[default]
+    Memory,
+    File(PathBuf),
+    Store(Mutex<parrot_store::Store>),
+}
+
+impl std::fmt::Debug for Backing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Backing::Memory => f.write_str("Memory"),
+            Backing::File(p) => write!(f, "File({})", p.display()),
+            Backing::Store(_) => f.write_str("Store"),
+        }
+    }
+}
+
+/// Tokens in memory, written through to the store or a file when there is one.
 #[derive(Debug, Default)]
 pub struct TokenStore {
-    path: Option<PathBuf>,
+    backing: Backing,
     records: Mutex<Vec<Record>>,
+}
+
+fn record_of(v: &Value) -> Option<Record> {
+    Some(Record {
+        hash: v["hash"].as_str()?.to_string(),
+        token: v["token"].clone(),
+    })
 }
 
 fn hash(secret: &str) -> String {
@@ -107,28 +137,57 @@ impl TokenStore {
 
     /// A store in `path`, read now if it exists.
     pub fn open(path: PathBuf) -> std::io::Result<TokenStore> {
-        let records = match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str::<Vec<Value>>(&text)
-                .map_err(std::io::Error::other)?
-                .into_iter()
-                .filter_map(|v| {
-                    Some(Record {
-                        hash: v["hash"].as_str()?.to_string(),
-                        token: v["token"].clone(),
-                    })
-                })
-                .collect(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e),
-        };
+        let records = read_file(&path)?;
         Ok(TokenStore {
-            path: Some(path),
+            backing: Backing::File(path),
+            records: Mutex::new(records),
+        })
+    }
+
+    /// Tokens kept in the runtime's store (spec 35). A `tokens.json` at `legacy` is imported
+    /// once, then renamed to `tokens.json.imported`.
+    pub fn with_store(store: parrot_store::Store, legacy: Option<PathBuf>) -> std::io::Result<TokenStore> {
+        use parrot_store::Ops;
+        let mut records = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = store
+                .list(TOKEN_KIND, cursor.as_deref(), 1000)
+                .map_err(std::io::Error::other)?;
+            let full = page.len() == 1000;
+            cursor = page.last().map(|(id, _)| id.clone());
+            records.extend(page.iter().filter_map(|(_, v)| record_of(v)));
+            if !full {
+                break;
+            }
+        }
+        if let Some(file) = legacy.filter(|f| f.is_file()) {
+            for r in read_file(&file)? {
+                let Some(id) = r.token["id"].as_str().map(str::to_string) else {
+                    continue;
+                };
+                if records.iter().any(|x| x.token["id"] == id.as_str()) {
+                    continue;
+                }
+                store
+                    .put(TOKEN_KIND, &id, &json!({ "token": r.token, "hash": r.hash }))
+                    .map_err(std::io::Error::other)?;
+                records.push(r);
+            }
+            std::fs::rename(&file, file.with_extension("json.imported"))?;
+        }
+        Ok(TokenStore {
+            backing: Backing::Store(Mutex::new(store)),
             records: Mutex::new(records),
         })
     }
 
     fn save(&self, records: &[Record]) -> Result<(), RpcError> {
-        let Some(path) = &self.path else { return Ok(()) };
+        let path = match &self.backing {
+            Backing::Memory => return Ok(()),
+            Backing::Store(store) => return save_store(store, records),
+            Backing::File(path) => path,
+        };
         let all: Vec<Value> = records
             .iter()
             .map(|r| json!({ "token": r.token, "hash": r.hash }))
@@ -219,6 +278,44 @@ impl TokenStore {
     }
 }
 
+fn read_file(path: &std::path::Path) -> std::io::Result<Vec<Record>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(serde_json::from_str::<Vec<Value>>(&text)
+            .map_err(std::io::Error::other)?
+            .iter()
+            .filter_map(record_of)
+            .collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Writes the tokens as they are now, deleting those that are gone, in one transaction.
+fn save_store(store: &Mutex<parrot_store::Store>, records: &[Record]) -> Result<(), RpcError> {
+    use parrot_store::Ops;
+    let mut store = store.lock().unwrap();
+    store
+        .transaction(|tx| -> parrot_store::Result<()> {
+            let stored: Vec<String> = tx
+                .list(TOKEN_KIND, None, 100_000)?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            for id in stored {
+                if !records.iter().any(|r| r.token["id"] == id.as_str()) {
+                    tx.delete(TOKEN_KIND, &id)?;
+                }
+            }
+            for r in records {
+                if let Some(id) = r.token["id"].as_str() {
+                    tx.put(TOKEN_KIND, id, &json!({ "token": r.token, "hash": r.hash }))?;
+                }
+            }
+            Ok(())
+        })
+        .map_err(|e| RpcError::new(-32603, format!("cannot store the tokens: {e}")))
+}
+
 impl TokenCheck for TokenStore {
     fn check(&self, secret: &str) -> Option<Peer> {
         let h = hash(secret);
@@ -286,6 +383,49 @@ mod tests {
                 .op("token.create", json!({ "name": "x", "scopes": ["root"] }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn tokens_live_in_the_store_and_a_token_file_is_imported_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("parrot.db");
+        let legacy = dir.path().join("tokens.json");
+        // An older runtime's file, with a token minted over a link.
+        let old = TokenStore::open(legacy.clone()).unwrap();
+        let minted = old
+            .op(
+                "token.create",
+                json!({ "name": "via", "scopes": ["read"], "sessions": ["ses_a"], "by": "lnk_a" }),
+            )
+            .unwrap();
+        let old_secret = minted["secret"].as_str().unwrap().to_string();
+
+        let tokens =
+            TokenStore::with_store(parrot_store::Store::open(&db).unwrap(), Some(legacy.clone())).unwrap();
+        assert!(!legacy.exists() && legacy.with_extension("json.imported").exists());
+        assert!(tokens.check(&old_secret).is_some(), "the imported token works");
+        let made = tokens
+            .op("token.create", json!({ "name": "phone", "scopes": ["answer"] }))
+            .unwrap();
+        let secret = made["secret"].as_str().unwrap().to_string();
+        drop(tokens);
+
+        // Reopened from the store alone; the secret itself was never stored.
+        let again =
+            TokenStore::with_store(parrot_store::Store::open(&db).unwrap(), Some(legacy.clone())).unwrap();
+        assert!(again.check(&secret).is_some());
+        assert!(again.check(&old_secret).is_some());
+        let listed = again.op("token.list", json!({ "by": "lnk_a" })).unwrap();
+        assert_eq!(listed["tokens"].as_array().map(Vec::len), Some(1), "{listed}");
+        let raw = std::fs::read(&db).unwrap();
+        assert!(!raw.windows(secret.len()).any(|w| w == secret.as_bytes()));
+        let id = minted["token"]["id"].as_str().unwrap();
+        again
+            .op("token.revoke", json!({ "token": id, "by": "lnk_a" }))
+            .unwrap();
+        drop(again);
+        let last = TokenStore::with_store(parrot_store::Store::open(&db).unwrap(), None).unwrap();
+        assert!(last.check(&old_secret).is_none(), "a revoked token stays revoked");
     }
 
     #[test]
