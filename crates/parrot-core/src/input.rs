@@ -22,6 +22,9 @@ pub enum Peer {
     },
     /// A linked runtime, after the link handshake.
     Link { link: String, scopes: Vec<String> },
+    /// A session acting through its agent (spec 5.1): its grant, on its own subtree. An owner
+    /// connection becomes one with `initialize { actAs }`.
+    Session { session: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]

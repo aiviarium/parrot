@@ -64,15 +64,29 @@ fn scope_name(scope: Scope) -> String {
         .unwrap_or_default()
 }
 
-/// The scopes a peer holds.
+/// The scopes a peer holds. A session peer holds nothing here; `conn_scopes` reads its grant.
 pub fn scopes_of(peer: &Peer) -> Vec<Scope> {
     match peer {
         Peer::Owner => ALL_SCOPES.to_vec(),
+        Peer::Session { .. } => Vec::new(),
         Peer::Token { scopes, .. } | Peer::Link { scopes, .. } => ALL_SCOPES
             .iter()
             .copied()
             .filter(|s| scopes.iter().any(|n| *n == scope_name(*s)))
             .collect(),
+    }
+}
+
+/// The scopes a connection acts with: a session principal has its grant (spec 5.1).
+pub fn conn_scopes(state: &State, peer: &Peer) -> Vec<Scope> {
+    match peer {
+        Peer::Session { session } => state
+            .sessions
+            .info
+            .get(session)
+            .map(|s| s.grant.clone())
+            .unwrap_or_default(),
+        other => scopes_of(other),
     }
 }
 
@@ -82,7 +96,15 @@ pub fn allows(state: &State, conn: &str, scope: Scope) -> bool {
         .principals
         .conns
         .get(conn)
-        .is_some_and(|c| c.initialized() && scopes_of(&c.peer).contains(&scope))
+        .is_some_and(|c| c.initialized() && conn_scopes(state, &c.peer).contains(&scope))
+}
+
+/// The session a connection acts as, if it is a session principal.
+pub fn session_principal<'a>(state: &'a State, conn: &str) -> Option<&'a str> {
+    match state.principals.conns.get(conn).map(|c| &c.peer) {
+        Some(Peer::Session { session }) => Some(session.as_str()),
+        _ => None,
+    }
 }
 
 /// Whether a connection may see a session at all (a token's `sessions` filter, spec 3.4).
@@ -93,6 +115,10 @@ pub fn sees(state: &State, conn: &str, session: &str) -> bool {
         }) => crate::directory::path_of(state, session)
             .iter()
             .any(|s| list.contains(s)),
+        // A session acts only on its own subtree (spec 5.1).
+        Some(Peer::Session { session: me }) => {
+            crate::directory::path_of(state, session).iter().any(|s| s == me)
+        }
         Some(_) => true,
         None => false,
     }
@@ -103,7 +129,7 @@ pub fn check(state: &State, conn: &str, scope: Scope) -> Result<(), RpcError> {
     let Some(c) = state.principals.conns.get(conn).filter(|c| c.initialized()) else {
         return Err(RpcError::new(-32010, "not initialized"));
     };
-    if !scopes_of(&c.peer).contains(&scope) {
+    if !conn_scopes(state, &c.peer).contains(&scope) {
         return Err(
             RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "scope", "scope": scope }))
         );
@@ -124,6 +150,7 @@ pub fn check_session(state: &State, conn: &str, scope: Scope, session: &str) -> 
 pub fn principal_of(state: &State, conn: &str) -> String {
     match state.principals.conns.get(conn).map(|c| &c.peer) {
         Some(Peer::Link { link, .. }) => link.clone(),
+        Some(Peer::Session { session }) => session.clone(),
         _ => conn.to_string(),
     }
 }
@@ -147,16 +174,33 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
     let Some(protocol) = p.protocol.iter().copied().filter(|v| SUPPORTED.contains(v)).max() else {
         return Err(RpcError::new(-32011, "no shared version").with_data(json!({ "supported": SUPPORTED })));
     };
+    // The owner may act as one of its sessions, with that session's grant on its subtree.
+    let act_as = p.extra.get("actAs").and_then(Value::as_str).map(str::to_string);
+    if let Some(session) = &act_as {
+        let owner = matches!(
+            cx.state.principals.conns.get(conn).map(|c| &c.peer),
+            Some(Peer::Owner)
+        );
+        if !owner {
+            return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "actAs" })));
+        }
+        if !cx.state.sessions.by_id.contains_key(session) {
+            return Err(RpcError::new(-32002, format!("session not found: {session}")));
+        }
+    }
     let Some(c) = cx.state.principals.conns.get_mut(conn) else {
         return Err(RpcError::new(-32010, "unknown connection"));
     };
+    if let Some(session) = act_as {
+        c.peer = Peer::Session { session };
+    }
     c.info = Some(p.peer);
     c.protocol = Some(protocol);
     let peer = c.peer.clone();
     let mut connection = json!({
         "id": conn,
         "principal": principal_of(cx.state, conn),
-        "scopes": scopes_of(&peer),
+        "scopes": conn_scopes(cx.state, &peer),
     });
     if let Peer::Token {
         sessions: Some(s), ..
@@ -168,7 +212,7 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
         "protocol": protocol,
         "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
         "runtime": { "id": cx.state.principals.runtime, "env": cx.state.principals.env },
-        "features": { "profile.core": {} },
+        "features": { "profile.core": {}, "profile.tree": {}, "profile.seed": {} },
         "connection": connection,
     }))
 }
