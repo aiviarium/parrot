@@ -1,9 +1,12 @@
 //! The parrot command: serve, connect, driver, guard, conform, mcp.
 
+mod client;
 mod conform;
 mod connect;
 mod driver;
 mod guard;
+mod link;
+mod mcp;
 mod serve;
 
 use clap::{Parser, Subcommand};
@@ -51,14 +54,23 @@ enum Command {
         args: Vec<String>,
     },
     /// Runs the conformance suite.
-    Conform,
+    Conform(conform::Args),
+    /// Serves the MCP server for a binding on standard input and output.
+    Mcp(mcp::Args),
+    /// Pairs with other runtimes and manages links.
+    Link(link::Args),
+    #[command(flatten)]
+    Client(client::Command),
 }
 
 fn main() {
     let cli = Cli::parse();
     let code = match cli.command {
         Command::Guard { args } => guard::run(args),
-        Command::Conform => conform::run(),
+        Command::Conform(args) => conform::run(args),
+        Command::Mcp(args) => block_on(mcp::run(args)),
+        Command::Link(args) => block_on(link::run(args)),
+        Command::Client(command) => block_on(client::run(command)),
         Command::Serve { state_dir, ws } => block_on(serve::run(state_dir, ws)),
         Command::Connect { socket, link } => block_on(connect::run(socket, link)),
         Command::Driver { name } => block_on(driver::run(name)),

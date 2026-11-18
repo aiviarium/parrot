@@ -139,11 +139,11 @@ impl RuntimeBackend {
             return Ok(cmd.clone());
         }
         match agent {
-            "claude" => {
+            "claude" | "codex" => {
                 let program = std::env::current_exe().map_err(|e| format!("cannot find parrot: {e}"))?;
                 Ok(DriverCommand {
                     program,
-                    args: vec!["driver".into(), "claude".into()],
+                    args: vec!["driver".into(), agent.into()],
                 })
             }
             _ => Err(format!("no driver for agent {agent}")),
