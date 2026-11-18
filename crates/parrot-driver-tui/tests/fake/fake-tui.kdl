@@ -69,3 +69,8 @@ action name="interrupt" {
     (array)not "working"
   }
 }
+
+action name="clear-prompt" description="Delete what is typed in the prompt." {
+  require state="idle" hold="200ms"
+  (array)steps key="ctrl+u"
+}

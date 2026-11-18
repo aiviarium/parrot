@@ -29,6 +29,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::dialog::{self, Dialog};
 use crate::transcript::{ClaudeTranscript, CodexTranscript, Reader, Tail};
+use parrot_driver::correlate::Fold;
 
 /// Where a binding's transcript is written.
 #[derive(Debug, Clone)]
@@ -89,6 +90,70 @@ fn expand_home(dir: &str) -> PathBuf {
     }
 }
 
+/// The `correlate.kdl` in an egg's `parrot` folder, if it has one.
+pub fn correlate_in(
+    dir: &std::path::Path,
+) -> Result<Option<parrot_proto::driver_data::CorrelateFile>, String> {
+    match std::fs::read_to_string(dir.join("correlate.kdl")) {
+        Ok(text) => parrot_proto::driver_data::parse("correlate.kdl", &text)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Profile actions the driver runs itself, to prompt, steer, attach and answer dialogs.
+const DRIVER_ACTIONS: &[&str] = &[
+    "submit",
+    "submit-paste",
+    "attach",
+    "steer",
+    "interrupt",
+    "choose",
+    "approve",
+    "deny",
+    "trust",
+];
+
+/// The profile's other actions, offered on the binding. One that requires the `working` state
+/// runs while a turn does, and every one needs the terminal.
+pub fn profile_actions(profile: &Profile) -> Vec<parrot_proto::action::Action> {
+    use parrot_proto::action::{Action, ActionScope, ActionSource, ActionWhen, Effect, Requirement};
+    profile
+        .file
+        .action
+        .iter()
+        .filter(|a| !DRIVER_ACTIONS.contains(&a.name.as_str()))
+        .map(|a| {
+            let state = a
+                .require
+                .as_ref()
+                .and_then(|r| r.get("state"))
+                .and_then(|s| s.as_str());
+            let when = match state {
+                Some("working") => vec![ActionWhen::Running],
+                Some("idle") => vec![ActionWhen::Idle],
+                _ => vec![ActionWhen::Idle, ActionWhen::Running],
+            };
+            Action {
+                id: a.name.clone(),
+                name: None,
+                label: a.name.replace('-', " "),
+                description: a.description.clone(),
+                input: None,
+                hint: None,
+                scope: ActionScope::Session,
+                when,
+                effects: vec![Effect::Write],
+                requires: Some(vec![Requirement::Terminal]),
+                source: Open::Known(ActionSource::Driver),
+                meta: None,
+                extra: Map::new(),
+            }
+        })
+        .collect()
+}
+
 /// How the driver starts and reads one harness.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -112,6 +177,11 @@ pub struct Config {
     pub dialogs: HashMap<String, RequestKind>,
     pub transcript: Option<TranscriptDir>,
     pub transcript_format: TranscriptFormat,
+    /// Shadow mode (spec 32.1): after each turn, report where the prompts the driver typed differ
+    /// from the transcript's record of them. It needs the egg's `correlate.kdl`.
+    pub shadow: bool,
+    /// The egg's `correlate.kdl`; the screen's source is `tui`.
+    pub correlate: Option<parrot_proto::driver_data::CorrelateFile>,
     /// How the harness takes the injected MCP server (spec 26), if it takes one.
     pub mcp: Option<McpStyle>,
 }
@@ -194,6 +264,8 @@ impl Config {
             dialogs: dialogs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             transcript: None,
             transcript_format: TranscriptFormat::Claude,
+            shadow: false,
+            correlate: None,
             mcp: None,
         }
     }
@@ -262,6 +334,8 @@ struct Binding {
     inner: Mutex<Inner>,
     state_tx: watch::Sender<Option<State>>,
     transcript: Mutex<Reader>,
+    /// What the driver reported from the screen, and what the transcript said, for shadow mode.
+    shadow: Mutex<(Fold, Fold)>,
 }
 
 /// If a turn sees no busy screen at all, it ends once idle has held this long after the prompt.
@@ -339,12 +413,44 @@ fn failed(e: impl std::fmt::Display) -> RpcError {
 
 impl Shared {
     fn emit(&self, binding: &str, kind: DriverUpdateKind) {
-        let _ = self.updates.send(to_value(&DriverUpdate {
+        let update = to_value(&DriverUpdate {
             binding: binding.to_owned(),
             subagent: None,
             update: Open::Known(kind),
             extra: Map::new(),
-        }));
+        });
+        if self.config.shadow
+            && update["update"]["item"]["source"] == "tui"
+            && let Some(b) = self.bindings.lock().unwrap().get(binding)
+        {
+            b.shadow.lock().unwrap().0.push(&update);
+        }
+        let _ = self.updates.send(update);
+    }
+
+    /// Shadow mode for the turn `turn`: pairs the items the screen gave with the transcript's
+    /// items of the same kinds and reports what differs.
+    fn shadow_turn(&self, b: &Binding, turn: &str) {
+        let Some(data) = &self.config.correlate else {
+            return;
+        };
+        let (screen, disk) = b.shadow.lock().unwrap().clone();
+        let ours: Vec<&parrot_driver::correlate::Item> = screen
+            .turn_index(turn)
+            .map(|i| screen.turn(i))
+            .unwrap_or_default();
+        let kinds: Vec<&str> = ours.iter().map(|i| i.kind.as_str()).collect();
+        let theirs: Vec<&parrot_driver::correlate::Item> = disk
+            .turn_index(turn)
+            .map(|i| disk.turn(i))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|i| kinds.contains(&i.kind.as_str()))
+            .collect();
+        let pairs = parrot_driver::correlate::correlate(data, &ours, &theirs);
+        for d in parrot_driver::correlate::differences(data, &pairs, "tui", "transcript") {
+            let _ = self.updates.send(parrot_driver::correlate::notice(&b.id, &d));
+        }
     }
 
     fn binding(&self, id: &str) -> Result<Arc<Binding>, RpcError> {
@@ -370,6 +476,36 @@ impl Shared {
             "binding/start" => self.start(params(p)?).await,
             "binding/prompt" => self.prompt(params(p)?).await,
             "binding/cancel" => self.cancel(params(p)?).await,
+            "binding/action" => {
+                let p: parrot_proto::driver::BindingActionParams = params(p)?;
+                let id = p
+                    .binding
+                    .clone()
+                    .ok_or_else(|| RpcError::new(-32602, "profile actions need a binding"))?;
+                let b = self.binding(&id)?;
+                if !profile_actions(&self.config.profile)
+                    .iter()
+                    .any(|a| a.id == p.action)
+                {
+                    return Err(RpcError::new(-32602, format!("no action {}", p.action)));
+                }
+                let mut vars: HashMap<String, String> = p
+                    .input
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
+                    .collect();
+                if let Some(a) = &p.args {
+                    vars.entry("text".into()).or_insert_with(|| a.clone());
+                }
+                b.tui
+                    .act(&p.action, &vars)
+                    .await
+                    .map_err(|e| RpcError::new(-32001, format!("{} was refused: {e}", p.action)))?;
+                Ok(json!({ "status": "done" }))
+            }
             "binding/answer" => self.answer(params(p)?).await,
             "binding/screen" => {
                 let p: BindingRef = params(p)?;
@@ -483,6 +619,7 @@ impl Shared {
             tui,
             inner: Mutex::default(),
             state_tx,
+            shadow: Mutex::default(),
             transcript: Mutex::new(match c.transcript_format {
                 TranscriptFormat::Claude => Reader::Claude(ClaudeTranscript::new()),
                 TranscriptFormat::Codex => Reader::Codex(CodexTranscript::new()),
@@ -550,7 +687,7 @@ impl Shared {
             level: PermissionLevel::Host,
             network: true,
             options: vec![],
-            actions: vec![],
+            actions: profile_actions(&self.config.profile),
         }))
     }
 
@@ -1097,7 +1234,25 @@ async fn watch_screen(shared: Arc<Shared>, b: Arc<Binding>, mut events: broadcas
 
 async fn follow_transcript(shared: Arc<Shared>, b: Arc<Binding>, mut tail: Tail) {
     let mut known_ref: Option<String> = None;
+    // Shadow mode compares a turn once it has ended and the transcript has had a moment.
+    let mut compared: Option<String> = None;
+    let mut ended: Option<(String, Instant)> = None;
     loop {
+        if shared.config.shadow {
+            let last = {
+                let inner = b.inner.lock().unwrap();
+                inner.turn.is_none().then(|| inner.last_turn.clone()).flatten()
+            };
+            match (&ended, last) {
+                (Some((k, at)), _) if at.elapsed() >= Duration::from_millis(600) => {
+                    shared.shadow_turn(&b, k);
+                    compared = Some(k.clone());
+                    ended = None;
+                }
+                (None, Some(k)) if compared.as_ref() != Some(&k) => ended = Some((k, Instant::now())),
+                _ => {}
+            }
+        }
         if b.session.is_closed() && b.inner.lock().unwrap().stopping {
             return;
         }
@@ -1136,6 +1291,13 @@ async fn follow_transcript(shared: Arc<Shared>, b: Arc<Binding>, mut tail: Tail)
                     .map(|t| t.key.clone())
                     .or(inner.last_turn.clone())
             };
+            if shared.config.shadow {
+                let mut sh = b.shadow.lock().unwrap();
+                for mut item in ev.items.iter().cloned().chain(ev.echoed) {
+                    item.turn = turn.clone();
+                    sh.1.push(&json!({"update": {"type": "item", "item": item}}));
+                }
+            }
             for mut item in ev.items {
                 if item.kind.is_some() {
                     item.turn = turn.clone();

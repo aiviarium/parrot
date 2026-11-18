@@ -2,7 +2,7 @@
 # A scripted TUI for the driver tests. It reads whole lines from its terminal and draws fixed
 # screens: a prompt, a busy line, a tool approval, a trust dialog at start, and a question that
 # no profile knows. A prompt starting with "slow" works for five seconds: a line typed meanwhile
-# steers it, and Ctrl+C stops it. With FAKE_TUI_TRANSCRIPT set it writes a Claude-style
+# steers it, and Ctrl+C stops it. One starting with "typo" is recorded misspelt. With FAKE_TUI_TRANSCRIPT set it writes a Claude-style
 # transcript there.
 
 out="${FAKE_TUI_TRANSCRIPT:-}"
@@ -79,6 +79,14 @@ while IFS= read -r line; do
         log "{\"type\":\"assistant\",\"uuid\":\"fake-a-$n\",\"sessionId\":\"$session\",\"message\":{\"id\":\"msg_fake_$n\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Slow and done.\"}],\"stop_reason\":\"end_turn\"}}"
         idle "Done: $line"
       fi
+      ;;
+    typo*)
+      # The transcript records the prompt with a word misspelt, for shadow mode to find.
+      wrong=$(printf '%s' "$line" | sed 's/typo/tpyo/')
+      log "{\"type\":\"user\",\"uuid\":\"fake-u-$n\",\"sessionId\":\"$session\",\"message\":{\"role\":\"user\",\"content\":\"$wrong\"}}"
+      busy 0.5
+      log "{\"type\":\"assistant\",\"uuid\":\"fake-a-$n\",\"sessionId\":\"$session\",\"message\":{\"id\":\"msg_fake_$n\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Noted.\"}],\"stop_reason\":\"end_turn\"}}"
+      idle "Done: $line"
       ;;
     mystery*)
       busy 0.3

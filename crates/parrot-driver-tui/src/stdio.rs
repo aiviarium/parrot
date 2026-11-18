@@ -36,6 +36,8 @@ pub fn config_from_data(dir: &Path) -> Result<Config, String> {
         c.transcript_format = format;
     }
     c.mcp = json["mcp"][0].as_str().and_then(McpStyle::from_data);
+    c.shadow = parrot_driver::correlate::shadow_from_env();
+    c.correlate = crate::driver::correlate_in(dir)?;
     Ok(c)
 }
 

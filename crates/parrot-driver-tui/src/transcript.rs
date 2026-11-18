@@ -25,6 +25,9 @@ pub struct TranscriptEvent {
     pub session: Option<String>,
     /// Token counts of the latest model request, as the turn's `usage`.
     pub usage: Option<Value>,
+    /// Prompts the driver typed, as the transcript recorded them. They are not reported again,
+    /// but shadow mode compares them with what the driver sent.
+    pub echoed: Vec<ItemPatch>,
 }
 
 /// A transcript reader for one format.
@@ -62,6 +65,7 @@ impl Reader {
 #[derive(Debug, Default)]
 pub struct CodexTranscript {
     echoes: Vec<String>,
+    echoed: Vec<ItemPatch>,
     fresh: u64,
 }
 
@@ -83,7 +87,10 @@ impl CodexTranscript {
         let p = &m["payload"];
         match (str_of(&m, "type"), str_of(p, "type")) {
             ("session_meta", _) => ev.session = p.get("id").and_then(Value::as_str).map(str::to_owned),
-            ("event_msg", "item_completed") => ev.items.extend(self.item(&p["item"])),
+            ("event_msg", "item_completed") => {
+                ev.items.extend(self.item(&p["item"]));
+                ev.echoed.append(&mut self.echoed);
+            }
             ("event_msg", "task_complete" | "turn_aborted") => ev.turn_done = true,
             ("event_msg", "token_count") => {
                 if let Some(u) = p.pointer("/info/last_token_usage") {
@@ -115,17 +122,15 @@ impl CodexTranscript {
         match str_of(i, "type") {
             "UserMessage" => {
                 let t = text();
-                if let Some(pos) = self.echoes.iter().position(|e| *e == t.trim()) {
-                    self.echoes.remove(pos);
-                    return None;
-                }
                 let mut set = text_set(&t);
                 set.insert("status".into(), json!("handled"));
-                Some(item(
-                    id.unwrap_or_else(|| self.fresh("user")),
-                    ItemKind::User,
-                    set,
-                ))
+                let user = item(id.unwrap_or_else(|| self.fresh("user")), ItemKind::User, set);
+                if let Some(pos) = self.echoes.iter().position(|e| *e == t.trim()) {
+                    self.echoes.remove(pos);
+                    self.echoed.push(user);
+                    return None;
+                }
+                Some(user)
             }
             "AgentMessage" => Some(item(
                 id.unwrap_or_else(|| self.fresh("assistant")),
@@ -212,6 +217,7 @@ pub fn codex_rollout(root: &Path, id: &str) -> Option<PathBuf> {
 pub struct ClaudeTranscript {
     tools: HashSet<String>,
     echoes: Vec<String>,
+    echoed: Vec<ItemPatch>,
     fresh: u64,
 }
 
@@ -317,6 +323,7 @@ impl ClaudeTranscript {
                 if let Some(p) = self.user(&text, uuid) {
                     ev.items.push(p);
                 }
+                ev.echoed.append(&mut self.echoed);
             }
             Some("system") => {
                 let sub = m.get("subtype").and_then(Value::as_str);
@@ -340,6 +347,8 @@ impl ClaudeTranscript {
             .position(|e| e == t || t.ends_with(&format!(" {e}")))
         {
             self.echoes.remove(pos);
+            let key = uuid.unwrap_or_else(|| self.fresh("user"));
+            self.echoed.push(item(key, ItemKind::User, text_set(t)));
             return None;
         }
         let key = uuid.unwrap_or_else(|| self.fresh("user"));

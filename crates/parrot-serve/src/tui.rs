@@ -29,6 +29,11 @@ pub fn driver_config(agent: &str, a: &TuiAgent) -> Result<Config, String> {
             McpStyle::from_data(m).ok_or_else(|| format!("mcp {m:?} is not a style the TUI core knows"))?,
         ),
     };
+    // The profile sits in the egg's data folder, beside its correlate.kdl.
+    if let Some(dir) = a.profile.parent() {
+        c.correlate = parrot_driver_tui::driver::correlate_in(dir)?;
+    }
+    c.shadow = parrot_driver::correlate::shadow_from_env();
     if let Some(ms) = a.unrecognised_after_ms {
         c.unrecognised_after = Duration::from_millis(ms);
     }
