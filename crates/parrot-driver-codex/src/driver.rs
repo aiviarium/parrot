@@ -1206,19 +1206,18 @@ async fn login(b: &Binding) -> Result<String, RpcError> {
         let code = result.get("userCode").and_then(Value::as_str);
         state.login_started(id, url, code).1
     });
-    b.request(
-        "account/login/start",
-        json!({"type": "chatgptDeviceCode"}),
-        Some(on_ok),
-    )
-    .await
-    .map_err(codex_error)?;
-    b.state
-        .lock()
-        .unwrap()
-        .login
-        .as_ref()
-        .map(|(_, k)| k.clone())
+    // The key comes from the answer: the sign-in may already have ended by the time it returns.
+    let r = b
+        .request(
+            "account/login/start",
+            json!({"type": "chatgptDeviceCode"}),
+            Some(on_ok),
+        )
+        .await
+        .map_err(codex_error)?;
+    r.get("loginId")
+        .and_then(Value::as_str)
+        .map(|id| format!("login-{id}"))
         .ok_or_else(|| RpcError::new(-32603, "codex started no sign-in"))
 }
 

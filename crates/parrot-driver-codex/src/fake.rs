@@ -9,6 +9,7 @@
 //! | `{"emit": <message>}` | writes the message |
 //! | `{"await_response": <id>, "match": <pattern>}` | reads until the answer to its own request `<id>`; the optional pattern is checked against `result` |
 //! | `{"exit": <code>}` | exits with the code |
+//! | `{"args": [<string>, ...]}` | fails unless the fake's command line holds these arguments in this order |
 //!
 //! A pattern matches when every key it names matches, recursively; arrays match element by element.
 //! In an emitted message the string `"{{id}}"` stands for the id of the last request read, so a
@@ -45,6 +46,7 @@ pub enum Step {
     Emit(Value),
     AwaitResponse { id: Value, pattern: Option<Value> },
     Exit(i32),
+    Args(Vec<String>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +76,9 @@ pub fn parse_scenario(text: &str) -> Result<Vec<Step>, ScenarioError> {
                 id: id.clone(),
                 pattern: v.get("match").cloned(),
             }
+        } else if let Some(a) = v.get("args") {
+            let args = serde_json::from_value(a.clone()).map_err(|e| bad(format!("args: {e}")))?;
+            Step::Args(args)
         } else if let Some(c) = v.get("exit") {
             Step::Exit(c.as_i64().ok_or_else(|| bad("exit takes an integer".into()))? as i32)
         } else {
@@ -368,6 +373,13 @@ fn play<R: BufRead, W: Write>(steps: &[Step], run: &mut Run<R, W>) -> std::io::R
                 break;
             },
             Step::Exit(code) => return Ok(*code),
+            Step::Args(want) => {
+                let have: Vec<String> = std::env::args().skip(1).collect();
+                if !have.windows(want.len()).any(|w| w == want.as_slice()) {
+                    eprintln!("fake-codex: step {}: arguments {have:?} lack {want:?}", i + 1);
+                    return Ok(MISMATCH_EXIT);
+                }
+            }
         }
     }
     while run.next(|_| false)?.is_some() {}
