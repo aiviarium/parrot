@@ -85,8 +85,12 @@ pub async fn run(state_dir: Option<PathBuf>, ws: Option<String>) -> Result<(), S
     };
     let db = dir.join("state.db");
     let store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
-    let core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
-    let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), |rt| RuntimeBackend::new(rt, store));
+    let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
+    let drivers = load_drivers(&dir);
+    parrot_core::agents::load(&mut core.state, drivers.agents());
+    let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), |rt| {
+        RuntimeBackend::new(rt, store).with_drivers(drivers)
+    });
 
     let socket = socket_path().map_err(|e| e.to_string())?;
     let local = serve_local(rt.clone(), socket.clone());
@@ -110,6 +114,20 @@ pub async fn run(state_dir: Option<PathBuf>, ws: Option<String>) -> Result<(), S
     #[cfg(unix)]
     let _ = std::fs::remove_file(&socket);
     result
+}
+
+/// The driver eggs of this state directory, with refused ones reported on stderr.
+fn load_drivers(dir: &std::path::Path) -> parrot_serve::drivers::Drivers {
+    let (drivers, problems) = parrot_serve::drivers::Drivers::load(dir);
+    for p in problems {
+        eprintln!("parrot: {p}");
+    }
+    for egg in drivers.eggs() {
+        if let Err(e) = &egg.driver {
+            eprintln!("parrot: refused a driver egg: {e}");
+        }
+    }
+    drivers
 }
 
 #[cfg(unix)]

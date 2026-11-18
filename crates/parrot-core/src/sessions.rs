@@ -16,6 +16,8 @@ use parrot_proto::workspace::WorkspaceRequest;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
+pub use crate::agents::{agents, discover};
+
 /// Sessions by id, plus the workspaces and agents they use.
 #[derive(Debug)]
 pub struct Sessions {
@@ -26,6 +28,8 @@ pub struct Sessions {
     pub workspaces: BTreeMap<String, WorkspaceRecord>,
     /// Agents as `Agent` JSON (spec 6), by id.
     pub agents: BTreeMap<String, Value>,
+    /// What each agent's driver egg says, by agent id (see `agents`).
+    pub eggs: BTreeMap<String, crate::agents::AgentEgg>,
     /// Outstanding `agent/list` calls to drivers: the agent asked, and the `agent/refresh` call
     /// waiting on it, if any.
     pub discovery: BTreeMap<u64, (String, Option<(String, RequestId)>)>,
@@ -41,6 +45,7 @@ impl Default for Sessions {
             info: BTreeMap::new(),
             workspaces: BTreeMap::new(),
             agents,
+            eggs: BTreeMap::new(),
             discovery: BTreeMap::new(),
             calls: BTreeMap::new(),
         }
@@ -165,6 +170,9 @@ pub fn session_json(state: &State, id: &str) -> Option<Value> {
     }
     if let Some(m) = &s.mcp {
         v["mcp"] = json!(m);
+    }
+    if let Some(h) = crate::agents::session_harness(state, &r.agent) {
+        v["harness"] = h;
     }
     if let Some(p) = &r.parent {
         v["parent"] = json!({ "session": p });
@@ -325,78 +333,6 @@ pub fn restore_workspace(state: &mut State, id: &str, value: &Value) {
     );
 }
 
-/// Ask an agent's driver for its agents, models and options (spec 6, 30.1). `reply_to` is an
-/// `agent/refresh` call to answer once the driver has.
-pub fn discover(cx: &mut Cx, agent: &str, reply_to: Option<(String, RequestId)>) {
-    let call = cx.next_call();
-    cx.state
-        .sessions
-        .discovery
-        .insert(call, (agent.to_string(), reply_to));
-    cx.emit(Effect::AgentCall {
-        agent: agent.to_string(),
-        call,
-        method: "agent/list".into(),
-        params: json!({}),
-    });
-}
-
-/// A driver answered `agent/list`: its agents replace what the runtime knew, and go to the index.
-pub fn on_agent_reply(cx: &mut Cx, agent: &str, call: u64, result: Result<Value, RpcError>) {
-    let Some((asked, reply_to)) = cx.state.sessions.discovery.remove(&call) else {
-        return;
-    };
-    let asked = if asked.is_empty() {
-        agent.to_string()
-    } else {
-        asked
-    };
-    let mut found: Vec<Value> = match &result {
-        Ok(v) => v
-            .get("agents")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|a| a.get("id").and_then(Value::as_str).is_some())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    if found.is_empty() {
-        // The driver can't be asked: keep what is known, marked unusable with the reason.
-        let detail = match &result {
-            Err(e) => e.message.clone(),
-            Ok(_) => "the driver reported no agents".into(),
-        };
-        let mut a = cx
-            .state
-            .sessions
-            .agents
-            .get(&asked)
-            .cloned()
-            .unwrap_or_else(|| json!({ "id": asked }));
-        a["usable"] = json!(false);
-        a["detail"] = json!(detail);
-        found.push(a);
-    }
-    for mut a in found {
-        a["env"] = json!(cx.state.principals.env);
-        let id = a["id"].as_str().unwrap_or_default().to_string();
-        cx.persist(json!({ "op": "put", "kind": "agent", "id": id, "value": a }));
-        cx.publish(None, json!({ "type": "agent", "agent": a }));
-        cx.state.sessions.agents.insert(id, a);
-    }
-    if let Some((conn, id)) = reply_to {
-        let agent = cx.state.sessions.agents.get(&asked).cloned();
-        let result = match (agent, result) {
-            (_, Err(e)) => Err(e),
-            (Some(a), Ok(_)) => Ok(json!({ "agent": a })),
-            (None, Ok(_)) => Err(not_found("agent", &asked)),
-        };
-        cx.reply(&conn, id, result);
-    }
-}
-
 /// Start a new binding for a session: emits `StartBinding` with the `BindingStart` of spec 30.1.
 pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<String> {
     let agent = cx.state.sessions.by_id.get(session)?.agent.clone();
@@ -493,8 +429,6 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "session/rename" => rename(cx, conn, params),
         "session/archive" => archive(cx, conn, params),
         "session/delete" => delete(cx, conn, params),
-        "agent/list" => check(cx.state, conn, Scope::Read).map(|()| json!({ "agents": agents(cx.state) })),
-        "agent/refresh" => return refresh(cx, conn, id, params),
         "session/screen" => return tui_call(cx, conn, id, params, "binding/screen"),
         "session/keys" => return tui_call(cx, conn, id, params, "binding/keys"),
         "env/list" => check(cx.state, conn, Scope::Read).map(|()| json!({ "envs": [env_json(cx.state)] })),
@@ -506,20 +440,6 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
     }
 }
 
-/// Agents with `env` set.
-pub fn agents(state: &State) -> Vec<Value> {
-    state
-        .sessions
-        .agents
-        .values()
-        .map(|a| {
-            let mut a = a.clone();
-            a["env"] = json!(state.principals.env);
-            a
-        })
-        .collect()
-}
-
 /// The local environment (spec 7).
 pub fn env_json(state: &State) -> Value {
     json!({
@@ -528,20 +448,6 @@ pub fn env_json(state: &State) -> Value {
         "runtime": state.principals.runtime,
         "status": "online",
     })
-}
-
-fn refresh(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Reply {
-    let agent = match check(cx.state, conn, Scope::Configure)
-        .and_then(|()| parse::<parrot_proto::agent::AgentRefreshParams>(params))
-    {
-        Ok(p) => p.agent,
-        Err(e) => return Reply::Now(Err(e)),
-    };
-    if !cx.state.sessions.agents.contains_key(&agent) {
-        return Reply::Now(Err(not_found("agent", &agent)));
-    }
-    discover(cx, &agent, id.map(|id| (conn.to_string(), id.clone())));
-    Reply::Later
 }
 
 /// `session/screen` and `session/keys` go to the binding as `binding/screen` and `binding/keys`,

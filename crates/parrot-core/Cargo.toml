@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 sha2.workspace = true
+semver.workspace = true
 parrot-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true

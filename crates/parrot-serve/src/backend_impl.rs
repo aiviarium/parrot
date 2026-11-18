@@ -84,6 +84,7 @@ enum BindingCmd {
 pub struct RuntimeBackend {
     rt: Sink,
     commands: HashMap<String, DriverCommand>,
+    drivers: Option<std::sync::Arc<crate::drivers::Drivers>>,
     bindings: HashMap<BindingId, mpsc::UnboundedSender<BindingCmd>>,
     next_call: u64,
     writer: Option<std::sync::mpsc::Sender<Write>>,
@@ -132,6 +133,7 @@ impl RuntimeBackend {
         Self {
             rt,
             commands: HashMap::new(),
+            drivers: None,
             bindings: HashMap::new(),
             next_call: 0,
             writer: Some(tx),
@@ -156,11 +158,20 @@ impl RuntimeBackend {
         self
     }
 
+    /// Resolves drivers from these eggs instead of the compiled-in list.
+    pub fn with_drivers(mut self, drivers: crate::drivers::Drivers) -> Self {
+        self.drivers = Some(std::sync::Arc::new(drivers));
+        self
+    }
+
     fn resolve(&self, agent: &str) -> Result<DriverCommand, String> {
         if let Some(cmd) = self.commands.get(agent) {
             return Ok(cmd.clone());
         }
-        crate::drivers::resolve(agent)
+        match &self.drivers {
+            Some(drivers) => drivers.resolve(agent),
+            None => crate::drivers::resolve(agent),
+        }
     }
 
     /// An internal call id, counting down from `u64::MAX`.
@@ -282,13 +293,13 @@ const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Runs a driver for one call, such as `agent/list`, then stops it.
 async fn ask_driver(cmd: &DriverCommand, method: &str, params: Value) -> Result<Value, RpcError> {
-    let no_env: [(&str, &str); 0] = [];
-    let (mut driver, _updates) = ProcessDriver::spawn(&cmd.program, &cmd.args, no_env).map_err(|e| {
-        RpcError::new(
-            DRIVER_FAILED,
-            format!("cannot start {}: {e}", cmd.program.display()),
-        )
-    })?;
+    let (mut driver, _updates) =
+        ProcessDriver::spawn(&cmd.program, &cmd.args, cmd.env.clone()).map_err(|e| {
+            RpcError::new(
+                DRIVER_FAILED,
+                format!("cannot start {}: {e}", cmd.program.display()),
+            )
+        })?;
     let asked = async {
         driver.call("initialize", initialize_params()).await?;
         driver.call(method, params).await
@@ -374,8 +385,7 @@ async fn run_binding(
     start_call: u64,
     mut cmds: mpsc::UnboundedReceiver<BindingCmd>,
 ) {
-    let no_env: [(&str, &str); 0] = [];
-    let (mut driver, mut updates) = match ProcessDriver::spawn(&cmd.program, &cmd.args, no_env) {
+    let (mut driver, mut updates) = match ProcessDriver::spawn(&cmd.program, &cmd.args, cmd.env.clone()) {
         Ok(spawned) => spawned,
         Err(err) => {
             let detail = format!("cannot start {}: {err}", cmd.program.display());
