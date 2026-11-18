@@ -10,6 +10,7 @@ import type {
   Target,
 } from "./protocol"
 import { Connection } from "./rpc"
+import type { Methods, Notifications } from "./schema"
 import { type StdioOptions, stdioTransport } from "./stdio"
 import type { Transport } from "./transport"
 import { type WebSocketOptions, webSocketTransport } from "./websocket"
@@ -63,13 +64,19 @@ export class Client {
     return this.connection.request<T>(method, params)
   }
 
-  notify(method: string, params?: unknown): void {
+  /** Calls a method of the protocol; params and result are typed from the schema (spec 38). */
+  call<M extends keyof Methods>(method: M, params: Methods[M]["params"]): Promise<Methods[M]["result"]> {
+    return this.connection.request<Methods[M]["result"]>(method, params)
+  }
+
+  /** Sends a notification, such as `update`, with params typed from the schema. */
+  notify<M extends keyof Notifications>(method: M, params: Notifications[M]): void {
     this.connection.notify(method, params)
   }
 
   /** Listens for a notification such as `update`; the returned function stops it. */
-  on(method: string, handler: (params: unknown) => void): () => void {
-    return this.connection.on(method, handler)
+  on<M extends keyof Notifications>(method: M, handler: (params: Notifications[M]) => void): () => void {
+    return this.connection.on(method, (params) => handler(params as Notifications[M]))
   }
 
   /** Answers a request the runtime sends, for a function this client provides (spec 25.2). */
@@ -85,7 +92,7 @@ export class Client {
       features: options.features ?? {},
       ...(options.provides ? { provides: options.provides } : {}),
     }
-    const result = await this.request<InitializeResult>("initialize", params)
+    const result = await this.call("initialize", params)
     this.#initialized = result
     return result
   }
@@ -95,11 +102,11 @@ export class Client {
     target: Target,
     options: Pick<SubscribeParams, "replayFrom" | "items"> = {},
   ): Promise<Subscription> {
-    return this.request<Subscription>("subscribe", { target, ...options })
+    return this.call("subscribe", { target, ...options })
   }
 
   unsubscribe(subscription: string): Promise<unknown> {
-    return this.request("unsubscribe", { subscription })
+    return this.call("unsubscribe", { subscription })
   }
 
   /** Sends a prompt to a session (spec 13.1). */
@@ -108,7 +115,7 @@ export class Client {
     text: string,
     options: Omit<PromptParams, "session" | "text"> = {},
   ): Promise<PromptResult> {
-    return this.request<PromptResult>("session/prompt", { session, text, ...options })
+    return this.call("session/prompt", { session, text, ...options })
   }
 
   close(): void {

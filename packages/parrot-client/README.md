@@ -18,8 +18,17 @@ await client.prompt("ses_1", "hello")
 `src/schema.ts` is generated. Do not edit it. Run `bun run generate` in this package after a change to
 the schema. `bun run test` fails when the file is stale.
 
-The handshake, subscription and prompt shapes from spec 4, 10.2 and 13.1 are in `src/protocol.ts`,
-typed by hand because the committed schema is narrower than the protocol.
+It holds every type the schema defines, and two maps: `Methods` with each method's params and result,
+and `Notifications` with each notification's params. `Client.call` and `Client.on` use them, so a
+method, its params and its result are checked by the compiler. `Client.initialize`, `subscribe`,
+`unsubscribe` and `prompt` stay as shortcuts.
+
+```ts
+const result = await client.call("session/get", { session: "ses_1" })
+client.on("update", (update) => {
+  if (update.update.type === "state") console.log(update.update.state)
+})
+```
 
 ## Transports
 

@@ -47,11 +47,13 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Open<T> {
 }
 
 impl<T: JsonSchema> JsonSchema for Open<T> {
+    // Its own name, so the wrapper and the known type don't compete for one definition; the schema
+    // is the known type's, which allows anything when it is an open union.
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        T::schema_name()
+        format!("Open{}", T::schema_name()).into()
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        T::json_schema(generator)
+        generator.subschema_for::<T>()
     }
 }
 
