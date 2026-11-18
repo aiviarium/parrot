@@ -182,8 +182,14 @@ fn sees_nothing_of(sim: &mut Sim, conn: &str, s: &Session) {
         ("queue/edit", json!({ "session": sid, "id": "q_1", "text": "x" })),
         ("queue/move", json!({ "session": sid, "id": "q_1", "index": 0 })),
         ("session/rebind", json!({ "session": sid, "agent": "codex" })),
-        ("session/rewind", json!({ "session": sid, "turn": "trn_1", "files": false })),
-        ("workspace/transfer", json!({ "workspace": s.workspace, "to": "env_x" })),
+        (
+            "session/rewind",
+            json!({ "session": sid, "turn": "trn_1", "files": false }),
+        ),
+        (
+            "workspace/transfer",
+            json!({ "workspace": s.workspace, "to": "env_x" }),
+        ),
         ("option/list", json!({ "session": sid })),
         (
             "option/set",
