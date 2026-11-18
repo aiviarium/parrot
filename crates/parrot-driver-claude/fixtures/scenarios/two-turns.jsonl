@@ -1,0 +1,8 @@
+// Two turns whose messages carry uuids, for a fork at the first.
+{"expect": {"type": "user"}}
+{"emit": {"type": "system", "subtype": "init", "session_id": "sess-fake-two", "model": "default", "permissionMode": "default"}}
+{"emit": {"type": "assistant", "message": {"id": "msg_t_01", "role": "assistant", "content": [{"type": "text", "text": "First."}]}, "parent_tool_use_id": null, "session_id": "sess-fake-two", "uuid": "a-turn-1"}}
+{"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "First.", "session_id": "sess-fake-two", "usage": {"input_tokens": 3, "output_tokens": 2}}}
+{"expect": {"type": "user"}}
+{"emit": {"type": "assistant", "message": {"id": "msg_t_02", "role": "assistant", "content": [{"type": "text", "text": "Second."}]}, "parent_tool_use_id": null, "session_id": "sess-fake-two", "uuid": "a-turn-2"}}
+{"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "Second.", "session_id": "sess-fake-two", "usage": {"input_tokens": 3, "output_tokens": 2}}}

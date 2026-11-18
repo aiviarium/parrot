@@ -22,7 +22,7 @@ async fn an_unknown_dialog_is_answered_from_a_client() {
         "command": ["sh", fake("fake-tui.sh")],
         "profile": fake("fake-tui.kdl"),
         "env": { "FAKE_TUI_TRANSCRIPT": t },
-        "transcript": t,
+        "transcript": { "format": "jsonl", "dir": t },
         "unrecognisedAfterMs": 800,
         "size": [12, 60],
         "noGuard": true,

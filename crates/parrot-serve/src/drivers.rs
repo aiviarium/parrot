@@ -100,7 +100,7 @@ impl Drivers {
     /// TUI control from the egg alone (spec 31, 32.2): an egg whose `controls` include `tui` and
     /// that ships `profile.kdl` drives its CLI through the terminal. The command is the
     /// `PARROT_<AGENT>_BIN` variable when set, else the egg's `cli` name. Claude Code writes its
-    /// own transcript, which supplies the content. `PARROT_TUI_SIZE` (`<rows>x<cols>`) sets the
+    /// own transcript, named by `transcript` in its driver.kdl, which supplies the content. `PARROT_TUI_SIZE` (`<rows>x<cols>`) sets the
     /// terminal size.
     pub fn tui_agent(&self, agent: &str) -> Option<crate::config::TuiAgent> {
         let egg = self.eggs.get(agent)?;
@@ -113,26 +113,35 @@ impl Drivers {
         if !profile.is_file() {
             return None;
         }
-        // A data-only egg on the TUI core may give the whole command and the transcript folder.
+        // A data-only egg on the TUI core may give the whole command.
         let text = std::fs::read_to_string(egg.data_dir.join("driver.kdl")).unwrap_or_default();
-        let data = parrot_proto::driver_data::to_json(&text, parrot_proto::driver_data::Children::Lists)
-            .unwrap_or_default();
         let var = format!("PARROT_{}_BIN", agent.to_uppercase().replace('-', "_"));
         let command = match std::env::var(&var).ok().filter(|p| !p.is_empty()) {
             Some(program) => vec![program],
             None => parrot_proto::driver_data::driver_command(&text)
                 .or_else(|| driver.cli.as_ref().map(|c| vec![c.name.clone()]))?,
         };
-        let transcript = data["transcript"][0]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| (agent == "claude").then(|| "claude".to_string()));
+        // The egg says where its transcript is and how the MCP server is passed.
+        let transcript = driver.transcript.as_ref().map(|t| {
+            let format = serde_json::to_value(t.format).ok();
+            crate::config::TranscriptConfig {
+                format: format
+                    .and_then(|f| f.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                dir: t.dir.clone(),
+            }
+        });
+        let mcp = driver
+            .mcp
+            .and_then(|m| serde_json::to_value(m).ok())
+            .and_then(|m| m.as_str().map(str::to_owned));
         Some(crate::config::TuiAgent {
             command,
             profile,
             name: Some(egg.name.clone()),
             env: Default::default(),
             transcript,
+            mcp,
             unrecognised_after_ms: None,
             size: std::env::var("PARROT_TUI_SIZE")
                 .ok()

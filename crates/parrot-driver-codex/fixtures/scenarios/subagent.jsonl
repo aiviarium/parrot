@@ -1,0 +1,14 @@
+// A turn that spawns a subagent; the driver steers the subagent, then interrupts it.
+{"expect":{"method":"turn/start","params":{"threadId":"thr-fake-0001"}}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-main-1","items":[],"status":"inProgress","error":null}}}}
+{"emit":{"method":"turn/started","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-main-1","items":[],"status":"inProgress"}}}}
+{"emit":{"method":"item/completed","params":{"item":{"type":"collabAgentToolCall","id":"call_s1","tool":"spawnAgent","status":"completed","senderThreadId":"thr-fake-0001","receiverThreadIds":["thr-sub-0002"],"prompt":"Count the files","model":"gpt-fake-mini","agentsStates":{}},"threadId":"thr-fake-0001","turnId":"turn-main-1"}}}
+{"emit":{"method":"thread/started","params":{"thread":{"id":"thr-sub-0002"}}}}
+{"emit":{"method":"turn/started","params":{"threadId":"thr-sub-0002","turn":{"id":"turn-sub-1","items":[],"status":"inProgress"}}}}
+{"emit":{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_sub","text":"Counting."},"threadId":"thr-sub-0002","turnId":"turn-sub-1"}}}
+{"expect":{"method":"turn/steer","params":{"threadId":"thr-sub-0002","expectedTurnId":"turn-sub-1"}}}
+{"emit":{"id":"{{id}}","result":{"turnId":"turn-sub-1"}}}
+{"expect":{"method":"turn/interrupt","params":{"threadId":"thr-sub-0002","turnId":"turn-sub-1"}}}
+{"emit":{"id":"{{id}}","result":{}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-sub-0002","turn":{"id":"turn-sub-1","items":[],"status":"interrupted","error":null}}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-main-1","items":[],"status":"completed","error":null}}}}

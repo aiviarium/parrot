@@ -21,6 +21,14 @@ impl Client {
     }
 
     fn start_with(scenario: &str, extra: Vec<(std::ffi::OsString, std::ffi::OsString)>) -> Client {
+        Client::start_shadow(scenario, extra, None)
+    }
+
+    fn start_shadow(
+        scenario: &str,
+        extra: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+        projects: Option<PathBuf>,
+    ) -> Client {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = if scenario.contains('/') {
             root.join(scenario)
@@ -34,6 +42,8 @@ impl Client {
                 .chain(extra)
                 .collect(),
             guard: false,
+            shadow: projects.is_some(),
+            projects,
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
@@ -57,7 +67,7 @@ impl Client {
         serde_json::from_str(&line).unwrap()
     }
 
-    async fn call(&mut self, method: &str, params: Value) -> Value {
+    async fn try_call(&mut self, method: &str, params: Value) -> Value {
         let id = self.next;
         self.next += 1;
         let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string() + "\n";
@@ -67,10 +77,15 @@ impl Client {
             if msg["method"] == "update" {
                 self.updates.push(msg["params"].clone());
             } else if msg["id"] == id {
-                assert!(msg["error"].is_null(), "{method} failed: {msg}");
-                return msg["result"].clone();
+                return msg;
             }
         }
+    }
+
+    async fn call(&mut self, method: &str, params: Value) -> Value {
+        let msg = self.try_call(method, params).await;
+        assert!(msg["error"].is_null(), "{method} failed: {msg}");
+        msg["result"].clone()
     }
 
     /// Waits for an update that `pred` accepts, past the ones already waited for.
@@ -376,4 +391,140 @@ async fn recorded_trace_plays_end_to_end() {
         .await;
     assert_eq!(done["update"]["turn"]["status"], "interrupted");
     c.wait(is_state("idle")).await;
+}
+
+#[tokio::test]
+async fn a_subagent_stops_through_its_task() {
+    let mut c = Client::start("subagent-stop");
+    c.bind().await;
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(
+        agents["agents"][0]["features"]["session.subagents"]["cancel"],
+        true
+    );
+    c.prompt("Walk the tree").await;
+    c.wait(|u| u["subagent"] == "toolu_task_02").await;
+    let r = c
+        .call(
+            "binding/cancel",
+            json!({"binding": "b1", "subagent": "toolu_task_02"}),
+        )
+        .await;
+    assert_eq!(r["interrupted"], true);
+    let stopped = c
+        .wait(|u| {
+            u["update"]["item"]["id"] == "toolu_task_02:subagent"
+                && u["update"]["item"]["set"]["status"] != "running"
+        })
+        .await;
+    assert_eq!(stopped["update"]["item"]["set"]["status"], "cancelled");
+    c.wait(is_state("idle")).await;
+    // A subagent with no task yet is not interrupted.
+    let r = c
+        .call(
+            "binding/cancel",
+            json!({"binding": "b1", "subagent": "toolu_none"}),
+        )
+        .await;
+    assert_eq!(r["interrupted"], false);
+}
+
+#[tokio::test]
+async fn a_fork_at_an_earlier_turn_resumes_at_its_last_message() {
+    let mut c = Client::start("two-turns");
+    c.bind().await;
+    c.prompt("First").await;
+    c.wait(is_state("idle")).await;
+    c.call(
+        "binding/prompt",
+        json!({"binding": "b1", "message": "m2", "text": "Second", "steer": false}),
+    )
+    .await;
+    c.wait(|u| {
+        u["update"]["type"] == "turn"
+            && u["update"]["turn"]["id"] == "turn-2"
+            && u["update"]["turn"]["status"] != "running"
+    })
+    .await;
+    let fork = c
+        .call("binding/fork", json!({"binding": "b1", "at": "turn-1"}))
+        .await;
+    assert_eq!(fork["ref"]["id"], "fork:sess-fake-two@a-turn-1");
+    let latest = c
+        .call("binding/fork", json!({"binding": "b1", "at": "turn-2"}))
+        .await;
+    assert_eq!(latest["ref"]["id"], "fork:sess-fake-two");
+    let bad = c
+        .try_call("binding/fork", json!({"binding": "b1", "at": "turn-9"}))
+        .await;
+    assert_eq!(bad["error"]["code"], -32602);
+
+    let record = std::env::temp_dir().join(format!("parrot-fake-claude-fork-{}.json", std::process::id()));
+    let mut d = Client::start_with(
+        "two-turns",
+        vec![("PARROT_FAKE_CLAUDE_RECORD".into(), record.clone().into())],
+    );
+    d.bind_with(json!({"resume": fork["ref"]})).await;
+    let seen: Value = serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
+    std::fs::remove_file(&record).ok();
+    let args: Vec<&str> = seen["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    let at = |flag: &str| args.iter().position(|a| *a == flag).map(|i| args[i + 1]);
+    assert_eq!(at("--resume"), Some("sess-fake-two"));
+    assert_eq!(at("--resume-session-at"), Some("a-turn-1"));
+    assert!(args.contains(&"--fork-session"));
+}
+
+#[tokio::test]
+async fn auth_status_judges_sign_in() {
+    let bin = std::ffi::OsString::from(env!("CARGO_BIN_EXE_fake-claude"));
+    let dir = tempfile::tempdir().unwrap();
+    // SAFETY: no other test in this binary reads these variables.
+    unsafe {
+        std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+        std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+    let a = parrot_driver_claude::driver::probed(&bin).await;
+    assert_eq!(serde_json::to_value(a.auth).unwrap(), "signed_in");
+    let text = serde_json::to_string(&a).unwrap();
+    assert!(!text.contains("example.test"), "the account stays out: {text}");
+    unsafe { std::env::set_var("PARROT_FAKE_CLAUDE_LOGIN", "out") };
+    let a = parrot_driver_claude::driver::probed(&bin).await;
+    assert_eq!(serde_json::to_value(a.auth).unwrap(), "signed_out");
+    unsafe { std::env::remove_var("PARROT_FAKE_CLAUDE_LOGIN") };
+}
+
+#[tokio::test]
+async fn shadow_mode_reports_differences_and_merges_transcript_items() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("-fake-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = [
+        json!({"type": "user", "uuid": "u-sh-1", "sessionId": "sess-fake-0001", "timestamp": "2026-01-02T03:04:05.000Z",
+            "message": {"role": "user", "content": "Say hello"}}),
+        json!({"type": "assistant", "uuid": "a-sh-1", "sessionId": "sess-fake-0001", "timestamp": "2026-01-02T03:04:06.000Z",
+            "message": {"id": "msg_fake_01", "role": "assistant", "content": [{"type": "text", "text": "Hello there!"}]}}),
+        json!({"type": "assistant", "uuid": "a-sh-2", "sessionId": "sess-fake-0001", "timestamp": "2026-01-02T03:04:07.000Z",
+            "message": {"id": "msg_fake_99", "role": "assistant", "content": [{"type": "text", "text": "Only on disk."}]}}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    std::fs::write(project.join("sess-fake-0001.jsonl"), transcript + "\n").unwrap();
+    let mut c = Client::start_shadow("text-turn", vec![], Some(root.path().to_owned()));
+    c.bind().await;
+    c.prompt("Say hello").await;
+    let differs = c
+        .wait(|u| u["update"]["type"] == "notice" && u["update"]["code"] == "x.parrot/shadow")
+        .await;
+    assert!(differs["update"]["text"].is_string());
+    let merged = c
+        .wait(|u| u["update"]["type"] == "item" && u["update"]["item"]["set"]["text"] == "Only on disk.")
+        .await;
+    assert_eq!(merged["update"]["item"]["turn"], "turn-1");
 }

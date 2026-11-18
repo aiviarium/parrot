@@ -321,3 +321,217 @@ fn unknown_notifications_and_items_are_kept_apart() {
     );
     assert!(feed(&mut s, json!({"method": "item/started", "params": {"item": {"type": "sleep", "id": "z", "durationMs": 5}, "threadId": T, "turnId": U}})).is_empty());
 }
+
+/// Feeds a line through the per-thread routing the driver uses, keeping the whole updates.
+fn feed_in(state: &mut MapState, line: Value) -> Vec<Value> {
+    let updates = match Message::from_value(line).unwrap() {
+        Message::Notification { method, params } => {
+            let thread = ServerNotification::thread_id(&params).map(str::to_owned);
+            state.step_in(
+                thread.as_deref(),
+                &ServerNotification::parse(&method, &params),
+                NOW,
+            )
+        }
+        Message::Request { id, method, params } => {
+            let thread = ServerNotification::thread_id(&params).map(str::to_owned);
+            state
+                .server_request_in(thread.as_deref(), &id, &method, &params, NOW)
+                .0
+        }
+        other => panic!("not fed: {other:?}"),
+    };
+    updates.iter().map(|u| serde_json::to_value(u).unwrap()).collect()
+}
+
+const SUB: &str = "thr-sub-0002";
+
+#[test]
+fn a_spawned_agent_is_a_subagent_and_its_thread_is_routed() {
+    let mut s = running();
+    let spawn = json!({"type": "collabAgentToolCall", "id": "call_1", "tool": "spawnAgent", "status": "completed",
+        "senderThreadId": T, "receiverThreadIds": [SUB], "prompt": "Count the files\nin src", "model": "gpt-fake-mini",
+        "agentsStates": {}});
+    let out = feed_in(
+        &mut s,
+        json!({"method": "item/completed", "params": {"item": spawn, "threadId": T, "turnId": U}}),
+    );
+    let item = &out[0]["update"]["item"];
+    assert_eq!(item["kind"], "subagent");
+    assert_eq!(item["set"]["key"], SUB);
+    assert_eq!(item["set"]["title"], "Count the files");
+    assert!(out[0]["subagent"].is_null());
+
+    let out = feed_in(
+        &mut s,
+        json!({"method": "turn/started", "params": {"threadId": SUB, "turn": {"id": "turn-sub-1", "items": [], "status": "inProgress"}}}),
+    );
+    assert!(out.iter().all(|u| u["subagent"] == SUB), "{out:?}");
+    let out = feed_in(
+        &mut s,
+        json!({"method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "msg_s", "text": "Twelve"},
+            "threadId": SUB, "turnId": "turn-sub-1"}}),
+    );
+    assert_eq!(out[0]["subagent"], SUB);
+    assert_eq!(out[0]["update"]["item"]["kind"], "assistant");
+    assert_eq!(s.subagents[SUB].turn.as_ref().unwrap().key, "turn-sub-1");
+    // The main turn is untouched.
+    assert_eq!(s.turn.as_ref().unwrap().key, U);
+
+    let req = feed_in(
+        &mut s,
+        json!({"method": "item/commandExecution/requestApproval", "id": 9, "params": {"threadId": SUB, "turnId": "turn-sub-1",
+            "itemId": "c1", "command": "ls", "cwd": "/fake"}}),
+    );
+    assert_eq!(req[0]["subagent"], SUB);
+    assert_eq!(req[0]["update"]["type"], "request");
+    let key = req[0]["update"]["request"]["id"].as_str().unwrap().to_owned();
+    assert!(
+        s.answer(
+            &key,
+            &Answer {
+                choice: Some("accept".into()),
+                ..Default::default()
+            }
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn other_collab_tools_are_tools() {
+    let mut s = running();
+    let wait = json!({"type": "collabAgentToolCall", "id": "call_2", "tool": "wait", "status": "completed",
+        "senderThreadId": T, "receiverThreadIds": [SUB], "prompt": null, "model": null,
+        "agentsStates": {SUB: {"status": "completed", "message": "Twelve"}}});
+    let out = feed(
+        &mut s,
+        json!({"method": "item/completed", "params": {"item": wait, "threadId": T, "turnId": U}}),
+    );
+    let item = &out[0]["item"];
+    assert_eq!(item["kind"], "tool");
+    assert_eq!(item["set"]["output"][SUB]["message"], "Twelve");
+}
+
+#[test]
+fn auto_resolution_sets_expiry_and_a_fallback() {
+    let mut s = running();
+    let out = feed_in(
+        &mut s,
+        json!({"method": "item/tool/requestUserInput", "id": 6, "params": {"threadId": T, "turnId": U, "itemId": "q",
+            "questions": [{"id": "q1", "header": "H", "question": "Tea?", "isOther": true, "isSecret": false, "options": null}],
+            "isBlocking": false, "autoResolutionMs": 30000}}),
+    );
+    let r = &out[0]["update"]["request"];
+    assert_eq!(r["expires"], "2026-01-02T03:04:35.000Z");
+    assert_eq!(r["blocking"], false);
+    assert!(r["fallback"].is_object(), "{r}");
+    let out = feed_in(
+        &mut s,
+        json!({"method": "serverRequest/resolved", "params": {"threadId": T, "requestId": 6}}),
+    );
+    let status = &out[0]["update"]["request"];
+    assert_eq!(status["status"], "expired", "{status}");
+    assert_eq!(status["answeredBy"], "fallback");
+}
+
+#[test]
+fn diffs_warnings_status_and_mcp_are_mapped() {
+    let mut s = running();
+    let patch = json!({"type": "fileChange", "id": "fc_1", "status": "inProgress",
+        "changes": [{"path": "/fake/a.txt", "kind": {"type": "add"}, "diff": "hello\n"}]});
+    feed(
+        &mut s,
+        json!({"method": "item/started", "params": {"item": patch, "threadId": T, "turnId": U}}),
+    );
+    let out = feed(
+        &mut s,
+        json!({"method": "item/fileChange/outputDelta", "params": {"threadId": T, "turnId": U, "itemId": "fc_1", "delta": "Success.\n"}}),
+    );
+    assert_eq!(out[0]["item"]["append"]["output"], "Success.\n", "{out:?}");
+    let out = feed(
+        &mut s,
+        json!({"method": "item/fileChange/patchUpdated", "params": {"threadId": T, "turnId": U, "itemId": "fc_1",
+            "changes": [{"path": "/fake/a.txt", "kind": {"type": "add"}, "diff": "hello\nworld\n"}]}}),
+    );
+    assert!(!out.is_empty());
+    assert!(
+        feed(
+            &mut s,
+            json!({"method": "turn/diff/updated", "params": {"threadId": T, "turnId": U, "diff": "+hello\n"}})
+        )
+        .is_empty()
+    );
+    let w = feed(
+        &mut s,
+        json!({"method": "warning", "params": {"threadId": T, "message": "Disk nearly full"}}),
+    );
+    assert_eq!(w[0]["type"], "notice");
+    assert_eq!(w[0]["text"], "Disk nearly full");
+    let d = feed(
+        &mut s,
+        json!({"method": "deprecationNotice", "params": {"summary": "Old flag", "details": "Use the new one"}}),
+    );
+    assert_eq!(d[0]["type"], "notice");
+    let e = feed(
+        &mut s,
+        json!({"method": "thread/status/changed", "params": {"threadId": T, "status": {"type": "systemError"}}}),
+    );
+    assert_eq!(e[0]["level"], "error");
+    let m = feed(
+        &mut s,
+        json!({"method": "mcpServer/startupStatus/updated", "params": {"name": "fake-docs", "status": "failed", "error": "no such command"}}),
+    );
+    assert_eq!(m[0]["type"], "mcp", "{m:?}");
+    let done = feed(
+        &mut s,
+        json!({"method": "turn/completed", "params": {"threadId": T, "turn": {"id": U, "items": [], "status": "completed", "error": null}}}),
+    );
+    let turn = done.iter().find(|u| u["type"] == "turn").unwrap();
+    assert_eq!(turn["turn"]["_meta"]["diff"], "+hello\n", "{turn}");
+}
+
+#[test]
+fn a_device_code_login_is_an_auth_request() {
+    let mut s = running();
+    let (key, out) = s.login_started(
+        "login-fake-1",
+        "https://auth.example.test/device",
+        Some("FAKE-1234"),
+    );
+    let r = serde_json::to_value(&out[0]).unwrap();
+    assert_eq!(r["update"]["request"]["kind"], "auth");
+    assert_eq!(r["update"]["request"]["subject"]["code"], "FAKE-1234");
+    let done = feed(
+        &mut s,
+        json!({"method": "account/login/completed", "params": {"loginId": "login-fake-1", "success": true, "error": null}}),
+    );
+    assert_eq!(done[0]["request"]["status"], "answered", "{done:?}");
+    assert!(s.take_login(&key).is_none());
+}
+
+#[test]
+fn skills_become_actions_and_turn_input() {
+    let mut s = running();
+    let listed = json!({"data": [{"cwd": "/fake", "skills": [{"name": "fake-lint", "description": "Lints",
+        "shortDescription": "Lint", "path": "/fake/skills/fake-lint/SKILL.md", "enabled": true},
+        {"name": "off", "description": "", "path": "/fake/off/SKILL.md", "enabled": false}]}]});
+    let u = serde_json::to_value(s.skills_listed(&listed).unwrap()).unwrap();
+    let ids: Vec<&Value> = u["update"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| &a["id"])
+        .collect();
+    assert!(ids.contains(&&json!("skill:fake-lint")), "{ids:?}");
+    assert!(!ids.contains(&&json!("skill:off")));
+    assert!(
+        s.skills_listed(&listed).is_none(),
+        "an unchanged list sends nothing"
+    );
+    let p = s.skill_turn_params("fake-lint", "check src", "m1").unwrap();
+    assert_eq!(
+        p["input"][1],
+        json!({"type": "skill", "name": "fake-lint", "path": "/fake/skills/fake-lint/SKILL.md"})
+    );
+}

@@ -176,7 +176,15 @@ async fn start_lists_models_into_options() {
         .iter()
         .map(|a| &a["id"])
         .collect();
-    assert_eq!(actions, [&json!("compact"), &json!("review")]);
+    assert_eq!(
+        actions,
+        [
+            &json!("login"),
+            &json!("logout"),
+            &json!("compact"),
+            &json!("review")
+        ]
+    );
     c.wait(is_state("idle")).await;
 
     let r = c
@@ -608,4 +616,113 @@ async fn history_reads_rollouts_and_fork_asks_codex() {
     c.bind(json!({})).await;
     let fork = c.call("binding/fork", json!({"binding": "b1"})).await;
     assert_eq!(fork["ref"]["id"], "thr-fake-fork");
+}
+
+#[tokio::test]
+async fn a_spawned_subagent_takes_prompts_and_cancels() {
+    let mut c = Client::start("subagent");
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(
+        agents["agents"][0]["features"]["session.subagents"],
+        json!({"prompt": true, "cancel": true})
+    );
+    c.bind(json!({})).await;
+    c.wait(is_state("idle")).await;
+    c.prompt("m1", "Spawn a counter").await;
+    let item = c.wait(|u| u["update"]["item"]["kind"] == "subagent").await;
+    assert_eq!(item["update"]["item"]["set"]["key"], "thr-sub-0002");
+    let said = c
+        .wait(|u| u["subagent"] == "thr-sub-0002" && u["update"]["item"]["kind"] == "assistant")
+        .await;
+    assert!(
+        said["update"]["item"]["set"]["text"].is_string() || said["update"]["item"]["append"].is_object()
+    );
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "subagent": "thr-sub-0002", "message": "m2", "text": "Only Rust files", "steer": true}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "steered");
+    let r = c
+        .call(
+            "binding/cancel",
+            json!({"binding": "b1", "subagent": "thr-sub-0002"}),
+        )
+        .await;
+    assert_eq!(r["interrupted"], true);
+    c.wait(|u| u["subagent"] == "thr-sub-0002" && turn_ended(u)).await;
+    // The main turn ends on its own, after the subagent's.
+    c.wait(|u| u["subagent"].is_null() && turn_ended(u)).await;
+}
+
+#[tokio::test]
+async fn a_fork_at_an_earlier_turn_names_it() {
+    let mut c = Client::start("fork-at-turn");
+    c.bind(json!({})).await;
+    c.wait(is_state("idle")).await;
+    c.prompt("m1", "First").await;
+    c.wait(turn_ended).await;
+    c.prompt("m2", "Second").await;
+    c.wait(turn_ended).await;
+    let fork = c
+        .call("binding/fork", json!({"binding": "b1", "at": "turn-a"}))
+        .await;
+    assert_eq!(fork["ref"]["id"], "thr-fake-fork");
+}
+
+#[tokio::test]
+async fn pins_sign_in_and_skills() {
+    let mut c = Client::start("login-skill-pin");
+    c.bind_with(json!({"pin": {"level": "sandboxed", "network": false}}))
+        .await;
+    c.wait(is_state("idle")).await;
+    let actions = c
+        .wait(|u| {
+            u["update"]["type"] == "actions"
+                && u["update"]["actions"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|a| a["id"] == "skill:fake-lint"))
+        })
+        .await;
+    assert!(actions["subagent"].is_null());
+
+    let r = c
+        .call("binding/action", json!({"binding": "b1", "action": "login"}))
+        .await;
+    assert_eq!(r["status"], "requested");
+    let key = r["request"].as_str().unwrap().to_owned();
+    let raised = c
+        .wait(|u| u["update"]["type"] == "request" && u["update"]["request"]["kind"] == "auth")
+        .await;
+    assert_eq!(raised["update"]["request"]["id"], key.as_str());
+    assert_eq!(raised["update"]["request"]["subject"]["code"], "FAKE-1234");
+    c.wait(|u| u["update"]["request"]["status"] == "answered").await;
+
+    let r = c
+        .call(
+            "binding/action",
+            json!({"binding": "b1", "action": "skill:fake-lint", "args": "check src", "message": "m1"}),
+        )
+        .await;
+    assert_ne!(r["status"], "failed", "{r}");
+    c.wait(turn_ended).await;
+}
+
+#[tokio::test]
+async fn login_status_judges_auth() {
+    let bin = std::ffi::OsString::from(env!("CARGO_BIN_EXE_fake-codex"));
+    let home = tempfile::tempdir().unwrap();
+    // SAFETY: this test is the only one in the binary that reads these variables.
+    unsafe {
+        std::env::set_var("CODEX_HOME", home.path());
+        std::env::remove_var("OPENAI_API_KEY");
+    }
+    let a = parrot_driver_codex::driver::probed(&bin).await;
+    assert_eq!(serde_json::to_value(a.auth).unwrap(), "signed_in");
+    assert_eq!(a.harness.unwrap().version, "0.167.1");
+    unsafe { std::env::set_var("PARROT_FAKE_CODEX_LOGIN", "out") };
+    let a = parrot_driver_codex::driver::probed(&bin).await;
+    assert_eq!(serde_json::to_value(a.auth).unwrap(), "signed_out");
+    unsafe { std::env::remove_var("PARROT_FAKE_CODEX_LOGIN") };
 }

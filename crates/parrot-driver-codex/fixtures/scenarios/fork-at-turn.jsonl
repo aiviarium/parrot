@@ -1,0 +1,9 @@
+// Two turns, then a fork that keeps only the first.
+{"expect":{"method":"turn/start"}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-a","items":[],"status":"inProgress","error":null}}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-a","items":[],"status":"completed","error":null}}}}
+{"expect":{"method":"turn/start"}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-b","items":[],"status":"inProgress","error":null}}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-b","items":[],"status":"completed","error":null}}}}
+{"expect":{"method":"thread/fork","params":{"threadId":"thr-fake-0001","lastTurnId":"turn-a"}}}
+{"emit":{"id":"{{id}}","result":{"thread":{"id":"thr-fake-fork","status":{"type":"idle"}}}}}
