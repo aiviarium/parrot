@@ -151,6 +151,124 @@ pub enum ServerNotification {
     ModelRerouted(ModelRerouted),
     #[serde(rename = "error")]
     Error(ErrorNotification),
+    #[serde(rename = "item/fileChange/patchUpdated")]
+    FileChangePatchUpdated(PatchUpdated),
+    #[serde(rename = "turn/diff/updated")]
+    TurnDiffUpdated(TurnDiff),
+    #[serde(rename = "warning")]
+    Warning(Warning),
+    #[serde(rename = "guardianWarning")]
+    GuardianWarning(Warning),
+    #[serde(rename = "deprecationNotice")]
+    DeprecationNotice(DeprecationNotice),
+    #[serde(rename = "thread/status/changed")]
+    ThreadStatusChanged(ThreadStatusChanged),
+    #[serde(rename = "mcpServer/startupStatus/updated")]
+    McpServerStatusUpdated(McpServerStatus),
+    #[serde(rename = "account/updated")]
+    AccountUpdated(AccountUpdated),
+    #[serde(rename = "account/login/completed")]
+    AccountLoginCompleted(LoginCompleted),
+    #[serde(rename = "skills/changed")]
+    SkillsChanged(Extra),
+}
+
+impl ServerNotification {
+    /// The thread a notification is about, where it names one.
+    pub fn thread_id(params: &Value) -> Option<&str> {
+        params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .or_else(|| params.pointer("/thread/id").and_then(Value::as_str))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchUpdated {
+    pub item_id: String,
+    #[serde(default)]
+    pub changes: Vec<FileUpdateChange>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDiff {
+    pub turn_id: String,
+    #[serde(default)]
+    pub diff: String,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Warning {
+    #[serde(default)]
+    pub message: String,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeprecationNotice {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub details: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// `status` is `{type: "notLoaded" | "idle" | "systemError" | "active", activeFlags?}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStatusChanged {
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    pub status: Value,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatus {
+    pub name: String,
+    /// `starting`, `ready`, `failed` or `cancelled`.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUpdated {
+    #[serde(default)]
+    pub auth_mode: Option<String>,
+    #[serde(default)]
+    pub plan_type: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginCompleted {
+    #[serde(default)]
+    pub login_id: Option<String>,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 impl ServerNotification {
@@ -553,12 +671,24 @@ pub struct ImageView {
 #[serde(rename_all = "camelCase")]
 pub struct CollabAgentToolCall {
     pub id: String,
+    /// `spawnAgent`, `sendInput`, `resumeAgent`, `wait`, `closeAgent` and others.
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+    /// `inProgress`, `completed` or `failed`.
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub sender_thread_id: Option<String>,
+    /// The agents the call is about; for a spawn, the new agent's thread.
+    #[serde(default)]
+    pub receiver_thread_ids: Vec<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The last known state of each target agent, by thread id: `{status, message?}`.
+    #[serde(default)]
+    pub agents_states: Map<String, Value>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -622,6 +752,7 @@ pub mod server_request {
     pub const ELICITATION: &str = "mcpServer/elicitation/request";
     pub const EXEC_APPROVAL_V1: &str = "execCommandApproval";
     pub const PATCH_APPROVAL_V1: &str = "applyPatchApproval";
+    pub const AUTH_TOKENS_REFRESH: &str = "account/chatgptAuthTokens/refresh";
 }
 
 /// `/bin/bash -lc 'echo hi'` → `echo hi`: the shell wrapper Codex puts around commands.

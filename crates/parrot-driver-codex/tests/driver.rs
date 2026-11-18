@@ -176,7 +176,15 @@ async fn start_lists_models_into_options() {
         .iter()
         .map(|a| &a["id"])
         .collect();
-    assert_eq!(actions, [&json!("compact"), &json!("review")]);
+    assert_eq!(
+        actions,
+        [
+            &json!("login"),
+            &json!("logout"),
+            &json!("compact"),
+            &json!("review")
+        ]
+    );
     c.wait(is_state("idle")).await;
 
     let r = c

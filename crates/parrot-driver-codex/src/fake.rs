@@ -15,7 +15,8 @@
 //! scenario can answer the driver's requests.
 //!
 //! Unless the current `expect` asks for them, the fake answers `initialize`, `model/list`,
-//! `thread/start` and `thread/resume` by itself and skips the `initialized` notification. When the
+//! `skills/list`, `thread/start` and `thread/resume` by itself and skips the `initialized`
+//! notification. Its skill list holds the one skill [`FAKE_SKILL`]. When the
 //! steps run out it reads until stdin closes and exits with 0.
 
 use std::io::{BufRead, Write};
@@ -25,6 +26,12 @@ use serde_json::{Value, json};
 
 /// The variable that names a scenario when `--scenario` is not given.
 pub const SCENARIO_ENV: &str = "PARROT_FAKE_CODEX_SCENARIO";
+
+/// The skill the fake lists.
+pub const FAKE_SKILL: &str = "fake-lint";
+
+/// The variable that makes `fake-codex login status` report signed out when set to `out`.
+pub const LOGIN_ENV: &str = "PARROT_FAKE_CODEX_LOGIN";
 
 /// The thread id the fake gives a new thread.
 pub const FAKE_THREAD: &str = "thr-fake-0001";
@@ -209,8 +216,25 @@ fn auto_answer(v: &Value) -> Option<Vec<Value>> {
     let id = v.get("id")?.clone();
     let reply = |result: Value| json!({"id": id, "result": result});
     match v["method"].as_str()? {
-        "initialize" => Some(vec![reply(json!({"userAgent": "fake-codex/0.0.0"}))]),
+        "initialize" => Some(vec![reply(
+            json!({"userAgent": "fake-codex/0.167.1 (Fake OS; x86_64)"}),
+        )]),
         "model/list" => Some(vec![reply(fake_models())]),
+        "skills/list" => {
+            let cwd = v["params"]["cwds"][0].clone();
+            Some(vec![reply(json!({"data": [{
+                "cwd": cwd,
+                "skills": [{
+                    "name": FAKE_SKILL,
+                    "description": "Lints the fake project",
+                    "shortDescription": "Lint",
+                    "path": "/fake/skills/fake-lint/SKILL.md",
+                    "scope": "user",
+                    "enabled": true,
+                }],
+                "errors": [],
+            }]}))])
+        }
         m @ ("thread/start" | "thread/resume") => {
             let thread = if m == "thread/resume" {
                 v["params"]["threadId"].as_str().unwrap_or(FAKE_THREAD).to_owned()
