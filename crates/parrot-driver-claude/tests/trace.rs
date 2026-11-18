@@ -127,8 +127,7 @@ fn trace_maps_to_items_tools_requests_and_turns() {
     for tool in ["toolu_01Hk9hZZXtjdaoDcb2Gc4rgp", "toolu_013EQ9AxUpG6gVLMW4DBHeDN"] {
         let last = items
             .iter()
-            .filter(|i| i["item"]["id"] == tool && i["item"]["set"]["status"].is_string())
-            .next_back()
+            .rfind(|i| i["item"]["id"] == tool && i["item"]["set"]["status"].is_string())
             .unwrap();
         assert_eq!(last["item"]["set"]["status"], "ok", "{tool} ends ok");
     }
