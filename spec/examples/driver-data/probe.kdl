@@ -1,0 +1,7 @@
+// probes/hello.kdl: one short turn, recorded for a fixture.
+description "Ask for one word and wait for the turn to end."
+control "native"
+timeout-secs 120
+option "model" "default"
+prompt "Reply with the single word: hello."
+wait "idle" timeout-secs=60
