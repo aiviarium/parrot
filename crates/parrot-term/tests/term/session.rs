@@ -2,13 +2,10 @@
 
 use std::time::Duration;
 
-#[cfg(unix)]
-use parrot_term::PtyCommand;
 use parrot_term::io::{SinkEvent, channel};
-use parrot_term::{
-    Cast, Emulator, EmulatorConfig, Input, Key, Mods, Replay, Session, SessionConfig, SettleReason, Size,
-    serialize,
-};
+#[cfg(unix)]
+use parrot_term::{Cast, PtyCommand, Replay, serialize};
+use parrot_term::{Emulator, EmulatorConfig, Input, Key, Mods, Session, SessionConfig, SettleReason, Size};
 
 const T: Duration = Duration::from_secs(10);
 

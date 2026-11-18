@@ -187,7 +187,7 @@ fn item(id: String, kind: ItemKind, set: Map<String, Value>) -> ItemPatch {
 pub fn claude_project_dir(cwd: &Path) -> Option<PathBuf> {
     let base = match std::env::var_os("CLAUDE_CONFIG_DIR") {
         Some(d) => PathBuf::from(d),
-        None => PathBuf::from(std::env::var_os("HOME")?).join(".claude"),
+        None => parrot_driver::paths::home_dir()?.join(".claude"),
     };
     let folder: String = cwd
         .to_string_lossy()

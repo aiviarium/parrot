@@ -203,6 +203,12 @@ mod tests {
         move |key| map.get(key).cloned()
     }
 
+    /// Windows finds files whatever the case, so a lookup may return the case the extension has.
+    fn same_file_name(path: &Path, expected: &str) -> bool {
+        path.file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(expected))
+    }
+
     fn touch(path: &Path, executable: bool) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"").unwrap();
@@ -259,7 +265,7 @@ mod tests {
             platform: Platform::Windows,
         };
         let found = resolve_in(OsStr::new("codex"), &search).expect("the shim is found");
-        assert!(found.ends_with("codex.cmd"), "{}", found.display());
+        assert!(same_file_name(&found, "codex.cmd"), "{}", found.display());
     }
 
     #[test]
@@ -274,11 +280,10 @@ mod tests {
             pathext: Some(OsStr::new(".EXE;.CMD")),
             platform: Platform::Windows,
         };
-        assert!(
-            resolve_in(OsStr::new("tool"), &search)
-                .unwrap()
-                .ends_with("tool.exe")
-        );
+        assert!(same_file_name(
+            &resolve_in(OsStr::new("tool"), &search).unwrap(),
+            "tool.exe"
+        ));
     }
 
     #[test]
@@ -292,11 +297,10 @@ mod tests {
             pathext: Some(OsStr::new(".EXE;.PS1")),
             platform: Platform::Windows,
         };
-        assert!(
-            resolve_in(OsStr::new("tool"), &search)
-                .unwrap()
-                .ends_with("tool.PS1")
-        );
+        assert!(same_file_name(
+            &resolve_in(OsStr::new("tool"), &search).unwrap(),
+            "tool.PS1"
+        ));
     }
 
     #[test]
