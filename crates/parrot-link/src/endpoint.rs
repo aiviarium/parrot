@@ -240,7 +240,7 @@ mod windows {
 
     /// Connects to the link pipe. The ACL on the server end decides who may.
     pub async fn connect_link_socket(path: &Path) -> io::Result<LinkStream> {
-        Ok(LinkStream::Client(crate::pipe::connect(path)?))
+        Ok(LinkStream::Client(crate::pipe::connect_wait(path).await?))
     }
 }
 

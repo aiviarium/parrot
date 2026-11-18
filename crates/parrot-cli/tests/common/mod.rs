@@ -132,7 +132,7 @@ async fn open(path: &Path) -> std::io::Result<Box<dyn LocalStream>> {
     }
     #[cfg(windows)]
     {
-        let pipe = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
+        let pipe = parrot_link::pipe::connect_wait(path).await?;
         Ok(Box::new(pipe))
     }
 }

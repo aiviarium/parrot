@@ -119,7 +119,7 @@ async fn open(path: &Path) -> std::io::Result<Halves> {
 
 #[cfg(windows)]
 async fn open(path: &Path) -> std::io::Result<Halves> {
-    let pipe = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
+    let pipe = parrot_link::pipe::connect_wait(path).await?;
     let (r, w) = tokio::io::split(pipe);
     Ok((Box::new(r), Box::new(w)))
 }

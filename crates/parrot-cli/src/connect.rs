@@ -46,7 +46,7 @@ async fn open(path: &std::path::Path) -> std::io::Result<tokio::net::UnixStream>
 
 #[cfg(windows)]
 async fn open(path: &std::path::Path) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
-    tokio::net::windows::named_pipe::ClientOptions::new().open(path)
+    parrot_link::pipe::connect_wait(path).await
 }
 
 /// Copies stdin to the stream and the stream to stdout. Ends when the runtime closes the stream;

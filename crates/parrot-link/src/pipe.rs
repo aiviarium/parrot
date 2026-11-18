@@ -144,6 +144,41 @@ pub fn connect(path: &Path) -> io::Result<NamedPipeClient> {
     tokio::net::windows::named_pipe::ClientOptions::new().open(path)
 }
 
+/// `ERROR_PIPE_BUSY`: every instance of the pipe is connected. A server creates the next
+/// instance just after it accepts one, so a client that arrives between the two must retry.
+const PIPE_BUSY: i32 = 231;
+
+/// How long a client keeps trying a pipe whose instances are all busy.
+pub const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Connects to `path`, waiting while every instance is busy.
+pub fn connect_retry(path: &Path, wait: std::time::Duration) -> io::Result<NamedPipeClient> {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match connect(path) {
+            Ok(client) => return Ok(client),
+            Err(e) if e.raw_os_error() == Some(PIPE_BUSY) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// [`connect_retry`] for an async caller.
+pub async fn connect_wait(path: &Path) -> io::Result<NamedPipeClient> {
+    let deadline = std::time::Instant::now() + BUSY_WAIT;
+    loop {
+        match connect(path) {
+            Ok(client) => return Ok(client),
+            Err(e) if e.raw_os_error() == Some(PIPE_BUSY) && std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
