@@ -7,6 +7,12 @@ mod guard;
 mod serve;
 
 fn main() {
-    eprintln!("parrot: not implemented yet");
-    std::process::exit(2);
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("guard") => guard::run(args.collect()),
+        _ => {
+            eprintln!("parrot: not implemented yet");
+            std::process::exit(2);
+        }
+    }
 }
