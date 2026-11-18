@@ -685,7 +685,21 @@ fn compose(p: &BindingPromptParams, state: &MapState) -> (String, Vec<Image>, Ve
     (parts.join("\n\n"), images, notices)
 }
 
-/// Writes the `mcp.json` pi reads from `$PI_CODING_AGENT_DIR`, with the token left to the environment.
+/// The folder pi reads its config from: `$PI_CODING_AGENT_DIR`, else `~/.pi/agent`.
+fn agent_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".pi").join("agent"))
+}
+
+/// Writes the `mcp.json` pi reads from `$PI_CODING_AGENT_DIR`, with the token left to the
+/// environment.
+///
+/// The folder is a bind of the user's own agent folder, which the driver points pi at with
+/// `PI_CODING_AGENT_DIR`: replacing the folder with one that holds only `mcp.json` would hide the
+/// user's models, credentials and settings.
 fn write_mcp(binding: &str, mcp: &parrot_proto::driver::McpInjection) -> Option<PathBuf> {
     let server = match (&mcp.url, &mcp.command) {
         (Some(url), _) => json!({
@@ -704,16 +718,64 @@ fn write_mcp(binding: &str, mcp: &parrot_proto::driver::McpInjection) -> Option<
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let dir = std::env::temp_dir().join(format!("parrot-pi-{}-{safe}", std::process::id()));
-    std::fs::create_dir_all(&dir).ok()?;
+    let source = agent_dir()?;
+    prepare_agent_dir(&source, &dir, server)
+}
+
+/// Makes `dir` hold `mcp.json` and everything the user's agent folder holds.
+fn prepare_agent_dir(source: &std::path::Path, dir: &std::path::Path, server: Value) -> Option<PathBuf> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    if source.is_dir() {
+        // Sessions are the user's too, so the folder they live in exists to be linked.
+        let _ = std::fs::create_dir_all(source.join("sessions"));
+        for entry in std::fs::read_dir(source).ok()?.flatten() {
+            let name = entry.file_name();
+            if name == "mcp.json" {
+                continue;
+            }
+            let _ = link(&entry.path(), &dir.join(name));
+        }
+    }
     let file = dir.join("mcp.json");
-    let text = json!({"mcpServers": {"parrot": server}}).to_string();
-    std::fs::write(&file, text).ok()?;
+    std::fs::write(&file, json!({"mcpServers": {"parrot": server}}).to_string()).ok()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     }
-    Some(dir)
+    Some(dir.to_path_buf())
+}
+
+/// Links one entry of the user's agent folder into the bind, copying it when a link is refused.
+#[cfg(unix)]
+fn link(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(from, to)
+}
+
+#[cfg(windows)]
+fn link(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    // A link needs Developer Mode or the right; a copy keeps pi's config working without it.
+    let linked = if from.is_dir() {
+        std::os::windows::fs::symlink_dir(from, to)
+    } else {
+        std::os::windows::fs::symlink_file(from, to)
+    };
+    match linked {
+        Ok(()) => Ok(()),
+        Err(_) if from.is_file() => std::fs::copy(from, to).map(|_| ()),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn link(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::copy(from, to).map(|_| ())
 }
 
 /// What pi reports when it opens: its session, models, thinking levels and commands.
@@ -957,4 +1019,38 @@ pub fn now() -> String {
         rem % 60,
         d.subsec_millis()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bind pi reads holds the user's config and ours, not ours alone.
+    #[test]
+    fn an_mcp_bind_keeps_the_users_config() {
+        let root = std::env::temp_dir().join(format!("parrot-pi-bind-{}", std::process::id()));
+        let source = root.join("agent");
+        let dir = root.join("bind");
+        std::fs::create_dir_all(source.join("sessions/--work-demo--")).unwrap();
+        std::fs::write(source.join("models.json"), r#"{"providers":{}}"#).unwrap();
+        std::fs::write(source.join("mcp.json"), r#"{"mcpServers":{"mine":{}}}"#).unwrap();
+        std::fs::write(source.join("sessions/--work-demo--/s.jsonl"), "{}").unwrap();
+
+        let server = json!({"url": "http://127.0.0.1:9/mcp"});
+        prepare_agent_dir(&source, &dir, server).expect("the bind is ready");
+
+        let mcp: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1);
+        assert!(
+            mcp["mcpServers"]["parrot"].is_object(),
+            "the user's servers stay out of our bind"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("models.json")).unwrap(),
+            r#"{"providers":{}}"#
+        );
+        assert!(dir.join("sessions/--work-demo--/s.jsonl").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
