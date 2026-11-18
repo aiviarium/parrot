@@ -533,3 +533,90 @@ async fn a_carrier_egg_carries_a_link() {
     assert_eq!(links["links"][0]["carrier"]["kind"], "relay", "{links}");
     assert_eq!(links["links"][0]["containment"], "restricted", "{links}");
 }
+
+/// Installs the fixture carrier egg `name` into a new state directory and starts serve on it.
+fn serve_with_carrier(name: &str) -> Serve {
+    let dir = tempfile::tempdir().unwrap();
+    let egg = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/eggs")
+        .join(name);
+    common::with_eggs(dir.path().join("state"));
+    let out = Command::new(PARROT)
+        .args(["eggs", "install", egg.to_str().unwrap(), "--state-dir"])
+        .arg(dir.path().join("state"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    Serve::start_in(dir, None)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listening_carrier_runs_beside_the_runtime() {
+    let serve = serve_with_carrier("listener");
+    let mut c = Client::connect(&serve, "client").await;
+    c.initialize().await;
+    let carriers = c.ok("carrier/list", json!({})).await;
+    let listener = carriers["carriers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "listener")
+        .unwrap_or_else(|| panic!("no listener carrier: {carriers}"))
+        .clone();
+    assert_eq!(listener["listens"], true, "{listener}");
+    assert_eq!(listener["maxMessage"], 4096, "{listener}");
+    // `listen` started with what it needs to hand channels over.
+    let note = serve.socket.with_extension("listening");
+    let deadline = Instant::now() + WAIT;
+    let text = loop {
+        if let Ok(text) = std::fs::read_to_string(&note)
+            && text.lines().count() == 2
+        {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "the carrier never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(Path::new(lines[0]).is_file(), "{text}");
+    assert!(lines[1].ends_with("link.sock"), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connect_link_relays_an_inherited_descriptor() {
+    use parrot_link::StaticKey;
+    use parrot_link::noise::Dialer;
+    use parrot_link::pairing::InviteCode;
+    let server = Serve::start(None);
+    let invite: Value =
+        serde_json::from_str(&server.link(&["invite", "--name", "listener", "--json"], None)).unwrap();
+    let code = InviteCode::parse(invite["code"].as_str().unwrap()).unwrap();
+    // The inbound channel a carrier accepted, handed to the relay as descriptor 3.
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+    let mut relay = Command::new("sh")
+        .args(["-c", "exec \"$0\" connect --link --socket \"$1\" --fd 3 3<&0"])
+        .arg(PARROT)
+        .arg(&server.socket)
+        .stdin(Stdio::from(std::os::fd::OwnedFd::from(theirs)))
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    ours.set_nonblocking(true).unwrap();
+    let stream = UnixStream::from_std(ours).unwrap();
+    let key = std::sync::Arc::new(StaticKey::from_private([0x5c; 32]));
+    let runtime = key.runtime_id();
+    let conn = tokio::time::timeout(WAIT, Dialer::new(key).pair(stream, &code))
+        .await
+        .expect("paired in time")
+        .expect("paired through the descriptor");
+    assert!(conn.paired.is_some());
+    let mut s = Client::connect(&server, "server-client").await;
+    s.initialize().await;
+    let links = until(&mut s, "link/list", json!({}), "the paired link", |r| {
+        r["links"][0]["peer"]["runtime"] == runtime.as_str()
+    })
+    .await;
+    assert_eq!(links["links"][0]["name"], "listener", "{links}");
+    drop(conn);
+    let _ = relay.wait();
+}

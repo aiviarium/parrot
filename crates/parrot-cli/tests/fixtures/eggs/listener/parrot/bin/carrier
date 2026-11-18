@@ -1,0 +1,23 @@
+#!/bin/sh
+# A carrier egg that listens. `carrier listen` runs beside the runtime; a real one would wait for
+# inbound channels and hand each to `$PARROT_BIN connect --link --fd <n>`. This one notes what it
+# was given, so a test can see it run. `carrier dial` reaches a runtime on this machine.
+set -eu
+case "${1:-}" in
+listen)
+  printf '%s\n%s\n' "$PARROT_BIN" "$PARROT_LINK_SOCKET" > "$PARROT_SOCKET.listening"
+  exec sleep 600
+  ;;
+dial)
+  IFS= read -r target
+  field() { printf '%s' "$target" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"; }
+  parrot=$(field parrot)
+  socket=$(field socket)
+  echo '{"ready":true}'
+  exec "$parrot" connect --link --socket "$socket"
+  ;;
+*)
+  echo '{"error":"listen or dial"}'
+  exit 1
+  ;;
+esac
