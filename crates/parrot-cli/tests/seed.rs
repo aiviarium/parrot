@@ -2,6 +2,7 @@
 //! and Codex drivers over their fakes. A Claude session forks natively, hands off to Codex with a
 //! bundle that carries a summary, the history and the workspace, and rewinds with files.
 #![cfg(unix)]
+// Sets Unix file modes and looks for processes with pgrep.
 
 mod common;
 

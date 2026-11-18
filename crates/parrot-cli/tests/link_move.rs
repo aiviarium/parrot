@@ -1,6 +1,7 @@
 //! The `link` profile proof: two runtimes pair over the `command` carrier, a session moves from
 //! the first to the second, and it keeps running after the first runtime stops.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 // The helpers are shared in shape with `e2e.rs`; this test uses only some of them.
 #![allow(dead_code)]
 

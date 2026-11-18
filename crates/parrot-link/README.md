@@ -11,7 +11,8 @@ the link endpoint.
 | `frame` | Length prefixes, message parts inside Noise messages, `blob/put` chunks |
 | `pairing` | Invite codes, pending invites, the simultaneous-dial rule |
 | `carrier` | `ssh`, `command`, `tcp` and carrier eggs, with their containment |
-| `endpoint` | `link.sock` beside `sock`, with the same directory rules |
+| `endpoint` | `link.sock` beside `sock`, with the same directory rules, or a private named pipe on Windows |
+| `pipe` | The named pipe only the current user can reach, which Windows uses in place of a Unix socket |
 
 ## Handshake
 

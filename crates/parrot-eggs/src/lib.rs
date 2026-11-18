@@ -5,16 +5,20 @@
 //! | --- | --- |
 //! | [`target`] | The `parrot` target: the fact `parrot=<version>` and the check of a target's files |
 //! | [`driver`] | `driver.kdl` |
+//! | [`build`] | Building a command egg's driver and putting it in its variant folder |
 //! | [`carrier`] | `carrier.kdl`, for carrier eggs |
 //! | [`probe`] | Probe scenarios, `probes/*.kdl` |
 //! | [`store`] | Installing into `<state_dir>/eggs`, packing, and loading |
+//! | [`signing`] | Signing a static registry |
 //! | [`schema`] | The JSON Schemas of the data files |
 
+pub mod build;
 pub mod carrier;
 pub mod driver;
 mod kdlx;
 pub mod probe;
 pub mod schema;
+pub mod signing;
 pub mod store;
 pub mod target;
 

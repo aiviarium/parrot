@@ -76,7 +76,7 @@ impl Eggs {
                 r.clone()
             } else {
                 let staged = tempfile::tempdir().map_err(|e| e.to_string())?;
-                publish_folder(&r, staged.path(), &self.target)?;
+                publish_folder(&r, staged.path(), &self.target, None)?;
                 let path = staged.path().to_path_buf();
                 held.push(staged);
                 path
@@ -95,27 +95,36 @@ impl Eggs {
         Ok((client, held))
     }
 
-    /// Installs a package, such as `aiviarium/claude`, `claude@^0.1` or `./eggs/claude`.
+    /// Installs packages, such as `aiviarium/claude`, `claude@^0.1` or `./eggs/claude`.
     /// Without `registries`, and with none in `hatchery.kdl`, the default registry is searched:
     /// `PARROT_EGGS_REGISTRY`, else [`crate::DEFAULT_REGISTRY`]. Returns `group/id version` for
     /// each package installed.
-    pub fn install(&self, spec: &str, registries: &[String]) -> Result<Vec<String>, String> {
-        let spec = Spec::parse(spec).map_err(|e| e.to_string())?;
+    pub fn install(&self, specs: &[String], registries: &[String]) -> Result<Vec<String>, String> {
+        let specs = specs
+            .iter()
+            .map(|s| Spec::parse(s).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
         let configured = self.state_dir.join("hatchery.kdl").is_file();
         let registries = if registries.is_empty() && !configured {
             vec![default_registry()]
         } else {
             registries.to_vec()
         };
+        // One client for every spec, so a folder registry is packed once and not once per spec.
         let (client, _held) = self.client(&registries)?;
         let dir = self.dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        let report = block_on(client.add(&spec, &dir)).map_err(|e| e.to_string())?;
-        Ok(report
-            .packages
-            .iter()
-            .map(|c| format!("{} {}", c.name, c.version))
-            .collect())
+        let mut out = Vec::new();
+        for spec in &specs {
+            let report = block_on(client.add(spec, &dir)).map_err(|e| e.to_string())?;
+            out.extend(
+                report
+                    .packages
+                    .iter()
+                    .map(|c| format!("{} {}", c.name, c.version)),
+            );
+        }
+        Ok(out)
     }
 
     /// Removes an installed package.
@@ -290,28 +299,20 @@ pub fn pack(dir: &Path, target: &ParrotTarget) -> Result<Vec<hatchery::Egg>, Str
 }
 
 /// Packs every package folder under `src` (or `src` itself, when it is one) and publishes the
-/// eggs into the static registry at `registry`. Returns `group/id version` for each.
-pub fn publish_folder(src: &Path, registry: &Path, target: &ParrotTarget) -> Result<Vec<String>, String> {
-    let mut folders = Vec::new();
-    if src.join("package.kdl").is_file() {
-        folders.push(src.to_path_buf());
-    } else {
-        let entries = std::fs::read_dir(src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
-        for e in entries.flatten() {
-            if e.path().join("package.kdl").is_file() {
-                folders.push(e.path());
-            }
-        }
-        folders.sort();
-    }
-    if folders.is_empty() {
-        return Err(format!("{} has no packages", src.display()));
-    }
+/// eggs into the static registry at `registry`, signed with `key` when one is given. Returns
+/// `group/id version` for each.
+pub fn publish_folder(
+    src: &Path,
+    registry: &Path,
+    target: &ParrotTarget,
+    key: Option<&crate::signing::SigningKey>,
+) -> Result<Vec<String>, String> {
+    let folders = crate::build::package_folders(src)?;
     std::fs::create_dir_all(registry).map_err(|e| format!("cannot create {}: {e}", registry.display()))?;
     let mut out = Vec::new();
     for folder in folders {
         for egg in pack(&folder, target)? {
-            let published = hatchery::publish(&egg, &hatchery::PublishTo::Dir(registry.to_path_buf()), None)
+            let published = hatchery::publish(&egg, &hatchery::PublishTo::Dir(registry.to_path_buf()), key)
                 .map_err(|e| format!("cannot publish {}: {e}", egg.file_name()))?;
             out.push(format!("{} {}", published.name, published.version));
         }
@@ -335,5 +336,50 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
                 .join("/");
             out.push((rel, bytes));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The in-repo data-only egg, whose publish needs no binary.
+    fn acp_egg() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp")
+    }
+
+    #[test]
+    fn a_signed_registry_lists_a_signature_over_the_egg() {
+        let key =
+            crate::signing::parse("ed25519:0707070707070707070707070707070707070707070707070707070707070707")
+                .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let published = publish_folder(&acp_egg(), dir.path(), &ParrotTarget::default(), Some(&key)).unwrap();
+        assert_eq!(published, ["aiviarium/acp 0.1.0"]);
+
+        let index = std::fs::read_to_string(dir.path().join("aiviarium/acp/index.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&index).unwrap();
+        let entry = &json["versions"]["0.1.0"];
+        let signature = entry["signature"].as_str().expect("a signature");
+        let message = hatchery::sign::message(
+            &hatchery::Name::parse("aiviarium/acp").unwrap(),
+            &hatchery::semver::Version::new(0, 1, 0),
+            "acp-0.1.0.egg",
+            entry["sha256"].as_str().expect("a checksum"),
+            &hatchery::Timestamp::parse(entry["published"].as_str().unwrap()).unwrap(),
+        );
+        assert_eq!(
+            hatchery::sign::verify(&key.verifying_key(), &message, signature),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn an_unsigned_registry_lists_no_signature() {
+        let dir = tempfile::tempdir().unwrap();
+        publish_folder(&acp_egg(), dir.path(), &ParrotTarget::default(), None).unwrap();
+        let index = std::fs::read_to_string(dir.path().join("aiviarium/acp/index.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&index).unwrap();
+        assert!(json["versions"]["0.1.0"]["signature"].is_null());
     }
 }

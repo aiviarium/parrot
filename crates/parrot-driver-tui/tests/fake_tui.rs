@@ -1,4 +1,4 @@
-//! The TUI driver against a scripted fake TUI (`tests/fake/fake-tui.sh`) and its profile.
+//! The TUI driver against a scripted fake TUI (`src/bin/fake-tui.rs`) and its profile.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +18,26 @@ fn fake(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The scripted TUI of this crate, which every OS can run.
+#[cfg(not(unix))]
+fn fake_tui() -> &'static str {
+    env!("CARGO_BIN_EXE_fake-tui")
+}
+
+/// The command that starts the fake TUI. On Unix the shell script is used, since its slow
+/// prompt reads raw input and takes Ctrl+C; on Windows the Rust binary draws the same screens
+/// without those scenarios.
+fn fake_command() -> Vec<String> {
+    #[cfg(unix)]
+    {
+        vec!["sh".into(), fake("fake-tui.sh").to_string_lossy().into_owned()]
+    }
+    #[cfg(not(unix))]
+    {
+        vec![fake_tui().into()]
+    }
+}
+
 struct Harness {
     driver: TuiDriver,
     updates: mpsc::UnboundedReceiver<Value>,
@@ -34,8 +54,7 @@ impl Harness {
     async fn start_with(trust: bool, adjust: impl FnOnce(&mut Config)) -> (Harness, Result<Value, String>) {
         let dir = tempfile::tempdir().unwrap();
         let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
-        let script = fake("fake-tui.sh").to_string_lossy().into_owned();
-        let mut config = Config::new("fake-tui", vec!["sh".into(), script], profile);
+        let mut config = Config::new("fake-tui", fake_command(), profile);
         config.guard = None;
         config.size = Size::new(12, 60);
         config.unrecognised_after = Duration::from_millis(800);
@@ -344,7 +363,7 @@ async fn agent_list_reports_tui_control() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
     let mut d = TuiDriver::new(
-        Config::new("fake-tui", vec!["sh".into()], profile),
+        Config::new("fake-tui", fake_command(), profile),
         DriverContext { updates: tx },
     );
     let r = d.call("agent/list", json!({})).await.unwrap();
@@ -378,8 +397,10 @@ async fn attachments_go_through_the_attach_action_and_frames_rebuild_items() {
         .await;
     let screen = h.screen().await;
     let text = screen["text"].as_str().unwrap();
+    // A long attachment path wraps inside the prompt, so compare with the wrapping flattened.
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        text.contains("Done: @") && text.contains("dot.png look"),
+        flat.contains("Done: @") && flat.contains("dot.png look"),
         "{screen}"
     );
 
@@ -428,7 +449,9 @@ fn mcp_is_injected_without_the_token_in_argv() {
     assert!(!claude.iter().chain(&codex).any(|a| a.contains("tok-made-up")));
 }
 
+#[cfg(unix)]
 #[tokio::test]
+// The shell fake reads raw input and takes Ctrl+C; the Windows fake does not.
 async fn a_prompt_while_working_steers_the_turn() {
     let (mut h, started) = Harness::start(false).await;
     started.unwrap();
@@ -468,7 +491,9 @@ async fn a_prompt_while_working_steers_the_turn() {
     h.stop().await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
+// The shell fake reads raw input and takes Ctrl+C; the Windows fake does not.
 async fn cancel_runs_the_interrupt_action() {
     let (mut h, started) = Harness::start(false).await;
     started.unwrap();
@@ -520,7 +545,9 @@ async fn profile_actions_are_offered_and_run() {
     h.stop().await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
+// The shell fake reads raw input and takes Ctrl+C; the Windows fake does not.
 async fn shadow_mode_reports_a_prompt_the_transcript_recorded_differently() {
     let correlate = parrot_proto::driver_data::parse(
         "correlate.kdl",

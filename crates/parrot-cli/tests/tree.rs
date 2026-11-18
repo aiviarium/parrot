@@ -2,6 +2,7 @@
 //! `claude`. A parent delegates to two children in worktrees, waits for their tasks and merges
 //! their branches, calling as the parent session's principal over the protocol.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

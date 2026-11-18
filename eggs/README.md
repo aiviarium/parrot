@@ -10,16 +10,16 @@ Each folder here is a Hatchery package for one agent. The runtime installs the `
 | --- | --- |
 | `<agent>/package.kdl` | The Hatchery manifest: `group aiviarium`, the agent's id, its version, and `targets { parrot { requires { parrot "^0.1" } } }` |
 | `<agent>/parrot/driver.kdl` | How the driver runs, which CLI versions it covers, and its data version |
-| `<agent>/parrot/options.kdl` | Option maps: roles, choices with semantic tags, `dependsOn` rules |
+| `<agent>/parrot/options.kdl` | Option maps with roles, choices with semantic tags, and `dependsOn` rules |
 | `<agent>/parrot/levels.kdl` | Permission levels and the tools each level allows (E4) |
 | `<agent>/parrot/limits.kdl` | Numbers the CLI imposes: `tool-timeout` is how many seconds it waits for one tool call. Calls into Parrot and approvals return before it |
-| `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source wins |
+| `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source is preferred |
 | `<agent>/parrot/profile.kdl` | The TUI profile, for agents with TUI control. This is the live copy |
 | `<agent>/parrot/shims/<dir>/` | Files that replace the ones above for a range of CLI versions |
 | `<agent>/parrot/variants/<os>-<arch>/` | The driver binary for one platform. Built, never committed |
 | `<agent>/parrot/probes/*.kdl` | Probe scenarios. They run against a real CLI to record transcripts, and never in CI |
 
-## driver.kdl
+## The driver file
 
 A driver is a built-in core of the runtime or a program in the egg. The Claude, Codex, pi, opencode and T3 eggs contain a program per platform. The ACP and TUI cores serve data-only eggs.
 
@@ -48,10 +48,10 @@ egg states the release line its data was checked against, such as the pi egg's
 | `driver "builtin" name=…` | A core built into the runtime: `acp` runs `parrot driver acp`, and `tui` runs the TUI core in the runtime |
 | `driver "command" { … }` | The runtime runs a program from the egg's `parrot` folder |
 | `run "path" args…` | The program when no variant matches, with its arguments. `{os}`, `{arch}` and `{exe}` are filled in |
-| `variant os=… arch=… run=…` | The program for one platform. The first match wins. Either key may be left out |
+| `variant os=… arch=… run=…` | The program for one platform. The first match is used. Either key may be left out |
 | `command "prog" "arg"…` | The CLI command, for the ACP and TUI cores |
 | `transcript "claude"`, `"codex"` or `"jsonl" dir=…` | The transcript the TUI core reads, by format. `dir=` replaces the format's own folder |
-| `mcp "mcp-config"` or `mcp "config-override"` | How the TUI core passes the `parrot` MCP server: `--mcp-config` JSON or `-c` overrides |
+| `mcp "mcp-config"` or `mcp "config-override"` | The form in which the TUI core passes the `parrot` MCP server to the CLI, as `--mcp-config` JSON or `-c` overrides |
 | `cli "name" versions=…` | The agent CLI and the semver range this data covers |
 | `data-version "1"` | The data version, reported as `driver.data` on the agent |
 | `controls "native" "tui"` | How the agent can be driven. The first is the default. `native` when left out |
@@ -127,10 +127,30 @@ The runtime installs eggs into `<state_dir>/eggs`. The runtime refuses an egg wh
 | `parrot eggs install ./eggs/acp` | Installs one package folder |
 | `parrot eggs list` | Lists each installed agent's egg |
 | `parrot eggs check [dir…]` | Checks package folders, or what the runtime would load |
-| `parrot eggs pack <dir…> --out DIR` | Writes `.egg` files. `--publish DIR` publishes them into a static registry instead |
+| `parrot eggs pack <dir…> --out DIR` | Writes `.egg` files. `--publish DIR` publishes them into a static registry instead, and `--sign-key-env VAR` signs them |
 | `parrot eggs remove aiviarium/claude` | Removes an installed package |
 
-`pack` leaves out a variant whose folder does not exist. `scripts/pack-eggs.sh` builds this machine's driver binaries, copies them into their variant folders and packs every egg into `target/eggs-registry`.
+`pack` leaves out a variant whose folder does not exist. `parrot eggs pack eggs --build --publish target/eggs-registry` builds this machine's driver binaries, copies them into their variant folders and packs every egg into `target/eggs-registry`. On another platform, add `--target <triple>`. A release builds once per platform and packs every variant together.
+
+## A signed registry
+
+A static registry can be signed, so an egg cannot change without the key. The default registry is not signed: it is served from this repository's GitHub Pages. If the repository has a `PARROT_EGG_SIGNING_KEY` secret, the release workflow signs the registry with it and prints the public key, which goes in the release notes.
+
+```bash
+hatchery keygen > keys.txt           # line 1 is the signing key, line 2 the public key
+PARROT_EGG_SIGNING_KEY="$(sed -n 1p keys.txt)" \
+  parrot eggs pack eggs --publish site/eggs --sign-key-env PARROT_EGG_SIGNING_KEY
+```
+
+The key is only ever in the environment. The command takes the variable's name, never the key. To check eggs against it, give the public key to the registry line in `<state_dir>/hatchery.kdl`:
+
+```kdl
+registries {
+  http "https://aiviarium.github.io/parrot/eggs" key="ed25519:…"
+}
+```
+
+A registry with a key refuses an egg whose signature is missing or wrong. Without a key, eggs install on the checksum in the index.
 
 The schemas of `driver.kdl` and the probes are in `spec/schema/driver-data/`, with examples in `spec/examples/driver-data/`.
 
@@ -155,7 +175,7 @@ parrot eggs check ./eggs/claude
 rookery plugin check ./eggs/claude
 ```
 
-## How a driver finds its data
+## A driver's data folder
 
 The runtime starts every driver with these variables:
 
@@ -169,7 +189,7 @@ A driver reads its files from `PARROT_DRIVER_DATA`. A driver binary may contain 
 
 ## The data files
 
-These shapes are the minimum. Owners may add fields, but not rename or remove these.
+These fields are the minimum. Owners may add fields, but not rename or remove these.
 
 ```kdl
 // options.kdl

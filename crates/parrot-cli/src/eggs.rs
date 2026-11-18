@@ -45,7 +45,8 @@ enum Command {
         #[arg(long)]
         state_dir: Option<PathBuf>,
     },
-    /// Packs package folders into eggs.
+    /// Packs package folders into eggs, building this platform's driver binaries first with
+    /// `--build`.
     Pack {
         #[arg(required = true)]
         dirs: Vec<PathBuf>,
@@ -55,6 +56,22 @@ enum Command {
         /// Publish into this static registry folder instead.
         #[arg(long)]
         publish: Option<PathBuf>,
+        /// Build each command egg's driver into its variant folder before packing.
+        #[arg(long)]
+        build: bool,
+        /// The target to build for; this machine's when left out.
+        #[arg(long, requires = "build")]
+        target: Option<String>,
+        /// Build with optimisations, as a release does.
+        #[arg(long, requires = "build")]
+        release: bool,
+        /// The workspace to run cargo in; the current directory when left out.
+        #[arg(long, requires = "build")]
+        workspace: Option<PathBuf>,
+        /// Sign the published eggs with the Ed25519 key in this environment variable, so a
+        /// registry can be checked against its public key. Never a command line argument.
+        #[arg(long, requires = "publish")]
+        sign_key_env: Option<String>,
     },
 }
 
@@ -74,10 +91,8 @@ pub async fn run(args: Args) -> Result<(), String> {
             state_dir,
         } => {
             let eggs = state(state_dir)?;
-            for spec in specs {
-                for line in eggs.install(&spec, &registries)? {
-                    println!("installed {line}");
-                }
+            for line in eggs.install(&specs, &registries)? {
+                println!("installed {line}");
             }
             Ok(())
         }
@@ -147,11 +162,40 @@ pub async fn run(args: Args) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Pack { dirs, out, publish } => {
+        Command::Pack {
+            dirs,
+            out,
+            publish,
+            build,
+            target: build_target,
+            release,
+            workspace,
+            sign_key_env,
+        } => {
             let target = ParrotTarget::default();
+            let key = match sign_key_env {
+                Some(var) => {
+                    let text = std::env::var(&var)
+                        .map_err(|_| format!("--sign-key-env {var}: the variable is not set"))?;
+                    Some(parrot_eggs::signing::parse(&text).map_err(|e| format!("{var}: {e}"))?)
+                }
+                None => None,
+            };
+            if build {
+                let opts = parrot_eggs::build::BuildOptions {
+                    target: build_target,
+                    release,
+                    workspace: workspace.unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?),
+                };
+                for dir in &dirs {
+                    for path in parrot_eggs::build::build_variants(dir, &opts)? {
+                        println!("built {}", path.display());
+                    }
+                }
+            }
             for dir in dirs {
                 if let Some(registry) = &publish {
-                    for line in parrot_eggs::store::publish_folder(&dir, registry, &target)? {
+                    for line in parrot_eggs::store::publish_folder(&dir, registry, &target, key.as_ref())? {
                         println!("published {line}");
                     }
                     continue;
@@ -164,6 +208,9 @@ pub async fn run(args: Args) -> Result<(), String> {
                         .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                     println!("{}", path.display());
                 }
+            }
+            if let Some(key) = &key {
+                println!("public key {}", parrot_eggs::signing::public_key(key));
             }
             Ok(())
         }

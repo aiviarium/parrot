@@ -39,7 +39,10 @@ mod tests {
                 std::fs::write(&path, &text).unwrap();
                 continue;
             }
-            let have = std::fs::read_to_string(&path).unwrap_or_default();
+            // A Windows checkout may hold the same file with CRLF; the schema itself is LF.
+            let have = std::fs::read_to_string(&path)
+                .unwrap_or_default()
+                .replace("\r\n", "\n");
             assert!(
                 have == text,
                 "{} is stale; run with PARROT_BLESS=1",

@@ -16,8 +16,10 @@ log() {
 
 idle() {
   printf '\033[2J\033[H'
-  printf 'Fake TUI 1.0\r\n%s\r\n\r\n? Type a prompt and press Enter' "$1"
-  printf '\033[3;1H> '
+  # The hint sits below several free rows: a typed attachment path is long and wraps, and it
+  # starts on row 3.
+  printf 'Fake TUI 1.0\r\n%s\r\n\r\n' "$1"
+  printf '\033[8;1H? Type a prompt and press Enter\033[3;1H> '
 }
 
 busy() {

@@ -1,6 +1,5 @@
 //! An out-of-process driver egg (`driver "command"`), installed and run end to end through
 //! `parrot serve`, through `parrot probe`, and with a harness version its data doesn't cover.
-#![cfg(unix)]
 
 mod common;
 
@@ -24,10 +23,11 @@ fn tiny_driver() -> &'static Path {
 /// and `driver.kdl` picks it by OS.
 fn tiny_package(root: &Path) -> PathBuf {
     let os = std::env::consts::OS;
+    let exe = std::env::consts::EXE_SUFFIX;
     let dir = root.join("tiny");
     let variant = dir.join("parrot/variants").join(os);
     std::fs::create_dir_all(&variant).unwrap();
-    std::fs::copy(tiny_driver(), variant.join("tiny-driver")).unwrap();
+    std::fs::copy(tiny_driver(), variant.join(format!("tiny-driver{exe}"))).unwrap();
     std::fs::create_dir_all(dir.join("parrot/probes")).unwrap();
     let files = [
         (
@@ -39,7 +39,7 @@ fn tiny_package(root: &Path) -> PathBuf {
         (
             "parrot/driver.kdl".into(),
             format!(
-                "driver \"command\" {{\n  variant os=\"{os}\" run=\"variants/{os}/tiny-driver\"\n}}\ncli \"tiny\" versions=\"^1.0\"\ndata-version \"3\"\n"
+                "driver \"command\" {{\n  variant os=\"{os}\" run=\"variants/{os}/tiny-driver{exe}\"\n}}\ncli \"tiny\" versions=\"^1.0\"\ndata-version \"3\"\n"
             ),
         ),
         ("parrot/greeting.txt".into(), format!("{GREETING}\n")),
@@ -67,12 +67,14 @@ fn ok(out: Output) -> String {
 /// A temporary state directory with the tiny egg installed.
 fn installed() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let src = tiny_package(dir.path());
+    // The working directory is the folder's parent and the spec is `./tiny`, because a Windows
+    // drive letter is not read as a path.
+    tiny_package(dir.path());
     let out = ok(Command::new(PARROT)
-        .args(["eggs", "install"])
-        .arg(&src)
+        .args(["eggs", "install", "./tiny"])
         .arg("--state-dir")
         .arg(dir.path().join("state"))
+        .current_dir(dir.path())
         .output()
         .unwrap());
     assert!(out.contains("installed example/tiny 1.0.0"), "{out}");
@@ -87,7 +89,7 @@ struct Serve {
 
 impl Serve {
     fn start(dir: &Path, cli_version: &str) -> Self {
-        let socket = dir.join("sock");
+        let socket = common::test_socket(dir);
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
             .arg(dir.join("state"))
@@ -97,7 +99,7 @@ impl Serve {
             .spawn()
             .expect("serve starts");
         let deadline = Instant::now() + WAIT;
-        while std::os::unix::net::UnixStream::connect(&socket).is_err() {
+        while common::connect_once(&socket).is_err() {
             assert!(Instant::now() < deadline, "serve never listened");
             std::thread::sleep(Duration::from_millis(50));
         }

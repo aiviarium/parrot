@@ -1,5 +1,6 @@
 //! `parrot serve` and `parrot connect` end to end over the local socket.
 #![cfg(unix)]
+// Connects to the runtime on a Unix socket.
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};

@@ -15,7 +15,7 @@ const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.PS1";
 
 /// Finds a bare program name the way the shell would, including the `.cmd` and `.ps1` shims that
 /// npm and bun install. A name with a directory is left to `CreateProcess`.
-fn resolve(program: &OsStr) -> Option<PathBuf> {
+pub(crate) fn resolve_program(program: &OsStr) -> Option<PathBuf> {
     let name = program.to_string_lossy();
     if name.contains('\\') || name.contains('/') {
         return None;
@@ -50,7 +50,8 @@ fn resolve_in(program: &OsStr, path: &OsStr, pathext: &OsStr) -> Option<PathBuf>
 }
 
 pub fn run(program: OsString, args: Vec<OsString>) -> std::io::Result<i32> {
-    let program = resolve(&program).unwrap_or_else(|| PathBuf::from(&program));
+    let program = resolve_program(&program).unwrap_or_else(|| PathBuf::from(&program));
+    let (program, args) = crate::script::prepare(program, args);
     // SAFETY: null attributes and name create an anonymous job; the handle lives until the guard
     // exits, when the system closes it and kills the job.
     let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };

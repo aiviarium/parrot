@@ -52,6 +52,9 @@ The runtime runs one driver process for each binding, plus short ones for `agent
 starts its CLI so that the CLI stops when the driver stops: a Rust driver can call
 `parrot_driver::bin::main`, which also answers `<exe> guard -- <cmd>`.
 
+On Windows a bare command name may resolve to the `.ps1` shim a package manager installed. Parrot
+runs such a script through `pwsh` or Windows PowerShell, because the OS cannot start it directly.
+
 ## CLI versions
 
 The egg's `cli "name" versions="…"` says which CLI versions its data covers. When a driver reports

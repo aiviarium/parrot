@@ -1,6 +1,7 @@
 //! Links through the real `parrot connect --link`: the `command` carrier runs it as a relay to a
 //! test link endpoint, and the Noise session runs end to end through it.
 #![cfg(unix)]
+// Needs a Unix socket listener and a private directory's mode.
 
 mod common;
 

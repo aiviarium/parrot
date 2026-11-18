@@ -40,6 +40,24 @@ fn listed(state: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// Runs `parrot` on a package folder. The working directory is its parent and the spec is
+/// `./<name>`, because a Windows drive letter is not read as a path.
+fn folder(args: &[&str], dir: &Path, state: &Path) -> Output {
+    let name = dir
+        .file_name()
+        .expect("a package folder has a name")
+        .to_string_lossy()
+        .into_owned();
+    Command::new(PARROT)
+        .args(args)
+        .arg(format!("./{name}"))
+        .arg("--state-dir")
+        .arg(state)
+        .current_dir(dir.parent().expect("a package folder has a parent"))
+        .output()
+        .expect("parrot runs")
+}
+
 fn entry<'a>(list: &'a [Value], agent: &str) -> &'a Value {
     list.iter()
         .find(|e| e["agent"] == agent)
@@ -99,7 +117,7 @@ fn installs_from_the_in_repo_registry() {
         Path::new(&data)
             .join("variants")
             .join(key)
-            .join("parrot-driver-claude")
+            .join(format!("parrot-driver-claude{}", std::env::consts::EXE_SUFFIX))
             .is_file()
     );
     ok(parrot(&["eggs", "check"], dir.path()));
@@ -179,14 +197,14 @@ fn refuses_an_egg_for_another_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let src = package(dir.path(), "later", "^9", &[]);
     let state = dir.path().join("state");
-    let out = parrot(&["eggs", "install", src.to_str().unwrap()], &state);
+    let out = folder(&["eggs", "install"], &src, &state);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("parrot"), "{err}");
 
     // An egg installed for an older runtime is refused when it is loaded.
     let src = package(dir.path(), "aged", "^0.1", &[]);
-    ok(parrot(&["eggs", "install", src.to_str().unwrap()], &state));
+    ok(folder(&["eggs", "install"], &src, &state));
     let installed = state.join("eggs/example/aged/package.kdl");
     let text = std::fs::read_to_string(&installed).unwrap().replace("^0.1", "^9");
     std::fs::write(&installed, text).unwrap();

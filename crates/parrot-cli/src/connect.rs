@@ -34,18 +34,12 @@ fn exit_with(result: std::io::Result<()>) -> ! {
     }
 }
 
-#[cfg(unix)]
 async fn run_link(sock: &std::path::Path) -> Result<(), String> {
     let path = parrot_link::endpoint::link_socket_path(sock);
     let stream = parrot_link::endpoint::connect_link_socket(&path)
         .await
         .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
     exit_with(relay(stream).await)
-}
-
-#[cfg(windows)]
-async fn run_link(_sock: &std::path::Path) -> Result<(), String> {
-    Err("connect --link is not supported on Windows yet".into())
 }
 
 /// `connect --link --fd <n>`: relays an inherited, bidirectional descriptor, such as one end of
@@ -86,7 +80,7 @@ async fn open(path: &std::path::Path) -> std::io::Result<tokio::net::UnixStream>
 
 #[cfg(windows)]
 async fn open(path: &std::path::Path) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
-    tokio::net::windows::named_pipe::ClientOptions::new().open(path)
+    parrot_link::pipe::connect_wait(path).await
 }
 
 /// Copies stdin to the stream and the stream to stdout. Ends when the runtime closes the stream;

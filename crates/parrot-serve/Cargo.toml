@@ -35,9 +35,6 @@ uuid.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
-
 [dev-dependencies]
 tempfile.workspace = true
 # A local HTTPS server for the push test; ureq already brings this rustls with ring.

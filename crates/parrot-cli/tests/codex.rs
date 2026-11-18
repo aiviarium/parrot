@@ -1,6 +1,7 @@
 //! End to end: a real `parrot serve`, the real Codex driver over a fake `codex app-server`, and a
 //! client on the local socket.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

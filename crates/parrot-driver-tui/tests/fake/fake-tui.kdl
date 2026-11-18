@@ -1,4 +1,4 @@
-// The profile of tests/fake/fake-tui.sh.
+// The profile of src/bin/fake-tui.rs.
 
 profile id="fake-tui" name="Fake TUI" unrecognised-after="1s"
 

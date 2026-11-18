@@ -1,5 +1,6 @@
 //! `parrot mcp` end to end: a harness on stdio, a fake runtime on a local socket.
 #![cfg(unix)]
+// Starts a Unix socket listener.
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};

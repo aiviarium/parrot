@@ -1,6 +1,7 @@
 //! Spec 40: every method of the spec answers as implemented or with `-32001`, never `-32601`;
 //! methods outside the spec answer `-32601`.
 #![cfg(unix)]
+// Unix only for now: these runtime tests have not run on Windows yet.
 
 mod common;
 

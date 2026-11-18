@@ -51,7 +51,7 @@ impl Process {
     /// Spawns `program` with `args` and extra `env`, in its own process group on Unix.
     ///
     /// A bare name is resolved first ([`crate::paths::resolve_cli`]) so that Windows finds the
-    /// `.cmd` or `.ps1` shim a package manager installed.
+    /// `.cmd` or `.ps1` shim a package manager installed, and a `.ps1` runs through PowerShell.
     pub fn spawn<I, S, E, K, V>(program: impl AsRef<OsStr>, args: I, env: E) -> std::io::Result<Self>
     where
         I: IntoIterator<Item = S>,
@@ -62,7 +62,10 @@ impl Process {
     {
         let program = program.as_ref();
         let resolved = crate::paths::resolve_cli_os(program);
-        let mut cmd = Command::new(resolved.as_deref().unwrap_or(Path::new(program)));
+        let args: Vec<std::ffi::OsString> = args.into_iter().map(|a| a.as_ref().to_owned()).collect();
+        let (program, args) =
+            parrot_guard::script::prepare(resolved.unwrap_or_else(|| Path::new(program).to_path_buf()), args);
+        let mut cmd = Command::new(&program);
         cmd.args(args)
             .envs(env)
             .stdin(Stdio::piped())
