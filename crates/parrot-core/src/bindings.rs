@@ -236,13 +236,24 @@ pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) 
                 if let Some(s) = cx.state.sessions.info.get_mut(&session) {
                     s.state = state;
                 }
-                cx.publish(
-                    Some(session.clone()),
-                    json!({ "type": "state", "state": state, "background": [] }),
-                );
-                sessions::changed(cx, &session);
+                // An idle that a queued prompt ends at once isn't shown; `running` follows.
+                let hidden = queue::sends_next(cx.state, &session);
+                if !hidden {
+                    cx.publish(
+                        Some(session.clone()),
+                        json!({ "type": "state", "state": state, "background": [] }),
+                    );
+                    sessions::changed(cx, &session);
+                }
                 if state == SessionState::Idle {
                     queue::on_idle(cx, &session);
+                }
+                if hidden {
+                    show_idle(
+                        cx,
+                        &session,
+                        json!({ "type": "state", "state": state, "background": [] }),
+                    );
                 }
             }
             crate::seeds::on_started(cx, &session, binding, true);
@@ -387,15 +398,22 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             if let Some(d) = detail {
                 u["detail"] = json!(d);
             }
-            cx.publish(sid, u);
-            if changed {
-                sessions::changed(cx, &session);
+            // An idle that a queued prompt ends at once isn't shown; `running` follows.
+            let hidden = queue::sends_next(cx.state, &session);
+            if !hidden {
+                cx.publish(sid, u.clone());
+                if changed {
+                    sessions::changed(cx, &session);
+                }
             }
             if *state == SessionState::Idle {
                 crate::tasks::on_idle(cx, &session);
                 crate::seeds::on_idle(cx, &session);
                 queue::on_idle(cx, &session);
                 crate::wakes::pump(cx, &session);
+            }
+            if hidden {
+                show_idle(cx, &session, u);
             }
         }
         DriverUpdateKind::Item { item } => {
@@ -520,6 +538,14 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
 }
 
 /// The driver process for a binding exited: `stopped` if a stop was asked for, else `lost`.
+/// Publishes a hidden idle after all if nothing was sent to end it.
+fn show_idle(cx: &mut Cx, session: &str, update: Value) {
+    if cx.state.sessions.info.get(session).map(|s| s.state) == Some(SessionState::Idle) {
+        cx.publish(Some(session.to_string()), update);
+        sessions::changed(cx, session);
+    }
+}
+
 pub fn exited(cx: &mut Cx, binding: &str, detail: &str) {
     let Some(b) = cx.state.bindings.info.get_mut(binding) else {
         return;
