@@ -19,6 +19,8 @@ pub trait Backend: Send + 'static {
     fn persist(&mut self, record: Value);
     /// Told of every timer; the executor schedules the `Input::Tick` itself.
     fn timer_at(&mut self, _at_ms: u64) {}
+    /// Call a driver without a binding (`agent/list`); answer with `Input::AgentReply`.
+    fn agent_call(&mut self, _agent: String, _call: u64, _method: String, _params: Value) {}
 }
 
 /// A backend that does nothing.
@@ -66,6 +68,14 @@ impl Backend for RecordingBackend {
     }
     fn timer_at(&mut self, at_ms: u64) {
         self.push(Effect::TimerAt { at_ms });
+    }
+    fn agent_call(&mut self, agent: String, call: u64, method: String, params: Value) {
+        self.push(Effect::AgentCall {
+            agent,
+            call,
+            method,
+            params,
+        });
     }
 }
 
@@ -159,6 +169,12 @@ impl Executor {
                 params,
             } => self.backend.driver_call(binding, call, method, params),
             Effect::StopBinding { binding } => self.backend.stop_binding(binding),
+            Effect::AgentCall {
+                agent,
+                call,
+                method,
+                params,
+            } => self.backend.agent_call(agent, call, method, params),
             Effect::Persist { record } => self.backend.persist(record),
             Effect::TimerAt { at_ms } => {
                 self.backend.timer_at(at_ms);

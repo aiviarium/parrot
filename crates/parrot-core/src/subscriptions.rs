@@ -95,10 +95,18 @@ pub fn flush(cx: &mut Cx) {
             .pointer("/item/id")
             .and_then(Value::as_str)
             .map(str::to_string);
-        if is_item && let (Some(s), Some(patch)) = (&session, update.get("item")) {
-            items::apply(cx.state, s, patch);
-        }
         let seq = cx.next_seq();
+        if is_item && let (Some(s), Some(patch), Some(i)) = (&session, update.get("item"), &item_id) {
+            let key = format!("{s}/{i}");
+            match items::apply(cx.state, s, patch, seq) {
+                Some(item) => {
+                    let created = items::created(cx.state, s, i);
+                    cx.persist(json!({ "op": "put", "kind": "item", "id": key,
+                        "value": { "session": s, "created": created, "item": item } }));
+                }
+                None => cx.persist(json!({ "op": "delete", "kind": "item", "id": key })),
+            }
+        }
         let mut record = json!({ "op": "append", "seq": seq, "at": cx.now_ms, "update": update });
         if let Some(s) = &session {
             record["session"] = json!(s);
@@ -152,8 +160,7 @@ pub fn subscribe_conn(cx: &mut Cx, conn: &str, target: Target) -> (String, Strin
     (id, cx.state.seq.to_string())
 }
 
-/// The `SessionSnapshot` JSON (spec 10.2). Requests, options, actions and usage are owned by other
-/// modules and start empty here.
+/// The `SessionSnapshot` JSON (spec 10.2).
 pub fn session_snapshot(state: &State, session: &str, n: usize) -> Value {
     let subscribers: Vec<Value> = state
         .subscriptions
@@ -171,15 +178,19 @@ pub fn session_snapshot(state: &State, session: &str, n: usize) -> Value {
             json!({ "id": s.conn, "name": name, "principal": crate::principals::principal_of(state, &s.conn) })
         })
         .collect();
-    json!({
+    let mut v = json!({
         "session": sessions::session_json(state, session),
         "items": items::newest(state, session, n),
-        "requests": [],
+        "requests": crate::requests::open_in(state, session),
         "queue": queue::queue_state(state, session),
-        "options": [],
-        "actions": [],
+        "options": crate::options::options_of(state, session),
+        "actions": crate::actions::actions_of(state, session),
         "subscribers": subscribers,
-    })
+    });
+    if let Some(u) = state.usage.by_session.get(session) {
+        v["usage"] = json!(u.total);
+    }
+    v
 }
 
 /// Handle a client method of this area.
@@ -226,19 +237,18 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
             result["snapshot"] = json!({ "sessions": [session_snapshot(cx.state, s, n)] });
         }
         (Watch::Index, None) => {
-            let summaries: Vec<Value> = cx
-                .state
-                .sessions
-                .by_id
-                .keys()
-                .filter(|s| sees(cx.state, conn, s))
-                .filter_map(|s| sessions::summary_json(cx.state, s))
-                .collect();
-            result["snapshot"] = json!({ "index": {
-                "sessions": summaries,
+            // The first page of what `session/list` returns; `next` continues it there (10.3).
+            let listed = sessions::list_page(cx.state, conn, &Default::default())
+                .unwrap_or_else(|_| json!({ "sessions": [] }));
+            let mut index = json!({
+                "sessions": listed["sessions"],
                 "agents": sessions::agents(cx.state),
                 "envs": [sessions::env_json(cx.state)],
-            }});
+            });
+            if let Some(next) = listed.get("next") {
+                index["next"] = next.clone();
+            }
+            result["snapshot"] = json!({ "index": index });
         }
     }
     // Reply before the replayed updates, so the client knows the subscription they name.

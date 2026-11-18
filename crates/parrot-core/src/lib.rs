@@ -29,10 +29,11 @@ pub mod wakes;
 
 pub mod directory;
 mod dispatch;
+pub mod restore;
 
 pub use clock::{Clock, Ids};
 pub use effect::Effect;
-pub use input::{BindingId, ConnId, Input, Peer};
+pub use input::{BindingId, ConnId, Input, Peer, Restore, Stored};
 pub use state::{CallOwner, State};
 
 use parrot_proto::rpc::RpcError;

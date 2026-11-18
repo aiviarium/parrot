@@ -86,11 +86,26 @@ impl Sim {
                 _ => None,
             })
             .expect("StartBinding");
+        self.started(&binding);
         self.driver(
             &binding,
             json!({ "type": "state", "state": "idle", "background": [] }),
         );
         (session, binding)
+    }
+
+    /// The backend's answer to `binding/start`, under a call id of its own.
+    fn started(&mut self, binding: &str) -> Vec<Effect> {
+        self.core.handle(Input::DriverReply {
+            binding: binding.into(),
+            call: u64::MAX,
+            result: Ok(json!({
+                "isolation": "none", "level": "write", "network": false,
+                "options": [{ "id": "model", "role": "model", "label": "Model",
+                    "schema": { "type": "string", "enum": ["fast", "deep"] }, "value": "fast", "applies": "next_turn" }],
+                "actions": [],
+            })),
+        })
     }
 }
 

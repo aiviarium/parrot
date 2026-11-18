@@ -30,6 +30,13 @@ impl Clock for ManualClock {
 #[derive(Debug, Default)]
 pub struct SeqIds(u64);
 
+impl SeqIds {
+    /// Ids that continue after `n`, for a simulated restart.
+    pub fn starting_at(n: u64) -> Self {
+        Self(n)
+    }
+}
+
 impl Ids for SeqIds {
     fn next(&mut self, prefix: &str) -> String {
         self.0 += 1;

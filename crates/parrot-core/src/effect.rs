@@ -39,6 +39,14 @@ pub enum Effect {
         method: String,
         params: Value,
     },
+    /// Run `agent`'s driver without a binding, call `method` on it and stop it; the answer comes
+    /// back as `Input::AgentReply` with the same `call` (spec 30.1 `agent/list`).
+    AgentCall {
+        agent: String,
+        call: u64,
+        method: String,
+        params: Value,
+    },
     /// Stop a binding's driver process after `binding/stop`.
     StopBinding { binding: BindingId },
     /// Append a record to the store (update log, intent log, projections).

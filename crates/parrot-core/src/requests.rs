@@ -73,6 +73,71 @@ pub fn derive_id(session: &str, binding: &str, kind: &str, key: &str) -> String 
     format!("req_{}", &hex[..26])
 }
 
+/// Persist and publish a request as it now stands.
+fn publish_request(cx: &mut Cx, id: &str) {
+    let Some(rec) = cx.state.requests.by_id.get(id) else {
+        return;
+    };
+    let session = rec.request.session.clone();
+    let stored = json!({ "request": rec.request, "binding": rec.binding, "key": rec.key });
+    let update = json!({ "type": "request", "request": rec.request });
+    cx.persist(json!({ "op": "put", "kind": "request", "id": id, "value": stored }));
+    cx.publish(Some(session), update);
+}
+
+/// Put back a request read from the store. After a restart the harness that raised it is gone:
+/// `connection` requests expire, `message` requests stay open (spec 34, Appendix E8).
+pub fn restore(cx: &mut Cx, id: &str, value: &Value) {
+    let Some(request) = value
+        .get("request")
+        .and_then(|r| serde_json::from_value::<Request>(r.clone()).ok())
+    else {
+        return;
+    };
+    let str_of = |k: &str| {
+        value
+            .get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let open = request.status == RequestStatus::Open;
+    let expires_ms = request.expires.as_deref().and_then(parse_rfc3339_ms);
+    let connection = request.answerable == Answerable::Connection;
+    cx.state.requests.by_id.insert(
+        id.to_string(),
+        RequestRecord {
+            request,
+            binding: str_of("binding"),
+            key: str_of("key"),
+            conn: None,
+            expires_ms,
+            pending: None,
+            answer_key: None,
+        },
+    );
+    if open && connection {
+        if let Some(rec) = cx.state.requests.by_id.get_mut(id) {
+            rec.request.status = RequestStatus::Expired;
+        }
+        publish_request(cx, id);
+    } else if open && let Some(at_ms) = expires_ms {
+        cx.emit(crate::Effect::TimerAt { at_ms });
+    }
+}
+
+/// The open requests of a session and its descendants (spec 10.2).
+pub fn open_in(state: &State, session: &str) -> Vec<Request> {
+    state
+        .requests
+        .by_id
+        .values()
+        .map(|r| &r.request)
+        .filter(|r| r.status == RequestStatus::Open && r.path.iter().any(|p| p == session))
+        .cloned()
+        .collect()
+}
+
 /// Tie the `connection` requests a session raises from now on to `conn`.
 pub fn note_connection(state: &mut State, session: &str, conn: &str) {
     state
@@ -147,6 +212,16 @@ fn answer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Rep
         return Reply::Now(Err(invalid(format!("unknown choice {choice}"))));
     }
     let by = principal_of(cx.state, conn);
+    let live = cx.state.bindings.info.get(&rec.binding).is_some_and(|b| {
+        matches!(
+            b.status,
+            parrot_proto::session::BindingStatus::Starting | parrot_proto::session::BindingStatus::Running
+        )
+    });
+    if rec.request.answerable == Answerable::Message && !live {
+        answer_by_message(cx, &p.request, p.answer, by, p.key);
+        return Reply::Now(Ok(json!({})));
+    }
     let reply_to = id.map(|id| (conn.to_string(), id.clone()));
     let later = reply_to.is_some();
     send_answer(cx, &p.request, p.answer, by, p.key, reply_to);
@@ -155,6 +230,46 @@ fn answer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Rep
     } else {
         Reply::Now(Ok(json!({})))
     }
+}
+
+/// Answer a `message` request whose harness is gone: the answer becomes the next prompt (spec 14,
+/// Appendix E4).
+fn answer_by_message(cx: &mut Cx, request: &str, answer: Answer, by: String, key: Option<String>) {
+    let Some(rec) = cx.state.requests.by_id.get_mut(request) else {
+        return;
+    };
+    let mut text = format!("Answer to \"{}\":", rec.request.title);
+    if let Some(c) = &answer.choice {
+        let label = rec
+            .request
+            .choices
+            .as_ref()
+            .and_then(|cs| cs.iter().find(|x| &x.id == c))
+            .map_or(c.as_str(), |x| x.label.as_str());
+        text.push_str(&format!(" {label}."));
+    }
+    for v in [&answer.value, &answer.input].into_iter().flatten() {
+        text.push_str(&format!("\n{v}"));
+    }
+    if let Some(m) = &answer.message {
+        text.push_str(&format!("\n{m}"));
+    }
+    rec.request.status = RequestStatus::Answered;
+    rec.request.answer = Some(answer);
+    rec.request.answered_by = Some(by.clone());
+    rec.answer_key = key;
+    let session = rec.request.session.clone();
+    publish_request(cx, request);
+    let origin = json!({ "kind": "runtime", "principal": by });
+    crate::queue::enqueue(
+        cx,
+        &session,
+        parrot_proto::prompt::QueueEntryKind::Prompt,
+        text,
+        origin,
+        json!({}),
+    );
+    crate::queue::dispatch(cx, &session);
 }
 
 /// Send an answer to the driver; the request resolves when the driver confirms.
@@ -209,9 +324,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                 rec.request.answered_by = Some(pending.by);
                 rec.answer_key = pending.key;
             }
-            let session = rec.request.session.clone();
-            let update = json!({ "type": "request", "request": rec.request });
-            cx.publish(Some(session), update);
+            publish_request(cx, &rid);
             if let Some((conn, id)) = pending.reply_to {
                 cx.reply(&conn, id, Ok(json!({})));
             }
@@ -256,8 +369,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
         }
         rec.expires_ms = req.expires.as_deref().and_then(parse_rfc3339_ms);
         rec.request = req;
-        let update = json!({ "type": "request", "request": rec.request });
-        cx.publish(Some(session), update);
+        publish_request(cx, &id);
         return;
     }
 
@@ -294,7 +406,8 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             answer_key: None,
         },
     );
-    cx.publish(Some(session), json!({ "type": "request", "request": req }));
+    let _ = session;
+    publish_request(cx, &id);
     if above {
         let answer = Answer {
             choice: deny,
@@ -318,9 +431,7 @@ fn expire(cx: &mut Cx, id: &str) {
         return;
     }
     rec.request.status = RequestStatus::Expired;
-    let session = rec.request.session.clone();
-    let update = json!({ "type": "request", "request": rec.request });
-    cx.publish(Some(session), update);
+    publish_request(cx, id);
 }
 
 /// Time passed: expire requests.
@@ -361,9 +472,7 @@ pub fn binding_gone(cx: &mut Cx, binding: &str) {
             && rec.request.status == RequestStatus::Open
         {
             rec.request.status = RequestStatus::Expired;
-            let session = rec.request.session.clone();
-            let update = json!({ "type": "request", "request": rec.request });
-            cx.publish(Some(session), update);
+            publish_request(cx, &id);
         }
     }
 }
