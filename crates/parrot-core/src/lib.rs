@@ -9,8 +9,11 @@ pub mod input;
 pub mod state;
 
 pub mod actions;
+pub mod agents;
 pub mod bindings;
+pub mod functions;
 pub mod items;
+pub mod links;
 pub mod options;
 pub mod principals;
 pub mod queue;
@@ -92,6 +95,18 @@ impl Cx<'_> {
     /// `seq`, persists and fans it out after the input is handled.
     pub fn publish(&mut self, session: Option<String>, update: Value) {
         self.state.outbox.push((session, update));
+    }
+    /// Run a workspace operation (`parrot-serve`'s `workspace_ops`); the answer comes back as
+    /// `Input::WorkspaceReply` and goes to `owner`'s `on_reply`.
+    pub fn call_workspace(&mut self, owner: CallOwner, op: &str, params: Value) -> u64 {
+        let call = self.next_call();
+        self.state.pending_calls.insert(call, owner);
+        self.emit(Effect::Workspace {
+            call,
+            op: op.to_string(),
+            params,
+        });
+        call
     }
     /// Append a store record (format: parrot-serve's backend_impl).
     pub fn persist(&mut self, record: Value) {

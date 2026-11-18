@@ -32,5 +32,9 @@ pub enum CallOwner {
     Requests,
     Options,
     Actions,
+    Tasks,
+    Seeds,
+    Links,
+    Functions,
     Sessions,
 }

@@ -1,8 +1,8 @@
 //! Routes every input to the module that owns it.
 
 use crate::{
-    CallOwner, Cx, Effect, Input, Reply, actions, bindings, options, principals, queue, requests, sessions,
-    subscriptions, usage,
+    CallOwner, Cx, Effect, Input, Reply, actions, agents, bindings, functions, links, options, principals,
+    queue, requests, seeds, sessions, subscriptions, tasks, usage,
 };
 use parrot_proto::driver::{DriverUpdate, DriverUpdateKind};
 use parrot_proto::open::Open;
@@ -27,7 +27,7 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
                 cx.emit(Effect::Reply { conn, id, result });
             }
         }
-        Input::ClientReply { .. } => {}
+        Input::ClientReply { conn, call, result } => functions::on_client_reply(cx, &conn, call, result),
         Input::DriverUpdate { binding, update } => driver_update(cx, &binding, update),
         Input::DriverReply {
             binding,
@@ -40,10 +40,16 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
             Some(CallOwner::Options) => options::on_reply(cx, call, result),
             Some(CallOwner::Actions) => actions::on_reply(cx, call, result),
             Some(CallOwner::Sessions) => sessions::on_reply(cx, call, result),
+            Some(owner) => reply_to(cx, owner, call, result),
             // The backend sends `binding/start` itself, under a call id the core never issued.
             None => bindings::start_reply(cx, &binding, result),
         },
-        Input::AgentReply { agent, call, result } => sessions::on_agent_reply(cx, &agent, call, result),
+        Input::AgentReply { agent, call, result } => agents::on_agent_reply(cx, &agent, call, result),
+        Input::WorkspaceReply { call, result } => {
+            if let Some(owner) = cx.state.pending_calls.remove(&call) {
+                reply_to(cx, owner, call, result);
+            }
+        }
         Input::Restore(restore) => crate::restore::restore(cx, restore),
         Input::DriverExited { binding, detail } => bindings::exited(cx, &binding, &detail),
         Input::Tick { .. } => {
@@ -52,6 +58,22 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         }
     }
     subscriptions::flush(cx);
+}
+
+/// Route a reply to the module that made the call.
+fn reply_to(cx: &mut Cx, owner: CallOwner, call: u64, result: Result<serde_json::Value, RpcError>) {
+    match owner {
+        CallOwner::Bindings => bindings::on_reply(cx, call, result),
+        CallOwner::Queue => queue::on_reply(cx, call, result),
+        CallOwner::Requests => requests::on_reply(cx, call, result),
+        CallOwner::Options => options::on_reply(cx, call, result),
+        CallOwner::Actions => actions::on_reply(cx, call, result),
+        CallOwner::Sessions => sessions::on_reply(cx, call, result),
+        CallOwner::Tasks => tasks::on_reply(cx, call, result),
+        CallOwner::Seeds => seeds::on_reply(cx, call, result),
+        CallOwner::Links => links::on_reply(cx, call, result),
+        CallOwner::Functions => functions::on_reply(cx, call, result),
+    }
 }
 
 fn call(
@@ -64,7 +86,11 @@ fn call(
     let area = method.split('/').next().unwrap_or("");
     match area {
         "initialize" | "token" => principals::call(cx, conn, id, method, params),
-        "session" | "agent" | "env" | "workspace" => sessions::call(cx, conn, id, method, params),
+        "session" | "env" | "workspace" => sessions::call(cx, conn, id, method, params),
+        "agent" => agents::call(cx, conn, id, method, params),
+        "task" => tasks::call(cx, conn, id, method, params),
+        "link" | "carrier" | "blob" => links::call(cx, conn, id, method, params),
+        "function" => functions::call(cx, conn, id, method, params),
         "queue" => queue::call(cx, conn, id, method, params),
         "subscribe" | "unsubscribe" | "item" => subscriptions::call(cx, conn, id, method, params),
         "request" => requests::call(cx, conn, id, method, params),

@@ -72,6 +72,11 @@ pub enum Input {
         call: u64,
         result: Result<Value, RpcError>,
     },
+    /// The answer to an `Effect::Workspace`.
+    WorkspaceReply {
+        call: u64,
+        result: Result<Value, RpcError>,
+    },
     /// What the store held at startup, fed in before any connection (spec 34).
     Restore(Restore),
 }

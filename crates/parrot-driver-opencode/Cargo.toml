@@ -1,0 +1,28 @@
+[package]
+name = "parrot-driver-opencode"
+description = "The opencode driver over its HTTP server, with a fake opencode for tests"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "fake-opencode"
+path = "src/bin/fake-opencode.rs"
+test = false
+
+[dependencies]
+parrot-proto.workspace = true
+parrot-driver.workspace = true
+parrot-guard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

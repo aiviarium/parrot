@@ -1,12 +1,15 @@
 //! The parrot command: serve, connect, driver, guard, conform, mcp.
 
+mod acp;
 mod client;
 mod conform;
 mod connect;
 mod driver;
+mod eggs;
 mod guard;
 mod link;
 mod mcp;
+mod probe;
 mod serve;
 
 use clap::{Parser, Subcommand};
@@ -59,6 +62,12 @@ enum Command {
     Mcp(mcp::Args),
     /// Pairs with other runtimes and manages links.
     Link(link::Args),
+    /// Installs, lists and checks driver eggs.
+    Eggs(eggs::Args),
+    /// Runs a probe scenario against a real CLI and records what it emits.
+    Probe(probe::Args),
+    /// Serves a runtime session as an ACP agent on standard input and output.
+    Acp(acp::Args),
     #[command(flatten)]
     Client(client::Command),
 }
@@ -71,6 +80,9 @@ fn main() {
         Command::Mcp(args) => block_on(mcp::run(args)),
         Command::Link(args) => block_on(link::run(args)),
         Command::Client(command) => block_on(client::run(command)),
+        Command::Eggs(args) => block_on(eggs::run(args)),
+        Command::Probe(args) => block_on(probe::run(args)),
+        Command::Acp(args) => block_on(acp::run(args)),
         Command::Serve { state_dir, ws } => block_on(serve::run(state_dir, ws)),
         Command::Connect { socket, link } => block_on(connect::run(socket, link)),
         Command::Driver { name } => block_on(driver::run(name)),

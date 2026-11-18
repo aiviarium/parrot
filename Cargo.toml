@@ -22,10 +22,16 @@ parrot-driver = { path = "crates/parrot-driver" }
 parrot-driver-claude = { path = "crates/parrot-driver-claude" }
 parrot-driver-codex = { path = "crates/parrot-driver-codex" }
 parrot-driver-tui = { path = "crates/parrot-driver-tui" }
+parrot-driver-acp = { path = "crates/parrot-driver-acp" }
+parrot-driver-pi = { path = "crates/parrot-driver-pi" }
+parrot-driver-opencode = { path = "crates/parrot-driver-opencode" }
+parrot-driver-t3 = { path = "crates/parrot-driver-t3" }
+parrot-eggs = { path = "crates/parrot-eggs" }
 parrot-workspace = { path = "crates/parrot-workspace" }
 parrot-mcp = { path = "crates/parrot-mcp" }
 parrot-link = { path = "crates/parrot-link" }
 parrot-conform = { path = "crates/parrot-conform" }
+kdl = { version = "6.7", default-features = false, features = ["span"] }
 schemars = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 snow = "0.10"

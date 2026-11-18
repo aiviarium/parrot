@@ -47,6 +47,9 @@ pub enum Effect {
         method: String,
         params: Value,
     },
+    /// Run a workspace operation, such as creating a worktree or recording a checkpoint; the
+    /// answer comes back as `Input::WorkspaceReply` with the same `call`.
+    Workspace { call: u64, op: String, params: Value },
     /// Stop a binding's driver process after `binding/stop`.
     StopBinding { binding: BindingId },
     /// Append a record to the store (update log, intent log, projections).
