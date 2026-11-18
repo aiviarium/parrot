@@ -1,7 +1,7 @@
 # parrot-driver-tui
 
 TUI control for the Parrot runtime. The driver runs an agent CLI on a PTY and reads each settled screen
-through a TUI profile. It answers the runtime's driver calls with keys.
+through a TUI profile. It answers the driver calls of the runtime with keys.
 
 | Call | What the driver does |
 | --- | --- |

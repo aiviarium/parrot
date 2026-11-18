@@ -4,6 +4,7 @@ pub mod data;
 pub mod driver;
 pub mod fake;
 pub mod frame;
+pub mod history;
 pub mod input;
 pub mod mapping;
 pub mod wire;

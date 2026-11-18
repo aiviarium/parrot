@@ -269,6 +269,11 @@ impl MapState {
         }
     }
 
+    /// The key of the latest turn, running or not.
+    pub fn last_turn_key(&self) -> Option<String> {
+        (self.turns > 0).then(|| format!("turn-{}", self.turns))
+    }
+
     fn turn_key(&self) -> Option<String> {
         self.turn.as_ref().map(|t| t.key.clone())
     }

@@ -353,7 +353,7 @@ async fn attachments_and_context_reach_codex() {
     let agents = c.call("agent/list", json!({})).await;
     assert_eq!(
         agents["agents"][0]["features"]["attachments"]["kinds"],
-        json!(["image", "file"])
+        json!(["image", "audio", "file"])
     );
     let r = c
         .call(

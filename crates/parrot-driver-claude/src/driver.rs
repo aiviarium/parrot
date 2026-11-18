@@ -10,14 +10,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
-    BindingAnswerParams, BindingCancelParams, BindingCancelResult, BindingOptionsParams,
-    BindingOptionsResult, BindingPromptParams, BindingPromptResult, BindingRef, BindingStart,
-    BindingStartResult, DriverUpdate, DriverUpdateKind, McpInjection,
+    BindingAnswerParams, BindingCancelParams, BindingCancelResult, BindingForkParams, BindingForkResult,
+    BindingOptionsParams, BindingOptionsResult, BindingPromptParams, BindingPromptResult, BindingRef,
+    BindingStart, BindingStartResult, DriverUpdate, DriverUpdateKind, HistoryDiscoverParams,
+    HistoryReadParams, McpInjection,
 };
 use parrot_proto::open::Open;
 use parrot_proto::option::PermissionLevel;
 use parrot_proto::principal::Isolation;
 use parrot_proto::rpc::{Message, Notification, Response, RpcError};
+use parrot_proto::session::{Ref, RefStrength};
 use parrot_proto::state::State;
 use parrot_proto::subscribe::NoticeLevel;
 use serde::de::DeserializeOwned;
@@ -29,7 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::data::{data, load_error};
 use crate::mapping::MapState;
 use crate::wire::{self, ClaudeIn, ClaudeInMsg, ControlRequest, ControlRequestBody, Extra, User};
-use crate::{frame, input};
+use crate::{frame, history, input};
 
 /// The variable that names the `claude` binary.
 pub const CLAUDE_BIN_ENV: &str = "PARROT_CLAUDE_BIN";
@@ -79,6 +81,8 @@ struct Driver {
     config: Config,
     out: mpsc::UnboundedSender<String>,
     bindings: Mutex<HashMap<String, Arc<Binding>>>,
+    /// Sessions `binding/fork` returned, which the next start resumes as a fork.
+    forks: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Serves the driver protocol on `input` and `output` until `input` ends, then ends every binding.
@@ -100,6 +104,7 @@ where
         config,
         out,
         bindings: Mutex::default(),
+        forks: Mutex::default(),
     });
     let mut reader = BufReader::new(input).lines();
     while let Some(line) = reader.next_line().await? {
@@ -173,6 +178,42 @@ impl Driver {
                 agents: vec![agent()],
             })),
             "binding/start" => self.start(params(p)?).await,
+            "binding/fork" => {
+                let p: BindingForkParams = params(p)?;
+                let b = self.binding(&p.binding)?;
+                let state = b.state.lock().unwrap();
+                if p.at.is_some()
+                    && p.at != state.turn.as_ref().map(|t| t.key.clone())
+                    && p.at != state.last_turn_key()
+                {
+                    return Err(RpcError::new(-32001, "Claude Code forks only at the latest turn"));
+                }
+                let id = state
+                    .session_id
+                    .clone()
+                    .ok_or_else(|| RpcError::new(-32004, "the session has no harness id yet"))?;
+                self.forks.lock().unwrap().insert(id.clone());
+                Ok(to_value(&BindingForkResult {
+                    reference: Ref {
+                        id,
+                        strength: RefStrength::Strong,
+                    },
+                }))
+            }
+            "history/discover" => {
+                let p: HistoryDiscoverParams = params(p)?;
+                let root = history::projects_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                Ok(to_value(&history::discover(&root, &p)))
+            }
+            "history/read" => {
+                let p: HistoryReadParams = params(p)?;
+                let root = history::projects_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let path = history::find(&root, &p.reference.id)
+                    .ok_or_else(|| RpcError::new(-32602, format!("no transcript for {}", p.reference.id)))?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| RpcError::new(-32603, format!("cannot read the transcript: {e}")))?;
+                Ok(to_value(&history::read(&text, p.cursor.as_deref())))
+            }
             "binding/prompt" => {
                 let p: BindingPromptParams = params(p)?;
                 let b = self.binding(&p.binding)?;
@@ -318,6 +359,9 @@ impl Driver {
         .collect();
         if let Some(r) = &start.resume {
             args.extend(["--resume".into(), r.id.clone().into()]);
+            if self.forks.lock().unwrap().remove(&r.id) {
+                args.push("--fork-session".into());
+            }
         }
         let model = start
             .options
@@ -584,6 +628,8 @@ pub fn agent() -> Agent {
     features.insert("usage".into(), json!({"cost": true, "context": true}));
     features.insert("attachments".into(), input::feature());
     features.insert("functions.mcp".into(), json!({}));
+    features.insert("session.history".into(), json!({}));
+    features.insert("session.fork".into(), json!({"at": ["turn"]}));
     Agent {
         id: "claude".into(),
         env: String::new(),
@@ -616,7 +662,12 @@ pub fn agent() -> Agent {
 
 /// The current time in RFC 3339, UTC, to the millisecond.
 pub fn now() -> String {
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    rfc3339(SystemTime::now())
+}
+
+/// `t` in RFC 3339, UTC, to the millisecond.
+pub fn rfc3339(t: SystemTime) -> String {
+    let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Civil date from days since the epoch (Howard Hinnant's algorithm).

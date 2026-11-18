@@ -6,6 +6,7 @@
 //! | image with data | `image` with a `data:` URL |
 //! | image at an `https` URL | `image` with the URL |
 //! | image at a local path or `file://` URL | `localImage` |
+//! | audio, the same ways | `audio` or `localAudio` |
 //! | any other file at a local path | `mention` of the path |
 //! | text file with data | `text`, in a `<file>` element |
 //! | other file with data | written under the temporary directory, then a `mention` |
@@ -79,16 +80,25 @@ fn spill_path(message: &str, name: &str) -> PathBuf {
 fn attachment(message: &str, a: &Attachment, texts: &mut Vec<String>) -> Result<Option<Value>, String> {
     let t = a.media_type.as_str();
     let image = t.starts_with("image/");
+    let audio = t.starts_with("audio/");
+    // Images and audio share their shapes: an inline URL, or a local path.
+    let (inline, local) = if audio {
+        ("audio", "localAudio")
+    } else {
+        ("image", "localImage")
+    };
     if let Some(uri) = a.uri.as_deref() {
         if let Some(path) = local_path(uri) {
-            return Ok(Some(if image {
-                json!({"type": "localImage", "path": path})
+            return Ok(Some(if image || audio {
+                json!({"type": local, "path": path})
             } else {
                 json!({"type": "mention", "name": a.name, "path": path})
             }));
         }
-        if image && (uri.starts_with("https://") || uri.starts_with("http://") || uri.starts_with("data:")) {
-            return Ok(Some(json!({"type": "image", "url": uri})));
+        if (image || audio)
+            && (uri.starts_with("https://") || uri.starts_with("http://") || uri.starts_with("data:"))
+        {
+            return Ok(Some(json!({"type": inline, "url": uri})));
         }
         if a.data.is_none() {
             return Err(format!("Codex can't fetch {uri}"));
@@ -97,9 +107,9 @@ fn attachment(message: &str, a: &Attachment, texts: &mut Vec<String>) -> Result<
     let Some(data) = &a.data else {
         return Err("it has neither data nor a URI".into());
     };
-    if image {
+    if image || audio {
         return Ok(Some(
-            json!({"type": "image", "url": format!("data:{t};base64,{data}")}),
+            json!({"type": inline, "url": format!("data:{t};base64,{data}")}),
         ));
     }
     let bytes = STANDARD
@@ -145,7 +155,7 @@ pub fn input(p: &BindingPromptParams) -> Input {
 /// The `attachments` agent feature (spec 6).
 pub fn feature() -> Value {
     json!({
-        "kinds": ["image", "file"],
+        "kinds": ["image", "audio", "file"],
         "types": ["image/*", "text/*", "*/*"],
         "uri": ["https", "http", "file", "data"],
         "context": true,
@@ -196,6 +206,7 @@ mod tests {
                     None,
                     Some("https://example.test/far.pdf"),
                 ),
+                att("note.wav", "audio/wav", None, Some("/work/note.wav")),
             ]),
             steer: false,
         };
@@ -224,6 +235,10 @@ mod tests {
         let spilled = i.items[5]["path"].as_str().unwrap();
         assert_eq!(std::fs::read(spilled).unwrap(), b"%PDF-");
         std::fs::remove_dir_all(std::path::Path::new(spilled).parent().unwrap()).unwrap();
+        assert_eq!(
+            i.items[6],
+            json!({"type": "localAudio", "path": "/work/note.wav"})
+        );
         assert_eq!(i.skipped.len(), 1);
         assert_eq!(i.skipped[0].0, "far.pdf");
     }

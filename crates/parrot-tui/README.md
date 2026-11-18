@@ -65,7 +65,7 @@ A profile is a KDL file with these top-level nodes. The profiles for Claude Code
 | `hook` | A function the host provides as a `Tagger`, for what rules cannot express |
 
 Scalar keys are properties, and tables are child nodes. A list is a node with several arguments,
-or a node repeated once per element. Write `(array)` before a list that has a single element,
+or a node repeated once per element. Write `(array)` before a list that has one element,
 such as `(array)role "dialog"`. The keys below keep their names.
 `spec/schema/driver-data/profile.schema.json` is the schema.
 
