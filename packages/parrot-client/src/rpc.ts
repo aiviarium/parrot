@@ -1,4 +1,4 @@
-import type { Message, Response } from "./schema"
+import type { EnvelopeResponse, Message } from "./schema"
 import type { Transport } from "./transport"
 
 /** A JSON-RPC error the runtime sent back, or one about the connection itself. */
@@ -118,10 +118,10 @@ export class Connection {
       }
       return
     }
-    this.#settle(message as Response)
+    this.#settle(message as EnvelopeResponse)
   }
 
-  #settle(response: Response): void {
+  #settle(response: EnvelopeResponse): void {
     if (response === null || typeof response !== "object" || !("id" in response)) return
     const id = typeof response.id === "number" ? response.id : Number(response.id)
     const pending = this.#pending.get(id)
