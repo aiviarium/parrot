@@ -1,5 +1,5 @@
 {
-  "name": "parrot",
+  "name": "@aiviarium/parrot",
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
