@@ -1,0 +1,14 @@
+{"fixture": {"scenario": "interrupt", "about": "session/cancel interrupts the running turn and pauses the queue."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {"session": "$id:session", "text": "Count slowly."}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"message": "$id:msg", "disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "item", "item": {"id": "$id:reply", "kind": "assistant"}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "session/cancel", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"interrupted": true, "queued": 0}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "turn", "turn": {"status": "interrupted"}}}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"check": {"projection": {"queue": true, "session": "$id:session"}, "expect": {"paused": true, "entries": []}}}

@@ -1,0 +1,19 @@
+{"fixture": {"scenario": "bash-allowed", "about": "A prompt with delivery queue waits while a turn runs, shows in the queue, and can be removed."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {"session": "$id:session", "text": "Run ls."}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"message": "$id:msg", "disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"subscription": "$id:sub", "seq": "$any", "at": "$time", "session": "$id:session", "update": {"type": "request", "request": {"id": "$id:req", "session": "$id:session", "kind": "approval", "status": "open"}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "session/prompt", "params": {"session": "$id:session", "text": "Then say bye.", "delivery": "queue"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"message": "$id:msg2", "disposition": "queued", "queued": "$id:entry"}}}
+{"check": {"projection": {"queue": true, "session": "$id:session"}, "expect": {"paused": false, "entries": [{"id": "$id:entry", "text": "Then say bye.", "kind": "prompt"}]}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "queue/remove", "params": {"session": "$id:session", "id": "$id:entry"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {}}}
+{"check": {"projection": {"queue": true, "session": "$id:session"}, "expect": {"paused": false, "entries": []}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 6, "method": "request/answer", "params": {"request": "$id:req", "answer": {"choice": "allow"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 6, "result": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "turn", "turn": {"status": "completed"}}}}}
+{"check": {"projection": {"items": {"kind": "user"}, "session": "$id:session"}, "expect": [{"id": "$id:msg"}, {"id": "$id:msg2", "removed": true}]}}

@@ -1,0 +1,7 @@
+{"fixture": {"about": "The handshake, agent/list and an unknown method."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "runtime", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1, "peer": {"kind": "driver"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "agent/list", "params": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"agents": "$any"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "x.parrot/nothing", "params": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "error": {"code": -32601}}}

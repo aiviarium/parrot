@@ -1,0 +1,9 @@
+{"fixture": {"about": "A call before initialize fails with -32010; initialize answers with the protocol, runtime and connection."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "session/list", "params": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "error": {"code": -32010}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"protocol": 1, "peer": {"kind": "runtime"}, "runtime": {"id": "$id:runtime", "env": "$id:env"}, "connection": {"id": "$id:conn", "principal": "$any", "scopes": "$any"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "x.parrot/nothing", "params": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "error": {"code": -32601}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "agent/list", "params": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"agents": "$any"}}}

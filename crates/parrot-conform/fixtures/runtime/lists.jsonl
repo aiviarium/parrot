@@ -1,0 +1,12 @@
+{"fixture": {"scenario": "text-turn", "about": "queue/list, option/list and action/list (E8) answer for a running session."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "queue/list", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"queue": {"paused": false, "entries": []}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "option/list", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"options": "$any"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "action/list", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {"actions": "$any"}}}

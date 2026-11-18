@@ -1,0 +1,17 @@
+{"fixture": {"scenario": "text-turn", "about": "A prompt answered with streamed text: the harness replies \"Hello there.\" and ends the turn."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "runtime", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1, "peer": {"kind": "driver"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "binding/start", "params": {"session": "ses_conform", "binding": "bnd_conform", "agent": "$agent", "workspace": "$dir", "cwd": "$dir", "options": {}, "control": "native", "deny": []}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"isolation": "$any", "level": "$any", "network": "$any", "options": "$any", "actions": "$any"}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "binding/prompt", "params": {"binding": "bnd_conform", "message": "msg_conform_1", "text": "Say hello.", "steer": false}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"binding": "bnd_conform", "update": {"type": "turn", "turn": {"id": "$id:turn", "status": "running"}}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"binding": "bnd_conform", "update": {"type": "turn", "turn": {"id": "$id:turn", "status": "completed"}}}}}
+{"check": {"projection": {"items": {"kind": "user"}, "binding": "bnd_conform"}, "expect": [{"id": "msg_conform_1", "text": "Say hello."}]}}
+{"check": {"projection": {"items": {"kind": "assistant"}, "binding": "bnd_conform"}, "expect": [{"id": "$id:reply", "turn": "$id:turn", "text": "Hello there.", "streaming": false}]}}
+{"check": {"projection": {"turns": true, "binding": "bnd_conform"}, "expect": [{"id": "$id:turn", "status": "completed", "input": "msg_conform_1"}]}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 9, "method": "binding/stop", "params": {"binding": "bnd_conform"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 9, "result": {}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "stopped"}}

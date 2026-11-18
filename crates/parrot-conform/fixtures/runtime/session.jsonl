@@ -1,0 +1,19 @@
+{"fixture": {"scenario": "text-turn", "about": "session/new starts a binding and subscribes the caller; list, get, a second subscription's snapshot and stop agree."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/list", "params": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"sessions": [{"id": "$id:session", "state": "idle", "kind": "root"}]}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "session/get", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"session": {"id": "$id:session", "state": "idle", "workspace": "$id:workspace"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "subscribe", "params": {"target": {"session": "$id:session"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {"subscription": "$id:sub2", "head": "$any", "snapshot": {"sessions": [{"session": {"id": "$id:session", "state": "idle"}, "items": [], "requests": [], "queue": {"paused": false, "entries": []}}]}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 6, "method": "unsubscribe", "params": {"subscription": "$id:sub2"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 6, "result": {}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 7, "method": "session/get", "params": {"session": "ses_conform_missing"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 7, "error": {"code": -32002}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 8, "method": "session/stop", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 8, "result": {}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "stopped"}}
