@@ -4,7 +4,10 @@ option "model" role="model" label="Model" applies="now" default="default" {
 }
 option "effort" role="effort" label="Thinking" applies="now" default="off" {
   choice "off" label="Off"
+  choice "minimal" label="Minimal"
   choice "low" label="Low"
   choice "medium" label="Medium"
   choice "high" label="High"
+  choice "xhigh" label="Extra high"
+  choice "max" label="Max"
 }

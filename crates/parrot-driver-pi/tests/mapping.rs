@@ -193,6 +193,79 @@ fn an_error_ends_the_turn_failed() {
 }
 
 #[test]
+fn a_compaction_end_is_the_one_place_a_compaction_item_comes_from() {
+    let mut s = state();
+    let updates = step(
+        &mut s,
+        json!({"type": "compaction_end", "reason": "manual", "aborted": false, "willRetry": false,
+            "result": {"summary": "Short.", "tokensBefore": 900, "estimatedTokensAfter": 120}}),
+    );
+    let item = updates.iter().find(|u| u["type"] == "item").unwrap();
+    assert_eq!(item["item"]["kind"], "compaction");
+    assert_eq!(item["item"]["set"]["trigger"], "manual");
+    assert_eq!(item["item"]["set"]["tokensAfter"], 120);
+
+    // An automatic one is marked as such, and a refusal is a notice rather than an item.
+    let updates = step(
+        &mut s,
+        json!({"type": "compaction_end", "reason": "threshold", "result": {"summary": "Short."}}),
+    );
+    let item = updates.iter().find(|u| u["type"] == "item").unwrap();
+    assert_eq!(item["item"]["set"]["trigger"], "auto");
+
+    let updates = step(
+        &mut s,
+        json!({"type": "compaction_end", "reason": "manual", "aborted": false, "willRetry": false,
+            "errorMessage": "Compaction failed: Already compacted"}),
+    );
+    assert!(updates.iter().all(|u| u["type"] != "item"));
+    let notice = updates.iter().find(|u| u["type"] == "notice").unwrap();
+    assert_eq!(notice["code"], "compaction_failed");
+    assert!(notice["text"].as_str().unwrap().contains("Already compacted"));
+}
+
+#[test]
+fn a_thinking_level_change_moves_the_effort_option() {
+    let mut s = state();
+    s.thinking = vec!["minimal".into(), "low".into(), "high".into()];
+    let updates = step(&mut s, json!({"type": "thinking_level_changed", "level": "low"}));
+    let options = updates.iter().find(|u| u["type"] == "options").unwrap();
+    let effort = options["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == "effort")
+        .unwrap();
+    assert_eq!(effort["value"], "low");
+    // The same level twice changes nothing.
+    let again = step(&mut s, json!({"type": "thinking_level_changed", "level": "low"}));
+    assert!(again.iter().all(|u| u["type"] != "options"));
+    let updates = step(&mut s, json!({"type": "thinking_level_changed", "level": "off"}));
+    let options = updates.iter().find(|u| u["type"] == "options").unwrap();
+    assert_eq!(options["options"][1]["value"], serde_json::Value::Null);
+}
+
+#[test]
+fn an_extension_crash_and_a_retry_are_notices() {
+    let mut s = state();
+    let updates = step(
+        &mut s,
+        json!({"type": "extension_error", "extensionPath": "/work/demo/.pi/extensions/demo.ts", "event": "tool_call", "error": "boom"}),
+    );
+    let notice = updates.iter().find(|u| u["type"] == "notice").unwrap();
+    assert_eq!(notice["code"], "extension_error");
+    assert!(notice["text"].as_str().unwrap().contains("demo.ts"));
+
+    let updates = step(
+        &mut s,
+        json!({"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "529 overloaded"}),
+    );
+    let notice = updates.iter().find(|u| u["type"] == "notice").unwrap();
+    assert_eq!(notice["code"], "retry");
+    assert_eq!(notice["level"], "info");
+}
+
+#[test]
 fn a_handled_prompt_starts_no_turn() {
     let mut s = state();
     let params = parrot_proto::driver::BindingPromptParams {
