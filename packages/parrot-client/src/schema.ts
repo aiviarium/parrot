@@ -269,13 +269,12 @@ export type BindingStatus = "starting" | "running" | "stopped" | "lost" | "faile
 
 export type BindingVia = "new" | "resume" | "adopt" | "fork" | "bundle"
 
-/** One chunk of a transfer over a link, at most 1 MiB (E9). */
+/** One chunk of a transfer between runtimes, at most 1 MiB (spec 24.2, E9). */
 export interface BlobPutParams {
   transfer: string
   index: number
-  /** Base64. */
   data: string
-  last: boolean
+  last?: boolean | null
 }
 
 export interface Budget {
@@ -297,22 +296,26 @@ export type Caller = "model" | "script"
 export interface CarrierInfo {
   kind: string
   title: string
+  /** The JSON Schema of the carrier's target. */
   target: unknown
   listens: boolean
-  containment: string
+  containment: Containment
   maxMessage: number
 }
+
+export type CarrierListParams = Record<string, unknown>
 
 export interface CarrierListResult {
   carriers: CarrierInfo[]
 }
 
-/** How a runtime reaches its peer. */
+/** How a runtime reaches a peer. */
 export interface CarrierRef {
   /** `ssh`, `command`, `tcp`, or a carrier egg's name. */
   kind: string
   /** Validated against the carrier's target schema. */
   target: Record<string, unknown>
+  /** Tried in order when this one fails. */
   fallback?: CarrierRef[] | null
 }
 
@@ -410,6 +413,9 @@ export interface ConnectionInfo {
   principal: string
   device?: string | null
 }
+
+/** Whether the carrier's credentials reach more of the peer than its link endpoint (spec 24.4). */
+export type Containment = "restricted" | "shell" | "unknown"
 
 export interface ContextEntry {
   uri: string
@@ -949,14 +955,15 @@ export interface LimitsFile {
 export interface Link {
   id: string
   name: string
-  peer?: LinkPeer | null
+  peer: LinkPeer
+  /** Absent if this runtime only accepts. */
   carrier?: CarrierRef | null
+  /** What the peer may do here. */
   grant: Scope[]
   offer: LinkOffer
-  /** `restricted`, `shell` or `unknown` (24.4). */
-  containment: string
-  /** `connected`, `connecting`, `down` or `unpaired`. */
-  status: string
+  containment: Containment
+  status: LinkStatus
+  /** The carrier instance of the current connection. */
   via?: string | null
   since?: string | null
 }
@@ -964,11 +971,20 @@ export interface Link {
 export interface LinkAddParams {
   name: string
   carrier: CarrierRef
+  /**
+   * A pairing code from the peer's `link/invite`; without it, the runtime pairs over the
+   * carrier with `ask`.
+   */
   code?: string | null
   grant: Scope[]
   offer: LinkOffer
-  /** Pairing over the carrier: the grant and offer to ask the peer for (24.3). */
-  ask?: unknown
+  ask?: LinkAsk | null
+}
+
+/** The grant and offer `link/add` asks the peer for when it pairs over the carrier (spec 24.3). */
+export interface LinkAsk {
+  grant: Scope[]
+  offer: LinkOffer
 }
 
 export interface LinkInviteParams {
@@ -976,27 +992,36 @@ export interface LinkInviteParams {
   grant: Scope[]
   offer: LinkOffer
   expires?: string | null
+  /**
+   * Set when the peer's SSH key was written to `authorized_keys` restricted to
+   * `parrot connect --link`: the peer then sees its link as `restricted` (spec 24.4).
+   */
+  authorizedKey?: boolean | null
 }
 
 export interface LinkInviteResult {
-  /** A pairing code, valid once. */
+  /** The one-time pairing code. It is a secret: shown once, never logged. */
   code: string
   link: Link
 }
+
+export type LinkListParams = Record<string, unknown>
 
 export interface LinkListResult {
   links: Link[]
 }
 
-/** What a link shows its peer: the environment, and `none`, `linked` or `all` sessions. */
+/** What a runtime shows a linked peer. */
 export interface LinkOffer {
+  /** Whether the peer sees this environment and its agents, and may create sessions in it. */
   env: boolean
-  sessions: string
+  sessions: OfferedSessions
 }
 
+/** The other runtime of a link, pinned at pairing. */
 export interface LinkPeer {
   runtime: string
-  /** The peer's public key, pinned at pairing. */
+  /** The peer's X25519 public key, in hex. */
   key: string
 }
 
@@ -1007,6 +1032,8 @@ export interface LinkRemoveParams {
 export interface LinkResult {
   link: Link
 }
+
+export type LinkStatus = "connected" | "connecting" | "down" | "unpaired"
 
 export interface LinkUpdateParams {
   link: string
@@ -1046,6 +1073,12 @@ export interface NoSharedVersionData {
 export type NoticeLevel = "info" | "warning" | "error"
 
 export type Notify = "none" | "normal" | "urgent"
+
+/**
+ * Which sessions a link's peer sees. `linked`: only sessions created over the link or moved
+ * here over it, with their descendants.
+ */
+export type OfferedSessions = "none" | "linked" | "all"
 
 export type OnParentEnd = "continue" | "stop"
 
@@ -1469,10 +1502,10 @@ export interface SessionCancelResult {
   queued: number
 }
 
-/** A move's second phase: the target owns the session on receipt (E9). */
+/** The second phase of a move (E9): keyed and idempotent. */
 export interface SessionCommitParams {
   session: string
-  key?: string | null
+  key: string
 }
 
 /** `session/configure` (Appendix E8): `delegate` on a subtree, `manage` on a root. */
@@ -1554,9 +1587,24 @@ export interface SessionNewResult {
   head: string
 }
 
-/** A move's first phase, from the owner (E1). The log travels as `blob/put` chunks. */
+/** The first phase of a move (E1): the owner offers a session to the target. */
 export interface SessionOfferParams {
   session: string
+  /** The session as the owner stores it. */
+  record: unknown
+  /** The session's workspace; `transfer` names its blob when it travels. */
+  workspace?: unknown
+  /** The transfer that carries the session's items. */
+  log?: string | null
+  queue?: unknown
+  requests?: unknown[] | null
+  turnKeys?: Record<string, unknown> | null
+  tasks?: unknown[] | null
+}
+
+export interface SessionOfferResult {
+  /** The binding the target started idle. */
+  binding?: unknown
 }
 
 export interface SessionParent {
@@ -2117,6 +2165,17 @@ export interface WorkspaceMergeResult {
   conflicts?: string[] | null
 }
 
+/** What a peer's `workspace/transfer` sends: unpack the transfer as a new workspace here. */
+export interface WorkspaceReceiveParams {
+  workspace: string
+  transfer: string
+  branch?: string | null
+}
+
+export interface WorkspaceReceiveResult {
+  workspace: Workspace
+}
+
 export interface WorkspaceRemoveParams {
   workspace: string
   force?: boolean | null
@@ -2186,7 +2245,7 @@ export interface Methods {
   "binding/start": { params: BindingStart; result: BindingStartResult }
   "binding/stop": { params: BindingRef; result: Empty }
   "blob/put": { params: BlobPutParams; result: Empty }
-  "carrier/list": { params: Empty; result: CarrierListResult }
+  "carrier/list": { params: CarrierListParams; result: CarrierListResult }
   "env/list": { params: Empty; result: EnvListResult }
   "function/call": { params: FunctionCallParams; result: FunctionResult }
   "function/describe": { params: FunctionDescribeParams; result: FunctionDescribeResult }
@@ -2199,7 +2258,7 @@ export interface Methods {
   "item/get": { params: ItemGetParams; result: ItemGetResult }
   "link/add": { params: LinkAddParams; result: LinkResult }
   "link/invite": { params: LinkInviteParams; result: LinkInviteResult }
-  "link/list": { params: Empty; result: LinkListResult }
+  "link/list": { params: LinkListParams; result: LinkListResult }
   "link/remove": { params: LinkRemoveParams; result: Empty }
   "link/update": { params: LinkUpdateParams; result: LinkResult }
   "option/complete": { params: OptionCompleteParams; result: OptionCompleteResult }
@@ -2218,7 +2277,7 @@ export interface Methods {
   "session/archive": { params: SessionArchiveParams; result: Empty }
   "session/bundle": { params: SessionBundleParams; result: SessionBundleResult }
   "session/cancel": { params: SessionCancelParams; result: SessionCancelResult }
-  "session/commit": { params: SessionCommitParams; result: Empty }
+  "session/commit": { params: SessionCommitParams; result: SessionOfferResult }
   "session/configure": { params: SessionConfigureParams; result: Empty }
   "session/delete": { params: SessionRef; result: Empty }
   "session/discover": { params: SessionDiscoverParams; result: SessionDiscoverResult }
@@ -2226,7 +2285,7 @@ export interface Methods {
   "session/keys": { params: SessionRef; result: Empty }
   "session/list": { params: SessionListParams; result: SessionListResult }
   "session/new": { params: SessionNewParams; result: SessionNewResult }
-  "session/offer": { params: SessionOfferParams; result: Empty }
+  "session/offer": { params: SessionOfferParams; result: SessionOfferResult }
   "session/prompt": { params: SessionPromptParams; result: SessionPromptResult }
   "session/read": { params: SessionReadParams; result: SessionReadResult }
   "session/rebind": { params: SessionRebindParams; result: SessionBindingResult }
@@ -2248,6 +2307,7 @@ export interface Methods {
   "workspace/create": { params: WorkspaceCreateParams; result: WorkspaceResult }
   "workspace/list": { params: WorkspaceListParams; result: WorkspaceListResult }
   "workspace/merge": { params: WorkspaceMergeParams; result: WorkspaceMergeResult }
+  "workspace/receive": { params: WorkspaceReceiveParams; result: WorkspaceReceiveResult }
   "workspace/remove": { params: WorkspaceRemoveParams; result: Empty }
   "workspace/status": { params: WorkspaceStatusParams; result: WorkspaceStatusResult }
   "workspace/transfer": { params: WorkspaceTransferParams; result: WorkspaceResult }

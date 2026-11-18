@@ -121,6 +121,13 @@ impl Carriers {
         Ok(())
     }
 
+    /// The carrier eggs that deliver inbound connections, run beside the runtime as `listen`.
+    pub fn listeners(&self) -> Vec<EggCarrier> {
+        let mut eggs: Vec<EggCarrier> = self.eggs.values().filter(|e| e.listens).cloned().collect();
+        eggs.sort_by(|a, b| a.name.cmp(&b.name));
+        eggs
+    }
+
     /// What `carrier/list` returns.
     pub fn list(&self) -> Vec<CarrierInfo> {
         let mut out = builtins();

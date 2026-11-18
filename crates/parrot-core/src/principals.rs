@@ -1,6 +1,6 @@
 //! Connections, the handshake and scopes (spec 4, 5).
 
-use crate::{Cx, Peer, Reply, State};
+use crate::{Cx, LinkOffer, OfferedSessions, Peer, Reply, State};
 use parrot_proto::handshake::{InitializeParams, PeerInfo};
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
@@ -126,8 +126,58 @@ pub fn sees(state: &State, conn: &str, session: &str) -> bool {
         }) => crate::directory::path_of(state, session)
             .iter()
             .any(|s| list.contains(s)),
+        // A link's peer sees only what the link offers it (spec 24.1).
+        Some(Peer::Link { link, offer, .. }) => match offer.sessions {
+            OfferedSessions::None => false,
+            OfferedSessions::All => true,
+            OfferedSessions::Linked => crate::directory::path_of(state, session)
+                .iter()
+                .any(|s| linked_to(state, s, link)),
+        },
         Some(_) => true,
         None => false,
+    }
+}
+
+/// Whether a session was created over `link`, or moved here over it.
+pub fn linked_to(state: &State, session: &str, link: &str) -> bool {
+    let created = state.sessions.info.get(session).is_some_and(|i| {
+        i.origin.get("kind").and_then(Value::as_str) == Some("client")
+            && i.origin.get("principal").and_then(Value::as_str) == Some(link)
+    });
+    created || state.links.arrived.get(session).is_some_and(|l| l == link)
+}
+
+/// The link and offer of a link connection.
+pub fn link_offer<'a>(state: &'a State, conn: &str) -> Option<(&'a str, &'a LinkOffer)> {
+    match state.principals.conns.get(conn).map(|c| &c.peer) {
+        Some(Peer::Link { link, offer, .. }) => Some((link.as_str(), offer)),
+        _ => None,
+    }
+}
+
+/// Whether a connection sees only some sessions: a token limited to sessions, or a link that
+/// doesn't offer them all.
+pub fn limited(state: &State, conn: &str) -> bool {
+    match state.principals.conns.get(conn).map(|c| &c.peer) {
+        Some(Peer::Token { sessions, .. }) => sessions.is_some(),
+        Some(Peer::Link { offer, .. }) => offer.sessions != OfferedSessions::All,
+        _ => false,
+    }
+}
+
+/// Whether a connection sees this environment and its agents: always, unless it is a link that
+/// doesn't offer it.
+pub fn env_offered(state: &State, conn: &str) -> bool {
+    link_offer(state, conn).is_none_or(|(_, o)| o.env)
+}
+
+/// `-32003` with `reason: "offer"` for a link that doesn't offer the environment (spec 24.1).
+pub fn check_env_offered(state: &State, conn: &str) -> Result<(), RpcError> {
+    if env_offered(state, conn) {
+        Ok(())
+    } else {
+        Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "offer" })))
     }
 }
 

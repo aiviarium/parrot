@@ -254,6 +254,14 @@ fn complete(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> R
     let Some(session) = p.session.clone() else {
         return Reply::Now(Err(unsupported()));
     };
+    if let Err(e) = crate::principals::check_session(
+        cx.state,
+        conn,
+        parrot_proto::principal::Scope::Configure,
+        &session,
+    ) {
+        return Reply::Now(Err(e));
+    }
     let has_source = cx
         .state
         .options

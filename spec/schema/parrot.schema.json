@@ -1065,20 +1065,21 @@
           "minimum": 0
         },
         "data": {
-          "type": "string",
-          "description": "Base64."
+          "type": "string"
         },
         "last": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
         "transfer",
         "index",
-        "data",
-        "last"
+        "data"
       ],
-      "description": "One chunk of a transfer over a link, at most 1 MiB (E9)."
+      "description": "One chunk of a transfer between runtimes, at most 1 MiB (spec 24.2, E9)."
     },
     "Budget": {
       "type": "object",
@@ -1159,12 +1160,14 @@
         "title": {
           "type": "string"
         },
-        "target": true,
+        "target": {
+          "description": "The JSON Schema of the carrier's target."
+        },
         "listens": {
           "type": "boolean"
         },
         "containment": {
-          "type": "string"
+          "$ref": "#/$defs/Containment"
         },
         "maxMessage": {
           "type": "integer",
@@ -1180,6 +1183,9 @@
         "containment",
         "maxMessage"
       ]
+    },
+    "CarrierListParams": {
+      "type": "object"
     },
     "CarrierListResult": {
       "type": "object",
@@ -1214,14 +1220,15 @@
           ],
           "items": {
             "$ref": "#/$defs/CarrierRef"
-          }
+          },
+          "description": "Tried in order when this one fails."
         }
       },
       "required": [
         "kind",
         "target"
       ],
-      "description": "How a runtime reaches its peer."
+      "description": "How a runtime reaches a peer."
     },
     "Carry": {
       "type": "string",
@@ -1650,6 +1657,15 @@
         "name",
         "principal"
       ]
+    },
+    "Containment": {
+      "type": "string",
+      "enum": [
+        "restricted",
+        "shell",
+        "unknown"
+      ],
+      "description": "Whether the carrier's credentials reach more of the peer than its link endpoint (spec 24.4)."
     },
     "ContextEntry": {
       "type": "object",
@@ -3780,14 +3796,7 @@
           "type": "string"
         },
         "peer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LinkPeer"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/LinkPeer"
         },
         "carrier": {
           "anyOf": [
@@ -3797,30 +3806,31 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Absent if this runtime only accepts."
         },
         "grant": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/Scope"
-          }
+          },
+          "description": "What the peer may do here."
         },
         "offer": {
           "$ref": "#/$defs/LinkOffer"
         },
         "containment": {
-          "type": "string",
-          "description": "`restricted`, `shell` or `unknown` (24.4)."
+          "$ref": "#/$defs/Containment"
         },
         "status": {
-          "type": "string",
-          "description": "`connected`, `connecting`, `down` or `unpaired`."
+          "$ref": "#/$defs/LinkStatus"
         },
         "via": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "The carrier instance of the current connection."
         },
         "since": {
           "type": [
@@ -3832,12 +3842,12 @@
       "required": [
         "id",
         "name",
+        "peer",
         "grant",
         "offer",
         "containment",
         "status"
-      ],
-      "additionalProperties": true
+      ]
     },
     "LinkAddParams": {
       "type": "object",
@@ -3852,7 +3862,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "A pairing code from the peer's `link/invite`; without it, the runtime pairs over the\ncarrier with `ask`."
         },
         "grant": {
           "type": "array",
@@ -3864,7 +3875,14 @@
           "$ref": "#/$defs/LinkOffer"
         },
         "ask": {
-          "description": "Pairing over the carrier: the grant and offer to ask the peer for (24.3)."
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinkAsk"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3873,6 +3891,25 @@
         "grant",
         "offer"
       ]
+    },
+    "LinkAsk": {
+      "type": "object",
+      "properties": {
+        "grant": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "offer": {
+          "$ref": "#/$defs/LinkOffer"
+        }
+      },
+      "required": [
+        "grant",
+        "offer"
+      ],
+      "description": "The grant and offer `link/add` asks the peer for when it pairs over the carrier (spec 24.3)."
     },
     "LinkInviteParams": {
       "type": "object",
@@ -3894,6 +3931,13 @@
             "string",
             "null"
           ]
+        },
+        "authorizedKey": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Set when the peer's SSH key was written to `authorized_keys` restricted to\n`parrot connect --link`: the peer then sees its link as `restricted` (spec 24.4)."
         }
       },
       "required": [
@@ -3907,7 +3951,7 @@
       "properties": {
         "code": {
           "type": "string",
-          "description": "A pairing code, valid once."
+          "description": "The one-time pairing code. It is a secret: shown once, never logged."
         },
         "link": {
           "$ref": "#/$defs/Link"
@@ -3917,6 +3961,9 @@
         "code",
         "link"
       ]
+    },
+    "LinkListParams": {
+      "type": "object"
     },
     "LinkListResult": {
       "type": "object",
@@ -3936,17 +3983,18 @@
       "type": "object",
       "properties": {
         "env": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the peer sees this environment and its agents, and may create sessions in it."
         },
         "sessions": {
-          "type": "string"
+          "$ref": "#/$defs/OfferedSessions"
         }
       },
       "required": [
         "env",
         "sessions"
       ],
-      "description": "What a link shows its peer: the environment, and `none`, `linked` or `all` sessions."
+      "description": "What a runtime shows a linked peer."
     },
     "LinkPeer": {
       "type": "object",
@@ -3956,13 +4004,14 @@
         },
         "key": {
           "type": "string",
-          "description": "The peer's public key, pinned at pairing."
+          "description": "The peer's X25519 public key, in hex."
         }
       },
       "required": [
         "runtime",
         "key"
-      ]
+      ],
+      "description": "The other runtime of a link, pinned at pairing."
     },
     "LinkRemoveParams": {
       "type": "object",
@@ -3984,6 +4033,15 @@
       },
       "required": [
         "link"
+      ]
+    },
+    "LinkStatus": {
+      "type": "string",
+      "enum": [
+        "connected",
+        "connecting",
+        "down",
+        "unpaired"
       ]
     },
     "LinkUpdateParams": {
@@ -4148,6 +4206,15 @@
         "normal",
         "urgent"
       ]
+    },
+    "OfferedSessions": {
+      "type": "string",
+      "enum": [
+        "none",
+        "linked",
+        "all"
+      ],
+      "description": "Which sessions a link's peer sees. `linked`: only sessions created over the link or moved\nhere over it, with their descendants."
     },
     "OnParentEnd": {
       "type": "string",
@@ -5760,16 +5827,14 @@
           "type": "string"
         },
         "key": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
-        "session"
+        "session",
+        "key"
       ],
-      "description": "A move's second phase: the target owns the session on receipt (E9)."
+      "description": "The second phase of a move (E9): keyed and idempotent."
     },
     "SessionConfigureParams": {
       "type": "object",
@@ -6099,13 +6164,56 @@
       "properties": {
         "session": {
           "type": "string"
+        },
+        "record": {
+          "description": "The session as the owner stores it."
+        },
+        "workspace": {
+          "description": "The session's workspace; `transfer` names its blob when it travels."
+        },
+        "log": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The transfer that carries the session's items."
+        },
+        "queue": true,
+        "requests": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": true
+        },
+        "turnKeys": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "tasks": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": true
         }
       },
       "required": [
-        "session"
+        "session",
+        "record"
       ],
-      "additionalProperties": true,
-      "description": "A move's first phase, from the owner (E1). The log travels as `blob/put` chunks."
+      "description": "The first phase of a move (E1): the owner offers a session to the target."
+    },
+    "SessionOfferResult": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "description": "The binding the target started idle."
+        }
+      }
     },
     "SessionParent": {
       "type": "object",
@@ -8457,6 +8565,39 @@
         }
       }
     },
+    "WorkspaceReceiveParams": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "transfer": {
+          "type": "string"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "workspace",
+        "transfer"
+      ],
+      "description": "What a peer's `workspace/transfer` sends: unpack the transfer as a new workspace here."
+    },
+    "WorkspaceReceiveResult": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "$ref": "#/$defs/Workspace"
+        }
+      },
+      "required": [
+        "workspace"
+      ]
+    },
     "WorkspaceRemoveParams": {
       "type": "object",
       "properties": {
@@ -8774,7 +8915,7 @@
     },
     "carrier/list": {
       "params": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/CarrierListParams"
       },
       "result": {
         "$ref": "#/$defs/CarrierListResult"
@@ -8878,7 +9019,7 @@
     },
     "link/list": {
       "params": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/LinkListParams"
       },
       "result": {
         "$ref": "#/$defs/LinkListResult"
@@ -9033,7 +9174,7 @@
         "$ref": "#/$defs/SessionCommitParams"
       },
       "result": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/SessionOfferResult"
       }
     },
     "session/configure": {
@@ -9097,7 +9238,7 @@
         "$ref": "#/$defs/SessionOfferParams"
       },
       "result": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/SessionOfferResult"
       }
     },
     "session/prompt": {
@@ -9266,6 +9407,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkspaceMergeResult"
+      }
+    },
+    "workspace/receive": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceReceiveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkspaceReceiveResult"
       }
     },
     "workspace/remove": {

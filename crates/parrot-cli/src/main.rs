@@ -52,6 +52,10 @@ enum Command {
         /// Connect as a link carrier.
         #[arg(long)]
         link: bool,
+        /// Relays this inherited descriptor instead of standard input and output, for a carrier
+        /// egg's `listen` that hands over each inbound channel.
+        #[arg(long, value_name = "N", requires = "link")]
+        fd: Option<i32>,
     },
     /// Serves a built-in driver core (`acp` or `tui`) on standard input and output.
     Driver {
@@ -96,7 +100,7 @@ fn main() {
             link_listen,
             workspace_root,
         } => block_on(serve::run(state_dir, ws, link_listen, workspace_root)),
-        Command::Connect { socket, link } => block_on(connect::run(socket, link)),
+        Command::Connect { socket, link, fd } => block_on(connect::run(socket, link, fd)),
         Command::Driver { name } => block_on(driver::run(name)),
     };
     std::process::exit(code);

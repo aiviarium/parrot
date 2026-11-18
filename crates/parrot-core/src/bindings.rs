@@ -246,6 +246,7 @@ pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) 
                     sessions::changed(cx, &session);
                 }
                 if state == SessionState::Idle {
+                    crate::links::on_idle(cx, &session);
                     queue::on_idle(cx, &session);
                 }
                 if hidden {
@@ -415,6 +416,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 crate::tasks::on_idle(cx, &session);
                 crate::budgets::on_idle(cx, &session);
                 crate::seeds::on_idle(cx, &session);
+                crate::links::on_idle(cx, &session);
                 queue::on_idle(cx, &session);
                 crate::wakes::pump(cx, &session);
             }

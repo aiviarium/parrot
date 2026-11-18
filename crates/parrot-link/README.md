@@ -18,6 +18,8 @@ the link endpoint.
 The dialler sends a plaintext hello with the mode in it, then runs
 `Noise_XX_25519_ChaChaPoly_BLAKE2s`. Pairing with a code runs `Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s`
 with the code's secret. The hello is part of the Noise prologue, so a carrier can't change it unseen.
+When the dialler's carrier takes messages under 64 KiB, the hello says so as `maxMessage`, and the
+listener doesn't send a Noise message larger than that either.
 
 - The dialler checks the responder's key before it sends its own.
 - Outside pairing, the listener accepts only pinned keys.
@@ -31,3 +33,7 @@ with the code's secret. The hello is part of the Noise prologue, so a carrier ca
 | `command` | `shell` |
 | `tcp` | `restricted` |
 | Carrier egg | As declared, else `unknown`, which counts as `shell` |
+
+`parrot link invite --authorized-key "<public key>"` writes the peer's key to `~/.ssh/authorized_keys`
+with `command="parrot connect --link",restrict`, and removes other lines for the same key. The peer
+pairs with the code over `ssh`, and its link shows `restricted` instead of `shell`.

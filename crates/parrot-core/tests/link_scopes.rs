@@ -80,6 +80,10 @@ fn link(scopes: &[&str]) -> Peer {
     Peer::Link {
         link: "lnk_peer".into(),
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        offer: parrot_core::LinkOffer {
+            env: true,
+            sessions: parrot_core::OfferedSessions::Linked,
+        },
     }
 }
 
@@ -180,14 +184,21 @@ fn a_link_cannot_hold_more_than_its_transfer_cap() {
     let mut sim = Sim::new();
     sim.connect("con_peer", link(&["read"]));
     let chunk = "x".repeat(parrot_core::links::CHUNK);
-    let chunks = parrot_core::links::LINK_BLOBS_MAX / parrot_core::links::CHUNK;
+    let chunks = 8;
+    sim.core.state.links.disk_max = (chunks * parrot_core::links::CHUNK) as u64;
     for index in 0..chunks {
-        let (r, _) = sim.call(
+        let (r, effects) = sim.call(
             "con_peer",
             "blob/put",
             json!({ "transfer": "t1", "index": index, "data": chunk }),
         );
         assert_eq!(r, Ok(json!({})), "chunk {index}");
+        // Each chunk goes to disk, not into the core's memory.
+        let written = effects.iter().any(|e| {
+            matches!(e, Effect::Workspace { op, params, .. }
+                if op == "blob.put" && params["index"] == index && params["link"] == "lnk_peer")
+        });
+        assert!(written, "chunk {index} was not written");
     }
     // Resending a chunk replaces it, so it still fits.
     let (r, _) = sim.call(
@@ -197,10 +208,39 @@ fn a_link_cannot_hold_more_than_its_transfer_cap() {
     );
     assert_eq!(r, Ok(json!({})));
     // Another transfer from the same link would go over the cap.
-    let (r, _) = sim.call(
+    let (r, effects) = sim.call(
         "con_peer",
         "blob/put",
         json!({ "transfer": "t2", "index": 0, "data": "y" }),
     );
     assert_eq!(r, Err(-32004));
+    assert!(!effects.iter().any(|e| matches!(e, Effect::Workspace { .. })));
+    // The default cap is on disk and much larger than what memory once held.
+    const { assert!(parrot_core::links::LINK_DISK_MAX >= 1 << 30) };
+}
+
+#[test]
+fn an_expired_transfer_is_deleted_from_disk() {
+    let clock = ManualClock::default();
+    clock.set(1_700_000_000_000);
+    let mut sim = Sim {
+        core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::default())),
+        next: 0,
+    };
+    sim.connect("con_peer", link(&["read"]));
+    let (r, _) = sim.call(
+        "con_peer",
+        "blob/put",
+        json!({ "transfer": "t1", "index": 0, "data": "x" }),
+    );
+    assert_eq!(r, Ok(json!({})));
+    clock.set(1_700_000_000_000 + parrot_core::links::OFFER_TTL_MS + 1);
+    let effects = sim.core.handle(Input::Tick {
+        now_ms: 1_700_000_000_000 + parrot_core::links::OFFER_TTL_MS + 1,
+    });
+    let dropped = effects.iter().any(|e| {
+        matches!(e, Effect::Workspace { op, params, .. } if op == "blob.drop" && params["transfer"] == "t1")
+    });
+    assert!(dropped, "{effects:?}");
+    assert!(sim.core.state.links.blobs.is_empty());
 }

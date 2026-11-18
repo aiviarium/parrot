@@ -346,15 +346,17 @@ pub fn register(r: &mut Registry) {
     r.method::<ids::Empty, principal::TokenListResult>("token/list");
     r.method::<principal::TokenCreateParams, principal::TokenCreateResult>("token/create");
     r.method::<principal::TokenRevokeParams, ids::Empty>("token/revoke");
-    r.method::<ids::Empty, link::LinkListResult>("link/list");
-    r.method::<ids::Empty, link::CarrierListResult>("carrier/list");
+    // Links and the methods one runtime calls on a linked one (spec 24, E1, E9).
+    r.method::<link::LinkListParams, link::LinkListResult>("link/list");
+    r.method::<link::CarrierListParams, link::CarrierListResult>("carrier/list");
     r.method::<link::LinkInviteParams, link::LinkInviteResult>("link/invite");
-    r.method::<link::LinkAddParams, link::LinkResult>("link/add");
-    r.method::<link::LinkUpdateParams, link::LinkResult>("link/update");
+    r.method::<link::LinkAddParams, link::LinkAddResult>("link/add");
+    r.method::<link::LinkUpdateParams, link::LinkUpdateResult>("link/update");
     r.method::<link::LinkRemoveParams, ids::Empty>("link/remove");
     r.method::<link::BlobPutParams, ids::Empty>("blob/put");
-    r.method::<link::SessionOfferParams, ids::Empty>("session/offer");
-    r.method::<link::SessionCommitParams, ids::Empty>("session/commit");
+    r.method::<link::SessionOfferParams, link::SessionOfferResult>("session/offer");
+    r.method::<link::SessionCommitParams, link::SessionCommitResult>("session/commit");
+    r.method::<link::WorkspaceReceiveParams, link::WorkspaceReceiveResult>("workspace/receive");
     // The requests a runtime sends to a client: calls of functions it provides (spec 25.2).
     r.client_method::<function::FunctionCallParams, function::FunctionResult>("function/call");
 
@@ -541,6 +543,32 @@ mod tests {
         assert!(all["$defs"]["Message"].is_object());
         assert!(all["$defs"]["MovedData"].is_object());
         assert!(super::schema_for::<super::error::MovedData>()["properties"]["runtime"].is_object());
+    }
+
+    /// The link methods are in the table, `link/add` with what it asks a peer for when it pairs
+    /// over the carrier, and `workspace/receive` with the transfer it unpacks.
+    #[test]
+    fn link_methods_are_in_the_table() {
+        let all = super::all();
+        let methods = &all["x-methods"];
+        for m in [
+            "link/list",
+            "link/invite",
+            "link/add",
+            "link/update",
+            "link/remove",
+            "carrier/list",
+            "blob/put",
+            "session/offer",
+            "session/commit",
+            "workspace/receive",
+        ] {
+            assert!(methods.get(m).is_some(), "{m} is missing");
+        }
+        let add = all["$defs"]["LinkAddParams"]["properties"].clone();
+        assert!(add["ask"].is_object(), "{add}");
+        let receive = &all["$defs"]["WorkspaceReceiveParams"]["required"];
+        assert_eq!(receive, &serde_json::json!(["workspace", "transfer"]));
     }
 
     /// Every method and notification in the table points at a definition that exists.

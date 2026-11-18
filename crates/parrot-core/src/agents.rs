@@ -157,6 +157,10 @@ pub fn session_harness(state: &State, agent: &str) -> Option<Value> {
 pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, params: Value) -> Reply {
     match method {
         "agent/list" => Reply::Now(check(cx.state, conn, Scope::Read).map(|()| {
+            // A link that doesn't offer the environment sees none of its agents (spec 24.1).
+            if !crate::principals::env_offered(cx.state, conn) {
+                return json!({ "agents": [] });
+            }
             let agents = agents(cx.state);
             if agents.is_empty() && cx.state.sessions.eggs_loaded {
                 json!({ "agents": agents, "hint": NO_EGGS_HINT })
