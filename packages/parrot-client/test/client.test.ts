@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "node:path"
-import { Client, RpcError } from "../src"
+import { Client, type Notifications, RpcError } from "../src"
 import { answer } from "./fake"
 
 let server: ReturnType<typeof Bun.serve> | undefined
@@ -38,12 +38,36 @@ describe("Client", () => {
       const updates: unknown[] = []
       const stop = client.on("update", (params) => updates.push(params))
       const subscription = await client.subscribe({ session: "ses_made-up" }, { items: 10 })
-      expect(subscription.head).toBe(1)
+      expect(subscription.head).toBe("1")
 
       const prompted = await client.prompt("ses_made-up", "hello", { delivery: "queue" })
       expect(prompted).toMatchObject({ disposition: "started" })
       expect(updates).toHaveLength(1)
       stop()
+    } finally {
+      client.close()
+    }
+  })
+
+  test("types a call and an update handler from the schema", async () => {
+    const client = Client.overWebSocket(startWebSocket())
+    try {
+      await client.initialize()
+      const seen: Notifications["update"][] = []
+      const stop = client.on("update", (params) => {
+        seen.push(params)
+        if (params.update.type === "state") expect(params.update.state).toBe("idle")
+      })
+
+      const subscription = await client.call("subscribe", { target: { tree: "ses_made-up" } })
+      expect(subscription.subscription).toBe("sub_made-up")
+      const prompted = await client.call("session/prompt", { session: "ses_made-up", text: "hello" })
+      expect(prompted.disposition).toBe("started")
+      expect(seen).toHaveLength(1)
+      stop()
+
+      // @ts-expect-error a method outside the table is a type error
+      await client.call("missing/method", {}).catch(() => undefined)
     } finally {
       client.close()
     }

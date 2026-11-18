@@ -22,12 +22,13 @@ export function answer(text: string): string[] {
       ]
     case "subscribe":
       return [
-        success(id, { subscription: "sub_made-up", head: 1 }),
+        success(id, { subscription: "sub_made-up", head: "1" }),
         notification("update", {
           subscription: "sub_made-up",
-          seq: 1,
+          seq: "1",
+          runtime: "rt_made-up",
           at: "2026-01-01T00:00:00Z",
-          update: { kind: "session", state: "idle" },
+          update: { type: "state", state: "idle", background: [] },
         }),
       ]
     case "session/prompt":
