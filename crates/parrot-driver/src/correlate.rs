@@ -307,6 +307,33 @@ pub fn differences(data: &CorrelateFile, pairs: &[Pair], control: &str, passive:
     out
 }
 
+/// The item updates that merge the passive source into the live stream: an item only the
+/// passive source has is added under its own id, and where the kind prefers the passive source
+/// while the binding runs, its fields are set on the control item. `turn` is the live turn the
+/// added items belong to.
+pub fn merged(
+    data: &CorrelateFile,
+    pairs: &[Pair],
+    binding: &str,
+    turn: Option<&str>,
+    control: &str,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for p in pairs {
+        let (id, item) = match (p.control, p.passive) {
+            (None, Some(t)) => (&t.id, t),
+            (Some(c), Some(t)) if data.winner(&c.kind, true) != control && c.set != t.set => (&c.id, t),
+            _ => continue,
+        };
+        let mut patch = json!({"id": id, "kind": item.kind, "set": item.set});
+        if let Some(turn) = turn {
+            patch["turn"] = json!(turn);
+        }
+        out.push(json!({"binding": binding, "update": {"type": "item", "item": patch}}));
+    }
+    out
+}
+
 /// A difference as the `notice` update shadow mode sends.
 pub fn notice(binding: &str, d: &Difference) -> Value {
     json!({
@@ -347,6 +374,38 @@ kind "*" {
 
     fn item(id: &str, kind: &str, turn: &str, set: Value) -> Value {
         json!({"binding": "b", "update": {"type": "item", "item": {"id": id, "kind": kind, "turn": turn, "set": set}}})
+    }
+
+    #[test]
+    fn merging_adds_passive_only_items_and_keeps_preferred_ones() {
+        let mut live = Fold::new();
+        live.extend(&[item(
+            "c1",
+            "command",
+            "t1",
+            json!({"command": "ls", "status": "ok"}),
+        )]);
+        let mut disk = Fold::new();
+        disk.extend(&[
+            item("c1", "command", "t1", json!({"command": "ls", "status": "error"})),
+            item("n1", "note", "t1", json!({"text": "Only on disk"})),
+        ]);
+        let d = data();
+        let pairs = correlate(&d, &live.last_turn(), &disk.last_turn());
+        let out = merged(&d, &pairs, "b", Some("turn-1"), "native");
+        // The command prefers the native source, so only the note is added.
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0]["update"]["item"]["id"], "n1");
+        assert_eq!(out[0]["update"]["item"]["turn"], "turn-1");
+        assert_eq!(out[0]["update"]["item"]["set"]["text"], "Only on disk");
+        let flipped = parse(
+            "correlate.kdl",
+            "kind \"*\" {\n  match \"ref\" \"position\"\n  prefer \"transcript\"\n  history \"transcript\"\n}\n",
+        )
+        .unwrap();
+        let out = merged(&flipped, &pairs, "b", None, "native");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["update"]["item"]["set"]["status"], "error");
     }
 
     #[test]

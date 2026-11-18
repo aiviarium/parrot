@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use parrot_driver::correlate::{self, Fold};
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
     BindingAnswerParams, BindingCancelParams, BindingCancelResult, BindingForkParams, BindingForkResult,
@@ -48,6 +49,11 @@ pub struct Config {
     pub env: Vec<(OsString, OsString)>,
     /// Start the CLI through `parrot guard --`, which needs the current executable to be `parrot`.
     pub guard: bool,
+    /// Shadow mode (spec 32.1): after each turn, read the transcript, report where it differs
+    /// from stream-json and merge in what only the transcript has.
+    pub shadow: bool,
+    /// The folder of Claude Code's project transcripts, when not the default.
+    pub projects: Option<std::path::PathBuf>,
 }
 
 impl Config {
@@ -58,6 +64,8 @@ impl Config {
             claude_bin: std::env::var_os(CLAUDE_BIN_ENV).unwrap_or_else(|| "claude".into()),
             env: vec![],
             guard,
+            shadow: parrot_driver::correlate::shadow_from_env(),
+            projects: None,
         }
     }
 }
@@ -72,6 +80,80 @@ struct Binding {
     pending: Pending,
     next: AtomicU64,
     stopping: std::sync::atomic::AtomicBool,
+    /// The items of this binding, kept for shadow mode.
+    fold: Mutex<Fold>,
+    /// How many transcript items earlier shadow passes have looked at.
+    shadowed: Mutex<usize>,
+}
+
+impl Binding {
+    fn record(&self, shadow: bool, updates: &[DriverUpdate]) {
+        if shadow {
+            let mut f = self.fold.lock().unwrap();
+            // The transcript's main chain holds no sidechain lines, so subagent updates stay out.
+            for u in updates.iter().filter(|u| u.subagent.is_none()) {
+                f.push(&to_value(u));
+            }
+        }
+    }
+}
+
+/// Whether the updates end a top-level turn.
+fn ends_turn(updates: &[DriverUpdate]) -> bool {
+    updates.iter().filter(|u| u.subagent.is_none()).any(|u| {
+        matches!(&u.update, Open::Known(DriverUpdateKind::Turn { turn }) if turn.status != parrot_proto::state::TurnStatus::Running)
+    })
+}
+
+/// Shadow mode at the end of a turn: reads the transcript, reports where the turn differs from
+/// what stream-json said, and merges in the items only the transcript has. The transcript holds
+/// no turn ids, so the turn's part of it is what earlier passes have not looked at.
+async fn shadow_turn(driver: Arc<Driver>, b: Arc<Binding>) {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (session, turn) = {
+        let s = b.state.lock().unwrap();
+        (s.session_id.clone(), s.last_turn_key())
+    };
+    let Some(session) = session else { return };
+    let path = driver.projects().and_then(|root| history::find(&root, &session));
+    let Some(text) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
+        let d = correlate::Difference {
+            kind: "*".into(),
+            item: session.clone(),
+            text: format!("no transcript for session {session}"),
+        };
+        driver.send(&Notification::new("update", correlate::notice(&b.id, &d)));
+        return;
+    };
+    let mut disk = Fold::new();
+    for u in history::read(&text, None).updates {
+        disk.push(&to_value(&u));
+    }
+    let from = {
+        let mut seen = b.shadowed.lock().unwrap();
+        let from = (*seen).min(disk.items.len());
+        *seen = disk.items.len();
+        from
+    };
+    let passive: Vec<&correlate::Item> = disk.items[from..].iter().collect();
+    let live = b.fold.lock().unwrap().clone();
+    let data = &data().correlate;
+    let pairs = correlate::correlate(data, &live.last_turn(), &passive);
+    let mut out: Vec<Value> = correlate::differences(data, &pairs, "native", "transcript")
+        .iter()
+        .map(|d| correlate::notice(&b.id, d))
+        .collect();
+    let merged = correlate::merged(data, &pairs, &b.id, turn.as_deref(), "native");
+    {
+        let mut f = b.fold.lock().unwrap();
+        for m in &merged {
+            f.push(m);
+        }
+    }
+    out.extend(merged);
+    for u in out {
+        driver.send(&Notification::new("update", u));
+    }
 }
 
 struct Driver {
@@ -155,6 +237,10 @@ impl Driver {
         }
     }
 
+    fn projects(&self) -> Option<std::path::PathBuf> {
+        self.config.projects.clone().or_else(history::projects_root)
+    }
+
     fn binding(&self, id: &str) -> Result<Arc<Binding>, RpcError> {
         self.bindings
             .lock()
@@ -214,12 +300,16 @@ impl Driver {
             }
             "history/discover" => {
                 let p: HistoryDiscoverParams = params(p)?;
-                let root = history::projects_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let root = self
+                    .projects()
+                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
                 Ok(to_value(&history::discover(&root, &p)))
             }
             "history/read" => {
                 let p: HistoryReadParams = params(p)?;
-                let root = history::projects_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let root = self
+                    .projects()
+                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
                 let path = history::find(&root, &p.reference.id)
                     .ok_or_else(|| RpcError::new(-32602, format!("no transcript for {}", p.reference.id)))?;
                 let text = std::fs::read_to_string(&path)
@@ -459,6 +549,8 @@ impl Driver {
             pending: Mutex::default(),
             next: AtomicU64::new(1),
             stopping: Default::default(),
+            fold: Mutex::new(Fold::new()),
+            shadowed: Mutex::new(0),
         });
         self.bindings
             .lock()
@@ -598,7 +690,12 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             }
             _ => {
                 let updates = b.state.lock().unwrap().step(&msg, &at);
+                b.record(driver.config.shadow, &updates);
+                let ended = ends_turn(&updates);
                 driver.emit(updates);
+                if ended && driver.config.shadow {
+                    tokio::spawn(shadow_turn(driver.clone(), b.clone()));
+                }
             }
         }
     }

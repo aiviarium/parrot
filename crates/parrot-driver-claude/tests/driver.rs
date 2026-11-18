@@ -21,6 +21,14 @@ impl Client {
     }
 
     fn start_with(scenario: &str, extra: Vec<(std::ffi::OsString, std::ffi::OsString)>) -> Client {
+        Client::start_shadow(scenario, extra, None)
+    }
+
+    fn start_shadow(
+        scenario: &str,
+        extra: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+        projects: Option<PathBuf>,
+    ) -> Client {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = if scenario.contains('/') {
             root.join(scenario)
@@ -34,6 +42,8 @@ impl Client {
                 .chain(extra)
                 .collect(),
             guard: false,
+            shadow: projects.is_some(),
+            projects,
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
@@ -486,4 +496,35 @@ async fn auth_status_judges_sign_in() {
     let a = parrot_driver_claude::driver::probed(&bin).await;
     assert_eq!(serde_json::to_value(a.auth).unwrap(), "signed_out");
     unsafe { std::env::remove_var("PARROT_FAKE_CLAUDE_LOGIN") };
+}
+
+#[tokio::test]
+async fn shadow_mode_reports_differences_and_merges_transcript_items() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("-fake-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = [
+        json!({"type": "user", "uuid": "u-sh-1", "sessionId": "sess-fake-0001", "timestamp": "2026-01-02T03:04:05.000Z",
+            "message": {"role": "user", "content": "Say hello"}}),
+        json!({"type": "assistant", "uuid": "a-sh-1", "sessionId": "sess-fake-0001", "timestamp": "2026-01-02T03:04:06.000Z",
+            "message": {"id": "msg_fake_01", "role": "assistant", "content": [{"type": "text", "text": "Hello there!"}]}}),
+        json!({"type": "assistant", "uuid": "a-sh-2", "sessionId": "sess-fake-0001", "timestamp": "2026-01-02T03:04:07.000Z",
+            "message": {"id": "msg_fake_99", "role": "assistant", "content": [{"type": "text", "text": "Only on disk."}]}}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    std::fs::write(project.join("sess-fake-0001.jsonl"), transcript + "\n").unwrap();
+    let mut c = Client::start_shadow("text-turn", vec![], Some(root.path().to_owned()));
+    c.bind().await;
+    c.prompt("Say hello").await;
+    let differs = c
+        .wait(|u| u["update"]["type"] == "notice" && u["update"]["code"] == "x.parrot/shadow")
+        .await;
+    assert!(differs["update"]["text"].is_string());
+    let merged = c
+        .wait(|u| u["update"]["type"] == "item" && u["update"]["item"]["set"]["text"] == "Only on disk.")
+        .await;
+    assert_eq!(merged["update"]["item"]["turn"], "turn-1");
 }

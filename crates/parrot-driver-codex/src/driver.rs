@@ -150,10 +150,15 @@ async fn shadow_turn(driver: Arc<Driver>, b: Arc<Binding>) {
                 // Turn ids are the same in both sources, so the turn that ended is found by its id.
                 let pairs =
                     correlate::correlate(data, &live.last_turn(), &disk.turn_or_last(live.last_turn_id()));
-                correlate::differences(data, &pairs, "native", "transcript")
+                let mut out: Vec<Value> = correlate::differences(data, &pairs, "native", "transcript")
                     .iter()
                     .map(|d| correlate::notice(&b.id, d))
-                    .collect()
+                    .collect();
+                // What only the rollout has joins the live stream, in the turn that ended.
+                let merged = correlate::merged(data, &pairs, &b.id, live.last_turn_id(), "native");
+                b.fold.lock().unwrap().extend(&merged);
+                out.extend(merged);
+                out
             }
         };
     for n in notices {
