@@ -872,9 +872,7 @@ pub fn agent(data: &Data) -> Agent {
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
     features.insert("usage".into(), json!({"context": true, "cost": true}));
-    let mut levels: Vec<PermissionLevel> = data.modes.iter().map(|r| r.level).collect();
-    levels.sort();
-    levels.dedup();
+    let mut levels = data.mode_levels();
     if levels.is_empty() {
         levels = vec![
             PermissionLevel::Read,
