@@ -1,8 +1,8 @@
 //! Driver data (spec 31): the parts of the ACP mapping that change between agents.
 //!
-//! `driver.kdl` and `levels.kdl` ship with the egg. Without `PARROT_DRIVER_DATA`, or without a
-//! file, the copy of the egg's `levels.kdl` compiled in applies, so a fresh install works offline.
-//! An agent mode no `map` names counts as `host` with network (spec 15.2).
+//! `driver.kdl` and `levels.kdl` ship with the egg, which is their only source. Without
+//! `PARROT_DRIVER_DATA`, or without a file, nothing is mapped: every mode counts as `host` with
+//! network and every tool needs `host` (spec 15.2).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,9 +10,6 @@ use std::path::{Path, PathBuf};
 use parrot_proto::driver_data::{self, LevelsFile};
 use parrot_proto::option::PermissionLevel;
 use serde_json::json;
-
-/// The egg's `levels.kdl`, compiled in as the fallback.
-const BUILTIN_LEVELS: &str = include_str!("../../../eggs/acp/parrot/levels.kdl");
 
 /// What the data files say.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,8 +27,7 @@ pub struct Data {
 impl Default for Data {
     fn default() -> Self {
         Data {
-            levels: driver_data::parse("levels.kdl", BUILTIN_LEVELS)
-                .expect("the compiled-in levels.kdl parses"),
+            levels: LevelsFile::default(),
             command: None,
             agent_name: "ACP agent".into(),
             version: "1".into(),
@@ -105,7 +101,7 @@ pub fn load_from(dir: &Path) -> Data {
         }
     }
     if let Ok(text) = std::fs::read_to_string(dir.join("levels.kdl")) {
-        // A malformed file leaves the compiled-in levels in place.
+        // A malformed file leaves nothing mapped, which holds every agent to `host`.
         if let Ok(levels) = driver_data::parse("levels.kdl", &text) {
             data.levels = levels;
         }
@@ -132,9 +128,20 @@ fn strings(line: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn egg() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp/parrot")
+    }
+
     #[test]
-    fn defaults_hold_every_agent_to_host_until_a_mode_says_otherwise() {
+    fn without_data_every_mode_and_tool_is_host() {
         let data = Data::default();
+        assert_eq!(data.level_of(Some("plan")), (PermissionLevel::Host, true));
+        assert_eq!(data.tool_level("read", "Read"), PermissionLevel::Host);
+    }
+
+    #[test]
+    fn the_egg_holds_every_agent_to_host_until_a_mode_says_otherwise() {
+        let data = load_from(&egg());
         assert_eq!(data.level_of(Some("plan")), (PermissionLevel::Read, false));
         assert_eq!(data.level_of(Some("a-new-mode")), (PermissionLevel::Host, true));
         assert_eq!(data.level_of(None), (PermissionLevel::Read, false));
