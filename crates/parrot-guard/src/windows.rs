@@ -26,6 +26,10 @@ fn resolve(program: &OsStr) -> Option<PathBuf> {
 }
 
 fn resolve_in(program: &OsStr, path: &OsStr, pathext: &OsStr) -> Option<PathBuf> {
+    let name = program.to_string_lossy();
+    if name.contains('\\') || name.contains('/') {
+        return None;
+    }
     let mut names = vec![program.to_owned()];
     if Path::new(program).extension().is_none() {
         for ext in pathext.to_string_lossy().split(';').filter(|e| !e.is_empty()) {
@@ -90,7 +94,9 @@ mod tests {
         std::fs::write(dir.path().join("codex.cmd"), b"").unwrap();
         let path = dir.path().as_os_str();
         let found = resolve_in(OsStr::new("codex"), path, OsStr::new(".EXE;.CMD"));
-        assert!(found.is_some_and(|path| path.ends_with("codex.cmd")));
+        let found = found.expect("the shim is found");
+        let name = found.file_name().unwrap().to_string_lossy();
+        assert!(name.eq_ignore_ascii_case("codex.cmd"), "{name}");
     }
 
     #[test]
