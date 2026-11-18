@@ -186,7 +186,13 @@ pub fn on_reply(cx: &mut Cx, _call: u64, result: Result<Value, RpcError>) {
 }
 
 /// The Parrot id for a driver key, derived once and remembered (spec 30.4).
-pub(crate) fn map_key(cx: &mut Cx, binding: &str, kind: &str, key: &str, harness_ref: Option<&Ref>) -> String {
+pub(crate) fn map_key(
+    cx: &mut Cx,
+    binding: &str,
+    kind: &str,
+    key: &str,
+    harness_ref: Option<&Ref>,
+) -> String {
     let Some(session) = crate::directory::session_of(cx.state, binding) else {
         return key.to_string();
     };
