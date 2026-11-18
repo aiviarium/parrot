@@ -395,6 +395,7 @@ impl LinkHub {
                 };
                 if let Ok(v) = serde_json::from_str::<Value>(&text)
                     && v["id"] == INIT_ID
+                    && v.get("method").is_none()
                 {
                     let r = &v["result"]["runtime"];
                     let input = Input::Call {

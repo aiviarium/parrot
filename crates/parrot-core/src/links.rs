@@ -160,7 +160,10 @@ pub fn intercept(
             .iter()
             .find(|(_, p)| p.env == env)
             .map(|(l, _)| l.clone())?;
-        return Some(Reply::Now(start_move(cx, conn, id, &session, &link, params)));
+        return Some(match start_move(cx, conn, id, &session, &link, params) {
+            Ok(Value::Null) => Reply::Later,
+            other => Reply::Now(other),
+        });
     }
     None
 }

@@ -94,6 +94,7 @@ pub async fn run(
     let hub = parrot_serve::link_hub::LinkHub::new(key, Some(dir.join("links.json")));
     let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
     core.state.principals.runtime = hub.runtime_id();
+    core.state.principals.env = hub.runtime_id().replacen("rt_", "env_", 1);
     // The injected MCP server is this program's `parrot mcp` (spec 26).
     core.state.functions.mcp = std::env::current_exe().ok().map(|p| p.display().to_string());
     if parrot_serve::desktop::available() {
