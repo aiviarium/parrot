@@ -96,7 +96,11 @@ fn new_prompt_and_watch_until_idle() {
     assert!(serve.parrot(&["sessions"]).contains(session));
 
     let prompted = serve.parrot(&["prompt", session, "Say hello."]);
-    assert!(prompted.starts_with("started "), "{prompted}");
+    // A prompt that arrives before the binding has started is queued and sent once it has.
+    assert!(
+        prompted.starts_with("started ") || prompted.starts_with("queued "),
+        "{prompted}"
+    );
 
     let watched = serve.parrot(&["watch", session, "--until", "idle"]);
     assert!(watched.contains("assistant: Hello there."), "{watched}");

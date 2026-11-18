@@ -491,7 +491,9 @@ fn prompt(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
         .by_session
         .get(&session)
         .is_some_and(|q| !q.entries.is_empty());
-    let can_steer = !starting && steer_supported(cx.state, &session);
+    // Only a running turn can be steered; a binding that is still starting queues the prompt.
+    let running = cx.state.sessions.info.get(&session).map(|s| s.state) == Some(SessionState::Running);
+    let can_steer = !starting && running && steer_supported(cx.state, &session);
     let disposition = if !busy && !paused && !queued_ahead {
         user_item(cx, &session, &entry, "sent", true);
         send(cx, &session, entry.clone(), false);
