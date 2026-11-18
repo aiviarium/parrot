@@ -495,7 +495,16 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                     .into_iter()
                     .collect()
             });
+            let failed_now = failed.is_some();
             crate::actions::note_turn(cx.state, &session, running, failed);
+            crate::actions::persist_failed(cx, &session, failed_now || running);
+            // A running turn is kept in the store, so a restart can end it as `interrupted` (E7).
+            if running {
+                cx.persist(json!({ "op": "put", "kind": "turn", "id": turn.id,
+                    "value": { "session": session, "turn": turn } }));
+            } else {
+                cx.persist(json!({ "op": "delete", "kind": "turn", "id": turn.id }));
+            }
             cx.publish(sid, json!({ "type": "turn", "turn": turn }));
         }
         DriverUpdateKind::Ref { reference } => {

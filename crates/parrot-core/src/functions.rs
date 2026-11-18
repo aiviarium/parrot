@@ -53,6 +53,9 @@ pub struct Approval {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ApprovalStatus {
     Open,
+    /// Approved while its caller was gone, such as after a restart; a repeat of the keyed call
+    /// runs it (27.2).
+    Approved,
     /// Approved and running.
     Running,
     Denied,
@@ -343,9 +346,35 @@ fn function_call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value)
     }
     let is_session_function = SESSION_FUNCTIONS.iter().any(|(n, _, _)| *n == name);
     if let (Some(session), false) = (&acting, is_session_function) {
-        if let Some(rid) = key.as_ref().and_then(|k| cx.state.functions.approval_keys.get(k)) {
-            // Asked again while the approval is open or the approved call runs (27.2).
-            return Reply::Now(Ok(pending(rid)));
+        if let Some(rid) = key
+            .as_ref()
+            .and_then(|k| cx.state.functions.approval_keys.get(k))
+            .cloned()
+        {
+            let approved = cx
+                .state
+                .functions
+                .approvals
+                .get(&rid)
+                .is_some_and(|a| a.status == ApprovalStatus::Approved);
+            if !approved {
+                // Asked again while the approval is open or the approved call runs (27.2).
+                return Reply::Now(Ok(pending(&rid)));
+            }
+            // Approved while nobody waited: this repeat runs the call.
+            if let Some(a) = cx.state.functions.approvals.get_mut(&rid) {
+                a.status = ApprovalStatus::Running;
+            }
+            persist_approval(cx, &rid);
+            let stored = cx.state.functions.approvals.get(&rid).map(|a| a.params.clone());
+            let params = stored.unwrap_or(params);
+            return match run_call(cx, conn, id, params, key.clone(), session) {
+                Reply::Now(result) => {
+                    finish_approved(cx, &rid, key, conn.to_string(), id.cloned(), result);
+                    Reply::Later
+                }
+                later => later,
+            };
         }
         let env = params["env"].as_str().unwrap_or_default().to_string();
         let spec = cx.state.functions.runtime.get(&name).cloned().or_else(|| {
@@ -474,6 +503,7 @@ fn open_approval(
             status: ApprovalStatus::Open,
         },
     );
+    persist_approval(cx, &rid);
     if id.is_some() {
         Reply::Later
     } else {
@@ -518,8 +548,18 @@ pub fn intercept(
         rec.request.answered_by = Some(by);
     }
     crate::requests::publish_request(cx, &rid);
+    let caller_gone = !cx.state.principals.conns.contains_key(&approval.conn);
     let a = cx.state.functions.approvals.get_mut(&rid)?;
-    if allow {
+    if allow && a.waiting.is_none() && caller_gone {
+        // Nobody can take the result now; the caller's repeat with its key runs the call.
+        a.status = ApprovalStatus::Approved;
+        if a.key.is_none() {
+            cx.state.functions.approvals.remove(&rid);
+            cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
+        } else {
+            persist_approval(cx, &rid);
+        }
+    } else if allow {
         a.status = ApprovalStatus::Running;
         let (waiting, key, params, caller) =
             (a.waiting.take(), a.key.clone(), a.params.clone(), a.conn.clone());
@@ -542,6 +582,8 @@ pub fn intercept(
         if let Some((c, i)) = a.waiting.take() {
             cx.reply(&c, i, Ok(denied));
         }
+        cx.state.functions.approvals.remove(&rid);
+        cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
     }
     Some(Reply::Now(Ok(json!({}))))
 }
@@ -561,9 +603,63 @@ fn finish_approved(
         cx.state.functions.approval_keys.remove(&k);
     }
     cx.state.functions.approvals.remove(rid);
+    cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
     if let Some(id) = id {
         cx.reply(&conn, id, Ok(result));
     }
+}
+
+/// Keep an approval in the store, so it can still be answered after a restart.
+fn persist_approval(cx: &mut Cx, rid: &str) {
+    let Some(a) = cx.state.functions.approvals.get(rid) else {
+        return;
+    };
+    let status = match a.status {
+        ApprovalStatus::Open => "open",
+        ApprovalStatus::Approved | ApprovalStatus::Running => "approved",
+        ApprovalStatus::Denied => "denied",
+    };
+    let value = json!({
+        "session": a.session,
+        "key": a.key.as_ref().map(|(p, k)| json!([p, k])),
+        "params": a.params,
+        "status": status,
+    });
+    cx.persist(json!({ "op": "put", "kind": "approval", "id": rid, "value": value }));
+}
+
+/// Put back an approval read from the store. Its caller is gone; an approved one waits for the
+/// caller's repeat with its key.
+pub fn restore_approval(cx: &mut Cx, rid: &str, value: &Value) {
+    let Some(session) = value["session"].as_str() else {
+        return;
+    };
+    let key = value["key"]
+        .as_array()
+        .and_then(|k| Some((k.first()?.as_str()?.to_string(), k.get(1)?.as_str()?.to_string())));
+    let status = match value["status"].as_str() {
+        Some("approved") => ApprovalStatus::Approved,
+        Some("denied") => return,
+        _ => ApprovalStatus::Open,
+    };
+    if let Some(k) = &key {
+        cx.state
+            .functions
+            .approval_keys
+            .insert(k.clone(), rid.to_string());
+    }
+    cx.state.functions.approvals.insert(
+        rid.to_string(),
+        Approval {
+            session: session.to_string(),
+            waiting: None,
+            conn: String::new(),
+            key,
+            params: value["params"].clone(),
+            deadline_ms: cx.now_ms,
+            status,
+        },
+    );
 }
 
 /// Time passed: callers whose approval is still open get `pending_approval` (27.2).
@@ -681,6 +777,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
         cx.state.functions.keys.insert(k.clone(), result.clone());
         if let Some(rid) = cx.state.functions.approval_keys.remove(&k) {
             cx.state.functions.approvals.remove(&rid);
+            cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
         }
     }
     if let Some(id) = p.id {

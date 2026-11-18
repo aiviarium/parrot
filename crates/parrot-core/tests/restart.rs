@@ -78,11 +78,16 @@ impl Sim {
     }
 
     fn connect(&mut self, conn: &str) {
+        self.connect_with(conn, json!([]));
+    }
+
+    fn connect_with(&mut self, conn: &str, provides: Value) {
         self.handle(Input::Connected {
             conn: conn.into(),
             peer: Peer::Owner,
         });
-        let params = json!({ "protocol": [1], "peer": { "kind": "client", "name": conn, "version": "1" }, "features": {} });
+        let params = json!({ "protocol": [1], "peer": { "kind": "client", "name": conn, "version": "1" },
+            "features": {}, "provides": provides });
         self.call(conn, "initialize", params).0.expect("initialize");
     }
 
@@ -412,4 +417,164 @@ fn model_is_set_on_a_stopped_session_and_used_at_the_next_start() {
         })
         .unwrap();
     assert_eq!(start["options"]["model"], "deep");
+}
+
+/// A session with a started, idle binding; returns the session and binding ids.
+fn idle_session(a: &mut Sim, extra: Value) -> (String, String) {
+    let mut params = json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" } });
+    for (k, v) in extra.as_object().unwrap() {
+        params[k] = v.clone();
+    }
+    let (r, effects) = a.call("con_a", "session/new", params);
+    let session = r.unwrap()["session"]["id"].as_str().unwrap().to_string();
+    let binding = start_of(&effects).unwrap();
+    a.started(&binding);
+    a.driver(
+        &binding,
+        json!({ "type": "state", "state": "idle", "background": [] }),
+    );
+    (session, binding)
+}
+
+/// Carry the store of `a` over to a new core, as a crash and restart would.
+fn restart(a: &mut Sim) -> Sim {
+    let mut b = Sim::new(10_000);
+    b.store = std::mem::take(&mut a.store);
+    let restore = b.store.restore();
+    b.handle(Input::Restore(restore));
+    b.connect("con_a");
+    b
+}
+
+fn turn_updates(effects: &[Effect]) -> Vec<Value> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Persist { record } if record["op"] == "append" && record["update"]["type"] == "turn" => {
+                Some(record["update"]["turn"].clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_turn_running_at_a_restart_ends_interrupted_and_can_continue() {
+    let mut a = Sim::new(0);
+    a.connect("con_a");
+    let (session, binding) = idle_session(&mut a, json!({}));
+    a.ok("session/prompt", json!({ "session": session, "text": "work" }));
+    a.driver(&binding, json!({ "type": "turn", "turn": { "id": "t1", "status": "running", "continuable": false, "started": "2023-11-14T22:13:20Z" } }));
+
+    let mut b = Sim::new(10_000);
+    b.store = std::mem::take(&mut a.store);
+    let restore = b.store.restore();
+    let effects = b.handle(Input::Restore(restore));
+    let turns = turn_updates(&effects);
+    assert_eq!(turns.len(), 1, "{turns:?}");
+    assert_eq!(turns[0]["status"], "interrupted");
+    assert_eq!(turns[0]["continuable"], true);
+    assert!(turns[0]["ended"].is_string());
+    // It is ended once: a second restart has nothing left to interrupt.
+    let mut c = Sim::new(20_000);
+    c.store = std::mem::take(&mut b.store);
+    let restore = c.store.restore();
+    assert!(turn_updates(&c.handle(Input::Restore(restore))).is_empty());
+    c.connect("con_a");
+    let done = c.ok(
+        "action/invoke",
+        json!({ "session": session, "action": "continue" }),
+    );
+    assert_eq!(done["status"], "queued", "{done}");
+}
+
+#[test]
+fn retry_resends_a_failed_turn_after_a_restart() {
+    let mut a = Sim::new(0);
+    a.connect("con_a");
+    let (session, binding) = idle_session(&mut a, json!({}));
+    let sent = a.ok(
+        "session/prompt",
+        json!({ "session": session, "text": "build it" }),
+    );
+    let message = sent["message"].as_str().unwrap().to_string();
+    a.driver(
+        &binding,
+        json!({ "type": "item", "item": { "id": "u1", "kind": "user",
+        "set": { "text": "build it", "status": "sent", "message": message } } }),
+    );
+    a.driver(
+        &binding,
+        json!({ "type": "turn", "turn": { "id": "t1", "status": "running", "input": "u1",
+        "continuable": false, "started": "2023-11-14T22:13:20Z" } }),
+    );
+    a.driver(
+        &binding,
+        json!({ "type": "turn", "turn": { "id": "t1", "status": "failed", "input": "u1",
+        "continuable": true, "started": "2023-11-14T22:13:20Z",
+        "error": { "code": "overloaded", "message": "try later", "retryable": true } } }),
+    );
+    a.driver(
+        &binding,
+        json!({ "type": "state", "state": "idle", "background": [] }),
+    );
+
+    let mut b = restart(&mut a);
+    let retried = b.ok("action/invoke", json!({ "session": session, "action": "retry" }));
+    assert_eq!(retried["status"], "queued", "{retried}");
+    let binding2 = b.core.state.sessions.by_id[&session].binding.clone().unwrap();
+    let effects = b.started(&binding2);
+    let sent = prompts(&effects);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1["text"], "build it");
+}
+
+#[test]
+fn an_approval_open_at_a_restart_is_answered_and_collected_with_its_key() {
+    let spec = json!({ "name": "acme.deploy", "description": "Deploy for tests", "input": { "type": "object" },
+        "output": { "type": "object" }, "effects": ["write"], "level": "host" });
+    let mut a = Sim::new(0);
+    a.connect("con_a");
+    a.connect_with("con_p", json!([spec.clone()]));
+    let (session, _) = idle_session(&mut a, json!({}));
+    let call = json!({ "function": "acme.deploy", "session": session, "input": {}, "key": "deploy-1" });
+    let (r, _) = a.call("con_a", "function/call", call.clone());
+    assert_eq!(r, Err(0), "the call waits for its approval");
+    let request = a.core.state.functions.approvals.keys().next().unwrap().clone();
+
+    let mut b = restart(&mut a);
+    b.connect_with("con_p", json!([spec]));
+    let open = b.ok("request/list", json!({ "session": session }))["requests"].clone();
+    let req = open
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == request.as_str())
+        .unwrap();
+    assert_eq!(req["status"], "open", "{open}");
+    b.ok(
+        "request/answer",
+        json!({ "request": request, "answer": { "choice": "allow" } }),
+    );
+    // The caller comes back with its key; the call goes to the provider now.
+    let (_, effects) = b.call("con_a", "function/call", call);
+    let forwarded = effects
+        .iter()
+        .any(|e| matches!(e, Effect::ClientCall { conn, .. } if conn == "con_p"));
+    assert!(forwarded, "the approved call runs on the repeat");
+}
+
+#[test]
+fn seconds_spent_are_kept_across_a_restart() {
+    let mut a = Sim::new(0);
+    a.connect("con_a");
+    let (session, binding) = idle_session(&mut a, json!({ "ceiling": { "budget": { "seconds": 600 } } }));
+    a.ok("session/prompt", json!({ "session": session, "text": "work" }));
+    a.driver(&binding, json!({ "type": "turn", "turn": { "id": "t1", "status": "running", "continuable": false, "started": "2023-11-14T22:13:20Z" } }));
+    let now = a.clock.0.load(std::sync::atomic::Ordering::SeqCst);
+    a.clock.set(now + 42_000);
+    a.handle(Input::Tick { now_ms: now + 42_000 });
+    let mut b = restart(&mut a);
+    let s = b.ok("session/get", json!({ "session": session }))["session"].clone();
+    assert_eq!(s["budget"]["used"]["seconds"], 42, "{s}");
 }

@@ -460,29 +460,11 @@ fn initialize_params() -> Value {
 /// How many stored updates come back for replay after a restart.
 const RESTORE_RECENT: u64 = parrot_core::subscriptions::RECENT as u64;
 
-/// Every kind of projection the core persists.
-const KINDS: [&str; 14] = [
-    "agent",
-    "workspace",
-    "session",
-    "binding",
-    "item",
-    "options",
-    "actions",
-    "usage",
-    "queue",
-    "request",
-    "inflight",
-    "moved",
-    "outbox",
-    "arrived",
-];
-
 /// Reads what the core needs to continue after a restart.
 fn load(store: &Store) -> parrot_store::Result<parrot_core::Restore> {
     let head = store.head()?.unwrap_or(0);
     let mut projections = Vec::new();
-    for kind in KINDS {
+    for &kind in parrot_core::restore::KINDS {
         let mut cursor: Option<String> = None;
         loop {
             let page = store.list(kind, cursor.as_deref(), 1000)?;

@@ -229,12 +229,15 @@ impl TokenCheck for TokenStore {
             return None;
         }
         r.token["lastUsed"] = json!(now);
-        Some(Peer::Token {
+        let peer = Peer::Token {
             token: r.token["id"].as_str()?.to_string(),
             scopes: strings(&r.token["scopes"]).unwrap_or_default(),
             sessions: strings(&r.token["sessions"]),
             provides: strings(&r.token["provides"]),
-        })
+        };
+        // `lastUsed` is kept across restarts. A failed write only loses that time.
+        let _ = self.save(&records);
+        Some(peer)
     }
 }
 
@@ -263,7 +266,7 @@ mod tests {
         let file = std::fs::read_to_string(&path).unwrap();
         assert!(!file.contains(secret), "the secret is on disk");
 
-        let again = TokenStore::open(path).unwrap();
+        let again = TokenStore::open(path.clone()).unwrap();
         let Some(Peer::Token {
             scopes,
             sessions,
@@ -277,6 +280,12 @@ mod tests {
         assert_eq!(sessions.unwrap(), ["ses_a"]);
         assert_eq!(provides.unwrap(), ["acme.*"]);
         assert!(again.check("pt_wrong").is_none());
+        let reopened = TokenStore::open(path.clone()).unwrap();
+        let listed = reopened.op("token.list", json!({})).unwrap();
+        assert!(
+            listed["tokens"][0]["lastUsed"].is_string(),
+            "lastUsed survives a restart: {listed}"
+        );
 
         let id = made["token"]["id"].as_str().unwrap();
         again.op("token.revoke", json!({ "token": id })).unwrap();

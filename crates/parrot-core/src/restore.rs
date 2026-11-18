@@ -12,6 +12,30 @@ use crate::{Cx, actions, bindings, items, options, queue, requests, sessions, us
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
+/// Every kind of projection the core persists, for a backend to read back before
+/// `Input::Restore`. A kind missing here is lost at a restart.
+pub const KINDS: &[&str] = &[
+    "agent",
+    "workspace",
+    "session",
+    "binding",
+    "item",
+    "tree",
+    "seed",
+    "options",
+    "actions",
+    "usage",
+    "queue",
+    "request",
+    "approval",
+    "inflight",
+    "failed",
+    "turn",
+    "moved",
+    "outbox",
+    "arrived",
+];
+
 /// Apply what the store held. Meant as the first input of a runtime.
 pub fn restore(cx: &mut Cx, r: Restore) {
     cx.state.seq = cx.state.seq.max(r.head);
@@ -91,6 +115,15 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     for (id, value) in take("request") {
         requests::restore(cx, &id, &value);
     }
+    for (session, value) in take("failed") {
+        actions::restore_failed(cx.state, &session, &value);
+    }
+    for (id, value) in take("approval") {
+        crate::functions::restore_approval(cx, &id, &value);
+    }
+    for (id, value) in take("turn") {
+        interrupted(cx, &id, &value);
+    }
     for (message, value) in take("inflight") {
         uncertain(cx, &message, &value);
     }
@@ -158,4 +191,22 @@ fn uncertain(cx: &mut Cx, message: &str, value: &Value) {
             json!({ "type": "item", "item": { "id": message, "set": { "status": "uncertain" } } }),
         );
     }
+}
+
+/// A turn that was running when the runtime stopped. Its harness is gone, so it ends as
+/// `interrupted` and can be continued (Appendix E7).
+fn interrupted(cx: &mut Cx, id: &str, value: &Value) {
+    cx.persist(json!({ "op": "delete", "kind": "turn", "id": id }));
+    let Some(session) = value.get("session").and_then(Value::as_str) else {
+        return;
+    };
+    if !cx.state.sessions.by_id.contains_key(session) {
+        return;
+    }
+    let mut turn = value.get("turn").cloned().unwrap_or_else(|| json!({ "id": id }));
+    turn["status"] = json!("interrupted");
+    turn["stop"] = json!("cancelled");
+    turn["continuable"] = json!(true);
+    turn["ended"] = json!(sessions::timestamp(cx.now_ms));
+    cx.publish(Some(session.to_string()), json!({ "type": "turn", "turn": turn }));
 }
