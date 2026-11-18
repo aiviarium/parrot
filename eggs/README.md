@@ -134,6 +134,27 @@ The runtime installs eggs into `<state_dir>/eggs`. The runtime refuses an egg wh
 
 The schemas of `driver.kdl` and the probes are in `spec/schema/driver-data/`, with examples in `spec/examples/driver-data/`.
 
+## The rookery target
+
+An egg for an agent that Rookery installs on a host can include a second Hatchery target,
+`rookery`. The `rookery` folder holds `rookery.json` and `tasks/*.yml`. When Rookery provisions a
+machine, those tasks install the CLI or server itself along with sign-in, status and update
+actions. The `claude`, `codex`, `pi`, `opencode` and `t3` eggs each define one.
+
+Each task list reads a feature-scoped version variable with a default, such as
+`{{ rookery_claude_cli_version | default('2.1.327') }}` (`rookery_codex_cli_version`,
+`rookery_pi_cli_version`, `rookery_opencode_cli_version`, `rookery_t3_server_version`, and
+`rookery_t3_server_sha256` for custom T3 builds). That default stays inside the egg's
+`cli "<name>" versions="…"` range in `parrot/driver.kdl`. A fresh host gets a release the driver
+data covers.
+
+Check both targets locally before opening a pull request:
+
+```bash
+parrot eggs check ./eggs/claude
+rookery plugin check ./eggs/claude
+```
+
 ## How a driver finds its data
 
 The runtime starts every driver with these variables:

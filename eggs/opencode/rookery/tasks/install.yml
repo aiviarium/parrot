@@ -1,0 +1,39 @@
+---
+- name: Read installed opencode version
+  ansible.builtin.command:
+    argv: [npm, ls, --global, --prefix, "{{ rookery_home }}/.local", --json, opencode-ai]
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    PATH: "{{ rookery_tool_path }}"
+  register: rookery_opencode_installed
+  changed_when: false
+  failed_when: false
+- name: Install selected opencode version as agent
+  ansible.builtin.command:
+    argv:
+      - npm
+      - install
+      - --global
+      - --prefix
+      - "{{ rookery_home }}/.local"
+      - --no-audit
+      - --no-fund
+      - "opencode-ai@{{ rookery_opencode_cli_version | default('1.19.6') }}"
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    PATH: "{{ rookery_tool_path }}"
+  # The selected version is the least one: a newer one from Update stays.
+  when: rookery_opencode_installed.rc != 0 or (rookery_opencode_installed.stdout | from_json).get('dependencies', {}).get('opencode-ai', {}).get('version', '0') is version(rookery_opencode_cli_version | default('1.19.6'), '<')
+- name: Verify opencode launches without authentication
+  ansible.builtin.command:
+    argv: ["{{ rookery_home }}/.local/bin/opencode", --version]
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    PATH: "{{ rookery_tool_path }}"
+  changed_when: false

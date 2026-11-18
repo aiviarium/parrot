@@ -1,0 +1,59 @@
+---
+- name: Read installed codex version
+  ansible.builtin.command:
+    argv: [npm, ls, --global, --prefix, "{{ rookery_home }}/.local", --json, "@openai/codex"]
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    PATH: "{{ rookery_tool_path }}"
+  register: rookery_codex_installed
+  changed_when: false
+  failed_when: false
+- name: Install selected codex version as agent
+  ansible.builtin.command:
+    argv:
+      - npm
+      - install
+      - --global
+      - --prefix
+      - "{{ rookery_home }}/.local"
+      - --no-audit
+      - --no-fund
+      - "@openai/codex@{{ rookery_codex_cli_version | default('0.167.1') }}"
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    PATH: "{{ rookery_tool_path }}"
+  # The selected version is the least one: a newer one from Update stays.
+  when: rookery_codex_installed.rc != 0 or (rookery_codex_installed.stdout | from_json).get('dependencies', {}).get('@openai/codex', {}).get('version', '0') is version(rookery_codex_cli_version | default('0.167.1'), '<')
+- name: Verify codex launches without authentication
+  ansible.builtin.command:
+    argv: ["{{ rookery_home }}/.local/bin/codex", --version]
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    PATH: "{{ rookery_tool_path }}"
+  changed_when: false
+# The desktop tools, as an MCP server in Codex's own configuration.
+- name: Ensure Codex configuration directory exists
+  ansible.builtin.file:
+    path: "{{ rookery_home }}/.codex"
+    state: directory
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+    mode: '0700'
+- name: Register the desktop tools with Codex
+  ansible.builtin.blockinfile:
+    path: "{{ rookery_home }}/.codex/config.toml"
+    create: true
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+    mode: '0600'
+    marker: '# {mark} ROOKERY DESKTOP TOOLS'
+    block: |
+      [mcp_servers.desktop]
+      command = "/usr/local/bin/agent-env"
+      args = ["/usr/local/bin/box", "mcp"]

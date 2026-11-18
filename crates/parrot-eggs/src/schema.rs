@@ -68,4 +68,109 @@ mod tests {
             assert_eq!(manifest.name().id, id);
         }
     }
+
+    #[test]
+    fn rookery_default_versions_match_driver_cli_ranges() {
+        let eggs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&eggs).unwrap().flatten() {
+            let dir = entry.path();
+            if !dir.join("package.kdl").is_file() {
+                continue;
+            }
+            let manifest = hatchery::Manifest::load(&dir).unwrap();
+            let Some(rookery) = manifest.target("rookery") else {
+                continue;
+            };
+            let id = &manifest.package.id;
+            let driver = crate::store::read_driver(&dir.join("parrot")).unwrap();
+            let cli = driver
+                .cli
+                .as_ref()
+                .unwrap_or_else(|| panic!("{id}: driver.kdl has no cli node"));
+            let range_str = cli
+                .versions
+                .as_deref()
+                .unwrap_or_else(|| panic!("{id}: driver.kdl has no cli versions"));
+            let req = hatchery::semver::VersionReq::parse(range_str)
+                .unwrap_or_else(|e| panic!("{id}: invalid versions {range_str:?}: {e}"));
+
+            let rookery_dir = dir.join(rookery.dir());
+            let manifest_json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(rookery_dir.join("rookery.json")).unwrap())
+                    .unwrap();
+            let features = manifest_json["features"].as_array().unwrap();
+            let mut found_any = false;
+            for feature in features {
+                let feature_id = feature["id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{id}: feature missing id"));
+                let expected_var = format!("rookery_{id}_{feature_id}_version");
+                if let Some(tasks_rel) = feature["tasks"].as_str() {
+                    let text = std::fs::read_to_string(rookery_dir.join(tasks_rel)).unwrap();
+                    let defaults = extract_rookery_version_defaults(&text);
+                    assert!(
+                        !defaults.is_empty(),
+                        "{id}/{feature_id}: no {expected_var} | default('...') found in {tasks_rel}"
+                    );
+                    for (var, ver_str) in defaults {
+                        assert_eq!(
+                            var, expected_var,
+                            "{id}/{feature_id}: expected version variable {expected_var}, found {var}"
+                        );
+                        let ver = hatchery::semver::Version::parse(&ver_str)
+                            .unwrap_or_else(|e| panic!("{id}: {var} default {ver_str:?} is not semver: {e}"));
+                        assert!(
+                            req.matches(&ver),
+                            "{id}: {var} default {ver} is outside parrot/driver.kdl cli versions {range_str:?}"
+                        );
+                        found_any = true;
+                    }
+                }
+            }
+            assert!(found_any, "{id}: no feature version defaults verified");
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "expected at least 5 rookery eggs, checked {checked}"
+        );
+    }
+
+    fn extract_rookery_version_defaults(text: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(idx) = rest.find("rookery_") {
+            let after = &rest[idx..];
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            let var = &after[..end];
+            rest = &after[end..];
+            if !var.ends_with("_version") {
+                continue;
+            }
+            let trimmed = rest.trim_start();
+            let Some(after_pipe) = trimmed.strip_prefix('|') else {
+                continue;
+            };
+            let trimmed = after_pipe.trim_start();
+            let Some(after_def) = trimmed.strip_prefix("default") else {
+                continue;
+            };
+            let trimmed = after_def.trim_start();
+            let Some(after_paren) = trimmed.strip_prefix('(') else {
+                continue;
+            };
+            let trimmed = after_paren.trim_start();
+            let Some(quote) = trimmed.chars().next().filter(|&c| c == '\'' || c == '"') else {
+                continue;
+            };
+            let inside = &trimmed[1..];
+            if let Some(close) = inside.find(quote) {
+                out.push((var.to_string(), inside[..close].to_string()));
+            }
+        }
+        out
+    }
 }
