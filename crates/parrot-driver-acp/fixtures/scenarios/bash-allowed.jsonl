@@ -1,0 +1,2 @@
+// A tool call asks to run `ls`. Allowed, it prints two entries and says what it found.
+[[perm:ls]]

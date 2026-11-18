@@ -94,6 +94,11 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     for (message, value) in take("inflight") {
         uncertain(cx, &message, &value);
     }
+    for kind in ["moved", "outbox"] {
+        for (id, value) in take(kind) {
+            crate::links::restore(cx, kind, &id, &value);
+        }
+    }
 
     for binding in stopped {
         bindings::persist(cx, &binding);
