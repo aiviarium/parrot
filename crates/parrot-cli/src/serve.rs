@@ -78,18 +78,60 @@ pub fn socket_path() -> io::Result<PathBuf> {
     return parrot_serve::socket::default_pipe_name().map(PathBuf::from);
 }
 
-pub async fn run(state_dir: Option<PathBuf>, ws: Option<String>) -> Result<(), String> {
+pub async fn run(
+    state_dir: Option<PathBuf>,
+    ws: Option<String>,
+    link_listen: Option<String>,
+) -> Result<(), String> {
     let dir = match state_dir {
         Some(dir) => dir,
         None => default_state_dir().map_err(|e| e.to_string())?,
     };
     let db = dir.join("state.db");
     let store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
-    let core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
-    let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), |rt| RuntimeBackend::new(rt, store));
+    let key =
+        parrot_link::StaticKey::load_or_create(&dir).map_err(|e| format!("cannot read the link key: {e}"))?;
+    let hub = parrot_serve::link_hub::LinkHub::new(key, Some(dir.join("links.json")));
+    let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
+    core.state.principals.runtime = hub.runtime_id();
+    core.state.principals.env = hub.runtime_id().replacen("rt_", "env_", 1);
+    // The injected MCP server is this program's `parrot mcp` (spec 26).
+    core.state.functions.mcp = std::env::current_exe().ok().map(|p| p.display().to_string());
+    if parrot_serve::desktop::available() {
+        for spec in parrot_serve::desktop::specs() {
+            let name = spec["name"].as_str().unwrap_or_default().to_string();
+            core.state.functions.runtime.insert(name, spec);
+        }
+    }
+    let scratch = dir.join("files");
+    let _ = std::fs::create_dir_all(&scratch);
+    let notifier = parrot_serve::notify::Notifier::new(parrot_serve::notify::targets_from_env());
+    let backend_hub = hub.clone();
+    let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
+        RuntimeBackend::new(rt, store)
+            .with_links(backend_hub)
+            .with_scratch(scratch)
+            .with_notifier(notifier)
+    });
+    hub.attach(rt.clone());
 
     let socket = socket_path().map_err(|e| e.to_string())?;
     let local = serve_local(rt.clone(), socket.clone());
+    let link_tcp = async {
+        let Some(addr) = link_listen else {
+            return std::future::pending().await;
+        };
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+        if let Ok(a) = listener.local_addr() {
+            hub.add_address(a.to_string());
+        }
+        parrot_serve::link_hub::serve_link_tcp(hub.clone(), listener)
+            .await
+            .map_err(|e| format!("link listener: {e}"))
+    };
+    let link_local = serve_link_local(hub.clone(), &socket);
     let remote = async {
         let Some(addr) = ws else {
             return std::future::pending().await;
@@ -104,12 +146,38 @@ pub async fn run(state_dir: Option<PathBuf>, ws: Option<String>) -> Result<(), S
     let result = tokio::select! {
         r = local => r,
         r = remote => r,
+        r = link_tcp => r,
+        r = link_local => r,
         _ = tokio::signal::ctrl_c() => Ok(()),
         _ = terminated() => Ok(()),
     };
     #[cfg(unix)]
     let _ = std::fs::remove_file(&socket);
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(parrot_link::endpoint::link_socket_path(&socket));
     result
+}
+
+/// The link endpoint `link.sock` beside the socket (E9).
+#[cfg(unix)]
+async fn serve_link_local(
+    hub: Arc<parrot_serve::link_hub::LinkHub>,
+    socket: &std::path::Path,
+) -> Result<(), String> {
+    let path = parrot_link::endpoint::link_socket_path(socket);
+    let listener = parrot_link::endpoint::bind_link_socket(&path)
+        .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    parrot_serve::link_hub::serve_link_socket(hub, listener)
+        .await
+        .map_err(|e| format!("link socket: {e}"))
+}
+
+#[cfg(windows)]
+async fn serve_link_local(
+    _hub: Arc<parrot_serve::link_hub::LinkHub>,
+    _socket: &std::path::Path,
+) -> Result<(), String> {
+    std::future::pending().await
 }
 
 #[cfg(unix)]

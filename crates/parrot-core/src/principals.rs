@@ -36,6 +36,8 @@ pub struct Connection {
     /// Set by `initialize`.
     pub info: Option<PeerInfo>,
     pub protocol: Option<u32>,
+    /// The session this connection acts as, for the MCP server of one of its bindings (spec 26).
+    pub session: Option<String>,
 }
 
 impl Connection {
@@ -76,17 +78,35 @@ pub fn scopes_of(peer: &Peer) -> Vec<Scope> {
     }
 }
 
+/// The scopes a connection acts with: its peer's, or its session's grant (spec 5.1).
+pub fn conn_scopes(state: &State, c: &Connection) -> Vec<Scope> {
+    let peer = scopes_of(&c.peer);
+    match &c.session {
+        Some(session) => state
+            .sessions
+            .info
+            .get(session)
+            .map(|i| i.grant.iter().copied().filter(|s| peer.contains(s)).collect())
+            .unwrap_or_default(),
+        None => peer,
+    }
+}
+
 /// Whether an initialized connection holds `scope`.
 pub fn allows(state: &State, conn: &str, scope: Scope) -> bool {
     state
         .principals
         .conns
         .get(conn)
-        .is_some_and(|c| c.initialized() && scopes_of(&c.peer).contains(&scope))
+        .is_some_and(|c| c.initialized() && conn_scopes(state, c).contains(&scope))
 }
 
 /// Whether a connection may see a session at all (a token's `sessions` filter, spec 3.4).
 pub fn sees(state: &State, conn: &str, session: &str) -> bool {
+    // A session acts only on its own subtree.
+    if let Some(own) = state.principals.conns.get(conn).and_then(|c| c.session.as_ref()) {
+        return crate::directory::path_of(state, session).contains(own);
+    }
     match state.principals.conns.get(conn).map(|c| &c.peer) {
         Some(Peer::Token {
             sessions: Some(list), ..
@@ -103,7 +123,7 @@ pub fn check(state: &State, conn: &str, scope: Scope) -> Result<(), RpcError> {
     let Some(c) = state.principals.conns.get(conn).filter(|c| c.initialized()) else {
         return Err(RpcError::new(-32010, "not initialized"));
     };
-    if !scopes_of(&c.peer).contains(&scope) {
+    if !conn_scopes(state, c).contains(&scope) {
         return Err(
             RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "scope", "scope": scope }))
         );
@@ -122,6 +142,9 @@ pub fn check_session(state: &State, conn: &str, scope: Scope, session: &str) -> 
 
 /// The principal a connection acts as (spec 5.1).
 pub fn principal_of(state: &State, conn: &str) -> String {
+    if let Some(session) = state.principals.conns.get(conn).and_then(|c| c.session.clone()) {
+        return session;
+    }
     match state.principals.conns.get(conn).map(|c| &c.peer) {
         Some(Peer::Link { link, .. }) => link.clone(),
         _ => conn.to_string(),
@@ -143,6 +166,19 @@ pub fn call(cx: &mut Cx, conn: &str, _id: Option<&RequestId>, method: &str, para
 }
 
 fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
+    // `parrot mcp` names its binding and that binding's credential (spec 26).
+    let acting = match params.get("binding") {
+        Some(b) => {
+            let binding = b["id"].as_str().unwrap_or_default();
+            let token = b["token"].as_str().unwrap_or_default();
+            let session = crate::functions::binding_session(cx, binding, token).ok_or_else(|| {
+                RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "binding" }))
+            })?;
+            Some(session)
+        }
+        None => None,
+    };
+    let provides = params.get("provides").and_then(Value::as_array).cloned();
     let p: InitializeParams = parse(params)?;
     let Some(protocol) = p.protocol.iter().copied().filter(|v| SUPPORTED.contains(v)).max() else {
         return Err(RpcError::new(-32011, "no shared version").with_data(json!({ "supported": SUPPORTED })));
@@ -152,11 +188,16 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
     };
     c.info = Some(p.peer);
     c.protocol = Some(protocol);
+    c.session = acting;
     let peer = c.peer.clone();
+    let scopes = conn_scopes(cx.state, &cx.state.principals.conns[conn]);
+    if let Some(specs) = provides {
+        crate::functions::provide(cx, conn, &specs)?;
+    }
     let mut connection = json!({
         "id": conn,
         "principal": principal_of(cx.state, conn),
-        "scopes": scopes_of(&peer),
+        "scopes": scopes,
     });
     if let Peer::Token {
         sessions: Some(s), ..
@@ -168,21 +209,28 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
         "protocol": protocol,
         "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
         "runtime": { "id": cx.state.principals.runtime, "env": cx.state.principals.env },
-        "features": { "profile.core": {} },
+        "features": {
+            "profile.core": {}, "profile.link": {}, "profile.remote": {}, "profile.desktop": {}, "profile.tui": {},
+        },
         "connection": connection,
     }))
 }
 
 /// A connection opened.
 pub fn connected(cx: &mut Cx, conn: &str, peer: Peer) {
+    let peer_for_links = peer.clone();
     cx.state.principals.conns.insert(
         conn.to_string(),
         Connection {
             peer,
             info: None,
             protocol: None,
+            session: None,
         },
     );
+    if let Peer::Link { link, .. } = &peer_for_links {
+        crate::links::connected(cx, conn, link);
+    }
 }
 
 /// A connection closed.
