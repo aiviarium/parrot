@@ -2,6 +2,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A dry run builds and packs everything, and publishes nothing. It checks the workflow itself
+  # before a tag; the eggs artifact holds the registry it would have published.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and pack without publishing
+        type: boolean
+        default: true
 permissions:
   contents: write
   pages: write
@@ -13,6 +21,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_VERSION: 1.99.0
+  # The name of the secret that holds the registry's Ed25519 signing key. Signing takes the
+  # variable's name, never the key on a command line.
+  SIGN_KEY_ENV: PARROT_EGG_SIGNING_KEY
 jobs:
   # One `parrot` per OS and architecture, with a checksum beside each archive, and the driver
   # binaries the eggs ship as Hatchery variants.
@@ -89,8 +100,9 @@ jobs:
           if-no-files-found: error
 
   # Packs each egg with every platform's driver binary as a variant and publishes a static
-  # Hatchery registry: as release assets, and on GitHub Pages at the default registry URL,
-  # https://aiviarium.github.io/parrot/eggs.
+  # Hatchery registry, signed with the registry key: as release assets, and on GitHub Pages at
+  # the default registry URL, https://aiviarium.github.io/parrot/eggs. A dry run stops before
+  # the two upload steps that publish.
   eggs:
     needs: build
     runs-on: ubuntu-latest
@@ -120,10 +132,28 @@ jobs:
             done
           done
       - name: Pack and publish the registry
+        env:
+          # A tag release must be signed. A dry run without the secret packs unsigned, so the
+          # workflow can be checked before the key exists.
+          PARROT_EGG_SIGNING_KEY: ${{ secrets.PARROT_EGG_SIGNING_KEY }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           tar -xzf parrot/parrot-x86_64-unknown-linux-gnu.tar.gz -C parrot
           mkdir -p site
-          ./parrot/parrot eggs pack eggs --publish site/eggs
+          args=(eggs pack eggs --publish site/eggs)
+          if [ -n "$PARROT_EGG_SIGNING_KEY" ]; then
+            args+=(--sign-key-env "$SIGN_KEY_ENV")
+          elif [ "$DRY_RUN" != true ]; then
+            echo "::error::a release needs the $SIGN_KEY_ENV secret so the registry is signed"
+            exit 1
+          fi
+          ./parrot/parrot "${args[@]}" | tee pack.log
+          grep '^public key ' pack.log | sed 's/^public key //' > site/eggs/key.txt || true
+          if [ -s site/eggs/key.txt ]; then
+            key="$(cat site/eggs/key.txt)"
+            echo "The registry is signed with \`$key\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "Give it to Hatchery as key=\"$key\" to check an egg against it." >> "$GITHUB_STEP_SUMMARY"
+          fi
           mkdir -p dist
           tar -czf dist/parrot-eggs-registry.tar.gz -C site eggs
           find site/eggs -name '*.egg' -exec cp {} dist/ \;
@@ -134,11 +164,14 @@ jobs:
           path: dist/*
           if-no-files-found: error
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push'
         with:
           path: site
       - uses: actions/deploy-pages@v4
+        if: github.event_name == 'push'
 
   publish:
+    if: github.event_name == 'push'
     needs: [build, eggs]
     runs-on: ubuntu-latest
     timeout-minutes: 10
