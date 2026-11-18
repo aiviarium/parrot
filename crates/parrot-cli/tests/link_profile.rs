@@ -4,6 +4,7 @@
 //! link; the first runtime is killed, as when a laptop closes; a client of the second resumes the
 //! queue, the session runs its queued prompt there, and the client answers the request it raises.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 // The helpers are shared in shape with `link_move.rs`; this test uses only some of them.
 #![allow(dead_code)]
 

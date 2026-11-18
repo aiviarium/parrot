@@ -77,7 +77,7 @@ where
         }
     });
     let notes = out_tx.clone();
-    tokio::spawn(async move {
+    let forwarder = tokio::spawn(async move {
         while let Some(u) = updates.recv().await {
             if notes
                 .send(json!({"jsonrpc": "2.0", "method": "update", "params": u}))
@@ -106,7 +106,11 @@ where
             let _ = out.send(msg);
         });
     }
+    // Standard input closed. The driver goes away with it: the task that forwards updates holds
+    // a sender, so it ends here rather than keeping the writer waiting on a channel that is
+    // still open on its side.
     drop(out_tx);
+    forwarder.abort();
     let _ = writer.await;
     Ok(())
 }

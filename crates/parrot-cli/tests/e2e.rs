@@ -1,6 +1,7 @@
 //! End to end: a real `parrot serve`, the real Claude driver over a fake `claude`, and two clients
 //! on the local socket.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

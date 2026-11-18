@@ -1,6 +1,7 @@
 //! The `remote` profile (spec 3.4, 36, E8): a request with `notify` reaches a webhook, and a
 //! WebSocket client whose token has only `answer` answers it from the push.
 #![cfg(unix)]
+// Unix only for now: these runtime tests have not run on Windows yet.
 
 mod common;
 

@@ -1,5 +1,6 @@
 //! The desktop functions (spec 29, E5) through `parrot serve`, with a fake `box` on `PATH`.
 #![cfg(unix)]
+// Writes a POSIX fake command and sets its file mode.
 
 mod common;
 

@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::mpsc;
 
 pub const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
@@ -46,7 +44,7 @@ impl Serve {
         if let Some(config) = &setup.config {
             std::fs::write(state.join("config.json"), config.to_string()).unwrap();
         }
-        let socket = dir.path().join("sock");
+        let socket = test_socket(dir.path());
         let _ = std::fs::remove_file(&socket);
         let mut cmd = Command::new(PARROT);
         cmd.args(["serve", "--state-dir"])
@@ -59,7 +57,7 @@ impl Serve {
         }
         let child = cmd.spawn().expect("serve starts");
         let deadline = Instant::now() + WAIT;
-        while std::os::unix::net::UnixStream::connect(&socket).is_err() {
+        while connect_once(&socket).is_err() {
             assert!(Instant::now() < deadline, "serve never listened");
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -92,6 +90,57 @@ impl Drop for Serve {
     }
 }
 
+/// The runtime's local endpoint for a test directory: a Unix socket `sock` on Unix, and a
+/// per-process named pipe on Windows, which has no filesystem path to bind in `dir`.
+pub fn test_socket(dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        dir.join("sock")
+    }
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let _ = dir;
+        PathBuf::from(format!(r"\\.\pipe\parrot-test-{}-{n}", std::process::id()))
+    }
+}
+
+/// One synchronous connection to a local endpoint, used to wait until the runtime listens.
+/// The connection is closed at once; the runtime ends the empty session.
+pub fn connect_once(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::connect(path).map(|_| ())
+    }
+    #[cfg(windows)]
+    {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map(|_| ())
+    }
+}
+
+/// A local endpoint as a stream the client reads and writes.
+async fn open(path: &Path) -> std::io::Result<Box<dyn LocalStream>> {
+    #[cfg(unix)]
+    {
+        Ok(Box::new(tokio::net::UnixStream::connect(path).await?))
+    }
+    #[cfg(windows)]
+    {
+        let pipe = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
+        Ok(Box::new(pipe))
+    }
+}
+
+/// What a Unix socket and a Windows named pipe have in common.
+pub trait LocalStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin> LocalStream for T {}
+
 /// A JSON-RPC client, one message per line.
 pub struct Client {
     pub name: &'static str,
@@ -113,8 +162,8 @@ impl Client {
     }
 
     pub async fn connect_path(socket: &Path, name: &'static str) -> Self {
-        let stream = UnixStream::connect(socket).await.expect("connects");
-        let (read, tx) = stream.into_split();
+        let stream = open(socket).await.expect("connects");
+        let (read, tx) = tokio::io::split(stream);
         let (msgs, rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             let mut lines = BufReader::new(read).lines();
@@ -135,7 +184,7 @@ impl Client {
             tx: Box::new(move |line: String| {
                 let tx = tx.clone();
                 Box::pin(async move {
-                    let mut tx: tokio::sync::MutexGuard<'_, OwnedWriteHalf> = tx.lock().await;
+                    let mut tx = tx.lock().await;
                     tx.write_all(line.as_bytes()).await.is_ok()
                 })
             }),
@@ -480,7 +529,8 @@ pub fn install_eggs(state: &Path) {
     copy_tree(&egg_template().join("eggs"), &state.join("eggs"), true);
 }
 
-/// Copies a folder. With `link`, files under a `variants` folder become symbolic links.
+/// Copies a folder. With `link`, files under a `variants` folder are shared with the source
+/// instead of copied, so installing the eggs of a test template does not copy every binary.
 pub fn copy_tree(from: &Path, to: &Path, link: bool) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap().flatten() {
@@ -492,9 +542,24 @@ pub fn copy_tree(from: &Path, to: &Path, link: bool) {
             }
             copy_tree(&src, &dst, link);
         } else if link && src.components().any(|c| c.as_os_str() == "variants") {
-            std::os::unix::fs::symlink(&src, &dst).unwrap();
+            share(&src, &dst);
         } else {
             std::fs::copy(&src, &dst).unwrap();
+        }
+    }
+}
+
+/// Shares a file with the source: a symbolic link on Unix, a hard link elsewhere, and a copy
+/// when a hard link is refused, which Windows does across volumes.
+fn share(src: &Path, dst: &Path) {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(src, dst).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        if std::fs::hard_link(src, dst).is_err() {
+            std::fs::copy(src, dst).unwrap();
         }
     }
 }

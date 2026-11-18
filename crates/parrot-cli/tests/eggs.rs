@@ -1,6 +1,5 @@
 //! `parrot eggs` against the in-repo registry `eggs/` and against a static registry packed
 //! from it.
-#![cfg(unix)]
 
 mod common;
 
@@ -99,7 +98,7 @@ fn installs_from_the_in_repo_registry() {
         Path::new(&data)
             .join("variants")
             .join(key)
-            .join("parrot-driver-claude")
+            .join(format!("parrot-driver-claude{}", std::env::consts::EXE_SUFFIX))
             .is_file()
     );
     ok(parrot(&["eggs", "check"], dir.path()));

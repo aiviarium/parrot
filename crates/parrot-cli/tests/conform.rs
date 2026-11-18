@@ -1,6 +1,7 @@
 //! `parrot conform` against the installed Claude driver egg and a real `parrot serve`, both over
 //! `fake-claude`.
 #![cfg(unix)]
+// Unix only for now: these runtime tests have not run on Windows yet.
 
 mod common;
 

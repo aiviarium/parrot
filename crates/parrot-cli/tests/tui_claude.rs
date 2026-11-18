@@ -3,6 +3,7 @@
 //! The harness is a fake that replays Claude Code's screens from a development cast; a dialog
 //! no profile knows is answered from a client, and the screen and keys go through the runtime.
 #![cfg(unix)]
+// Starts the cast fake by its shebang, which Windows does not run.
 
 mod common;
 

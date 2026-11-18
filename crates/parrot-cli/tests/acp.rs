@@ -1,5 +1,6 @@
 //! `parrot acp` end to end: an ACP client, the export, a real `parrot serve`, and `fake-claude`.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

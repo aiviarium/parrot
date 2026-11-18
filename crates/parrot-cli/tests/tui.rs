@@ -1,6 +1,5 @@
 //! TUI control in the runtime (spec 32.2, E4): `parrot serve` drives the fake TUI of
 //! `parrot-driver-tui`, and a client answers a dialog no profile knows.
-#![cfg(unix)]
 
 mod common;
 
@@ -19,7 +18,7 @@ async fn an_unknown_dialog_is_answered_from_a_client() {
     let transcripts = tempfile::tempdir().unwrap();
     let t = transcripts.path().to_string_lossy().into_owned();
     let config = json!({ "tui": { "fake-tui": {
-        "command": ["sh", fake("fake-tui.sh")],
+        "command": [common::workspace_bin("fake-tui")],
         "profile": fake("fake-tui.kdl"),
         "env": { "FAKE_TUI_TRANSCRIPT": t },
         "transcript": t,

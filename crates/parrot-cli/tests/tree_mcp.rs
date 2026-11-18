@@ -3,6 +3,7 @@
 //! `parrot mcp`, spawns two children in worktrees, waits on their tasks and merges them. The
 //! children commit in their worktrees and finish their tasks over MCP too.
 #![cfg(unix)]
+// Unix only for now: these runtime tests have not run on Windows yet.
 
 mod common;
 

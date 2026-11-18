@@ -1,5 +1,6 @@
 //! Functions through `parrot serve`: a client provides one, another calls it with a key.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 // The helpers are shared in shape with `e2e.rs`; this test uses only some of them.
 #![allow(dead_code)]
 

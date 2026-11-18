@@ -1,5 +1,6 @@
 //! The client commands against a real `parrot serve` over `fake-claude`: new, prompt, watch until idle.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

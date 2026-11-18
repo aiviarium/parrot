@@ -3,6 +3,7 @@
 //! answers it; models are discovered with `agent/list` and `agent/refresh` and set with
 //! `option/set`; after a crash and a restart nothing runs until asked.
 #![cfg(unix)]
+// Looks for the harness process with pgrep.
 
 mod common;
 

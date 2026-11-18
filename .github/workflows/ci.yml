@@ -89,8 +89,7 @@ jobs:
 
   # macOS and Windows build the whole workspace; their platform code (PTYs, guards, pipes) has
   # no test on Linux. Tests that need a shell are Unix only, so each OS runs what applies to it.
-  platform:
-    needs: changes
+  platform:    needs: changes
     if: needs.changes.outputs.rust
     strategy:
       fail-fast: false
@@ -115,7 +114,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Test the platform crates
-        run: cargo nextest run --locked --profile ci -p parrot-term -p parrot-guard -p parrot-driver -p parrot-serve
+        run: cargo nextest run --locked --profile ci -p parrot-term -p parrot-guard -p parrot-driver -p parrot-serve -p parrot-link -p parrot-eggs -p parrot-tui -p parrot-driver-tui -p parrot-cli
 
   typescript:
     needs: changes

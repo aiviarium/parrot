@@ -1,6 +1,7 @@
 //! A restart end to end (spec 34): a real `parrot serve` with the Claude driver over a fake
 //! `claude` is killed mid-session and started again on the same state directory.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

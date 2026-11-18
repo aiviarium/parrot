@@ -2,6 +2,7 @@
 //! outside the workspace installs from a registry folder and runs, a data-only egg on the
 //! built-in ACP core is one agent under its own id, and the Claude egg's version shim applies.
 #![cfg(unix)]
+// Waits for the runtime on a Unix socket.
 
 mod common;
 

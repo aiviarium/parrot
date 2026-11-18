@@ -1,4 +1,4 @@
-//! The TUI driver against a scripted fake TUI (`tests/fake/fake-tui.sh`) and its profile.
+//! The TUI driver against a scripted fake TUI (`src/bin/fake-tui.rs`) and its profile.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +18,11 @@ fn fake(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The scripted TUI of this crate.
+fn fake_tui() -> &'static str {
+    env!("CARGO_BIN_EXE_fake-tui")
+}
+
 struct Harness {
     driver: TuiDriver,
     updates: mpsc::UnboundedReceiver<Value>,
@@ -30,8 +35,7 @@ impl Harness {
     async fn start(trust: bool) -> (Harness, Result<Value, String>) {
         let dir = tempfile::tempdir().unwrap();
         let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
-        let script = fake("fake-tui.sh").to_string_lossy().into_owned();
-        let mut config = Config::new("fake-tui", vec!["sh".into(), script], profile);
+        let mut config = Config::new("fake-tui", vec![fake_tui().into()], profile);
         config.guard = None;
         config.size = Size::new(12, 60);
         config.unrecognised_after = Duration::from_millis(800);
@@ -339,7 +343,7 @@ async fn agent_list_reports_tui_control() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
     let mut d = TuiDriver::new(
-        Config::new("fake-tui", vec!["sh".into()], profile),
+        Config::new("fake-tui", vec![fake_tui().into()], profile),
         DriverContext { updates: tx },
     );
     let r = d.call("agent/list", json!({})).await.unwrap();
