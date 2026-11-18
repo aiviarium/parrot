@@ -253,6 +253,14 @@ fn play<R: BufRead, W: Write>(steps: &[Step], run: &mut Run<R, W>) -> std::io::R
             Step::Exit(code) => return Ok(*code),
         }
     }
-    while run.next(|_| false)?.is_some() {}
+    // After the scenario, option changes and interrupts still get an answer, as the CLI gives.
+    while let Some(v) = run.next(|_| false)? {
+        if v["type"] == "control_request"
+            && let Some(id) = v["request_id"].as_str()
+        {
+            let reply = json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {}}});
+            run.write(&reply)?;
+        }
+    }
     Ok(0)
 }

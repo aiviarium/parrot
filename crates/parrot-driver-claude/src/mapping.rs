@@ -10,10 +10,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use parrot_proto::action::{Action, ActionScope, ActionSource, ActionWhen, Effect};
 use parrot_proto::driver::{BindingDisposition, BindingPromptParams, DriverUpdate, DriverUpdateKind};
+use parrot_proto::driver_data::ChoiceData;
 use parrot_proto::ids::MessageId;
 use parrot_proto::item::{ItemKind, ItemPatch};
 use parrot_proto::open::Open;
-use parrot_proto::option::{Applies, ConfigOption, OptionRole, PermissionLevel};
+use parrot_proto::option::{ConfigOption, PermissionLevel};
 use parrot_proto::request::{
     Answer, Answerable, Choice, ChoiceIntent, ChoiceScope, Notify, Request, RequestKind, RequestStatus,
     Subject,
@@ -24,13 +25,11 @@ use parrot_proto::subscribe::NoticeLevel;
 use parrot_proto::usage::{ContextUsage, Cost, TokenUsage, Usage};
 use serde_json::{Map, Value, json};
 
+use crate::data::data;
 use crate::wire::{
     self, CanUseTool, ClaudeIn, ClaudeInMsg, ClaudeOut, ClaudeOutMsg, Content, ContentBlock, ControlResponse,
     Delta, Event, PermissionResult, ResultMsg, ResultSubtype, System,
 };
-
-/// The permission modes offered as the `permissionMode` option.
-pub const PERMISSION_MODES: [&str; 5] = ["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"];
 
 /// The turn in progress.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,38 +108,42 @@ impl MapState {
         })
     }
 
-    /// The permission level the current mode gives.
+    /// The option values that decide the level, with defaults filled in.
+    fn level_values(&self) -> BTreeMap<String, Value> {
+        let options = &data().options;
+        let mode = self.permission_mode.clone().or_else(|| {
+            options
+                .get("permissionMode")
+                .and_then(|o| o.default.as_ref())
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+        BTreeMap::from([("permissionMode".to_owned(), json!(mode))])
+    }
+
+    /// The permission level the current mode gives (`levels.kdl`).
     pub fn level(&self) -> PermissionLevel {
-        level_of(self.permission_mode.as_deref())
+        data().levels.level_of(&self.level_values()).0
     }
 
     pub fn network(&self) -> bool {
-        self.level() == PermissionLevel::Host
+        data().levels.level_of(&self.level_values()).1
     }
 
-    /// The `model` and `permissionMode` options with their current values.
+    /// The `model` and `permissionMode` options with their current values (`options.kdl`), with
+    /// the models `initialize` reported in place of the data's.
     pub fn options(&self) -> Vec<ConfigOption> {
-        let model_schema = if self.models.is_empty() {
-            json!({"type": "string"})
-        } else {
-            json!({"type": "string", "enum": self.models})
-        };
-        vec![
-            option(
-                "model",
-                OptionRole::Model,
-                "Model",
-                model_schema,
-                self.model.clone(),
-            ),
-            option(
-                "permissionMode",
-                OptionRole::Mode,
-                "Permission mode",
-                json!({"type": "string", "enum": PERMISSION_MODES}),
-                self.permission_mode.clone(),
-            ),
-        ]
+        let options = &data().options;
+        let models: Vec<ChoiceData> = self.models.iter().cloned().map(ChoiceData::Bare).collect();
+        let mut out = Vec::new();
+        if let Some(o) = options.get("model") {
+            let choices = (!models.is_empty()).then_some(models.as_slice());
+            out.push(o.to_option(self.model.clone().map(Value::String), choices));
+        }
+        if let Some(o) = options.get("permissionMode") {
+            out.push(o.to_option(self.permission_mode.clone().map(Value::String), None));
+        }
+        out
     }
 
     /// The `options` update for the current values.
@@ -194,6 +197,23 @@ impl MapState {
         set.insert("text".into(), json!(p.text));
         set.insert("status".into(), json!("sent"));
         set.insert("message".into(), json!(p.message));
+        if let Some(c) = p.context.as_ref().filter(|c| !c.is_empty()) {
+            set.insert("context".into(), json!(c));
+        }
+        if let Some(a) = p.attachments.as_ref().filter(|a| !a.is_empty()) {
+            // The item names the attachments; their bytes stay with the harness.
+            let named: Vec<Value> = a
+                .iter()
+                .map(|a| {
+                    let mut v = json!({"name": a.name, "type": a.media_type});
+                    if let Some(u) = &a.uri {
+                        v["uri"] = json!(u);
+                    }
+                    v
+                })
+                .collect();
+            set.insert("attachments".into(), Value::Array(named));
+        }
         out.push(self.item(ItemPatch {
             id: p.message.clone(),
             kind: Some(Open::Known(ItemKind::User)),
@@ -944,39 +964,8 @@ fn usage_of(r: &ResultMsg) -> Usage {
     }
 }
 
-fn level_of(mode: Option<&str>) -> PermissionLevel {
-    match mode {
-        Some("acceptEdits") => PermissionLevel::Write,
-        Some("bypassPermissions") => PermissionLevel::Host,
-        _ => PermissionLevel::Read,
-    }
-}
-
 fn tool_level(tool: &str) -> PermissionLevel {
-    match tool {
-        "Read" | "Glob" | "Grep" | "LS" | "AskUserQuestion" | "ExitPlanMode" | "TodoWrite" => {
-            PermissionLevel::Read
-        }
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => PermissionLevel::Write,
-        _ => PermissionLevel::Host,
-    }
-}
-
-fn option(id: &str, role: OptionRole, label: &str, schema: Value, value: Option<String>) -> ConfigOption {
-    ConfigOption {
-        id: id.into(),
-        role: Some(Open::Known(role)),
-        label: label.into(),
-        description: None,
-        schema,
-        value: value.map_or(Value::Null, Value::String),
-        default: None,
-        applies: Applies::Now,
-        depends_on: None,
-        complete: None,
-        meta: None,
-        extra: Map::new(),
-    }
+    data().levels.tool_level(tool)
 }
 
 fn command_action(name: &str) -> Action {

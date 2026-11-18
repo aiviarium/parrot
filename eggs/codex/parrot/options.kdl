@@ -1,0 +1,20 @@
+// Options of the Codex app-server. `model/list` reports models and their efforts; the effort
+// rules here are the fallback before it answers.
+option "model" role="model" label="Model" applies="next-turn" dynamic=#true harness="model"
+option "effort" role="effort" label="Reasoning effort" applies="next-turn" dynamic=#true harness="model_reasoning_effort" {
+  depends-on "model" {
+    when "*" default="medium" { choice "low"; choice "medium"; choice "high"; }
+  }
+}
+option "approvalPolicy" role="mode" label="Approval policy" applies="next-turn" default="on-request" harness="approval_policy" {
+  description "When Codex asks before acting"
+  choice "untrusted" label="Untrusted" tags="ask" description="Ask before any command that is not known to be safe"
+  choice "on-request" label="On request" tags="auto" description="The model asks when it needs to leave the sandbox"
+  choice "never" label="Never" tags="bypass" description="Never ask; failures go back to the model"
+}
+option "sandbox" role="sandbox" label="Sandbox" applies="next-turn" default="workspace-write" harness="sandbox_mode" {
+  description "What commands can reach without asking"
+  choice "read-only" label="Read only" tags="read-only" description="Commands can read files but not change them"
+  choice "workspace-write" label="Workspace write" tags="workspace" description="Commands can change files in the workspace, without network"
+  choice "danger-full-access" label="Full access" tags="bypass" description="No sandbox: commands run on the host with network"
+}

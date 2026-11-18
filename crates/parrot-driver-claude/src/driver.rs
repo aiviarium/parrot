@@ -12,21 +12,24 @@ use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Contr
 use parrot_proto::driver::{
     BindingAnswerParams, BindingCancelParams, BindingCancelResult, BindingOptionsParams,
     BindingOptionsResult, BindingPromptParams, BindingPromptResult, BindingRef, BindingStart,
-    BindingStartResult, DriverUpdate, DriverUpdateKind,
+    BindingStartResult, DriverUpdate, DriverUpdateKind, McpInjection,
 };
 use parrot_proto::open::Open;
 use parrot_proto::option::PermissionLevel;
 use parrot_proto::principal::Isolation;
 use parrot_proto::rpc::{Message, Notification, Response, RpcError};
 use parrot_proto::state::State;
+use parrot_proto::subscribe::NoticeLevel;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::data::{data, load_error};
 use crate::mapping::MapState;
 use crate::wire::{self, ClaudeIn, ClaudeInMsg, ControlRequest, ControlRequestBody, Extra, User};
+use crate::{frame, input};
 
 /// The variable that names the `claude` binary.
 pub const CLAUDE_BIN_ENV: &str = "PARROT_CLAUDE_BIN";
@@ -173,13 +176,33 @@ impl Driver {
             "binding/prompt" => {
                 let p: BindingPromptParams = params(p)?;
                 let b = self.binding(&p.binding)?;
-                let mut user = User::prompt(p.text.clone());
+                let input = input::content(
+                    &p.text,
+                    p.context.as_deref().unwrap_or_default(),
+                    p.attachments.as_deref().unwrap_or_default(),
+                );
+                let mut user = if input.is_plain() {
+                    User::prompt(p.text.clone())
+                } else {
+                    User::blocks(input.blocks.clone())
+                };
+                let at = now();
                 let (updates, disposition) = {
                     let mut state = b.state.lock().unwrap();
                     user.session_id = Some(state.session_id.clone().unwrap_or_default());
-                    state.prompt(&p, &now())
+                    state.prompt(&p, &at)
                 };
-                self.emit(updates);
+                let mut out = vec![frame::frame(&b.id, &at, frame::prompt_record(&p))];
+                out.extend(updates);
+                out.extend(input.skipped.iter().map(|(name, why)| {
+                    notice(
+                        &b.id,
+                        NoticeLevel::Warning,
+                        format!("attachment {name} was left out: {why}"),
+                        "x.parrot/attachment",
+                    )
+                }));
+                self.emit(out);
                 b.write(&Open::Known(ClaudeInMsg::User(user))).await?;
                 Ok(to_value(&BindingPromptResult { disposition }))
             }
@@ -191,6 +214,7 @@ impl Driver {
                     state.cancel();
                     state.turn.is_some()
                 };
+                self.emit(vec![frame::frame(&b.id, &now(), json!({"cancel": {}}))]);
                 if !running {
                     return Ok(to_value(&BindingCancelResult { interrupted: false }));
                 }
@@ -207,8 +231,16 @@ impl Driver {
                     .unwrap()
                     .answer(&p.request, &p.answer)
                     .map_err(|e| RpcError::new(-32602, e))?;
+                // The updates go out before the answer reaches the CLI: a fast turn could
+                // otherwise end before `running` is sent and leave the session `running`.
+                let mut out = vec![frame::frame(
+                    &b.id,
+                    &now(),
+                    frame::answer_record(&p.request, &p.answer),
+                )];
+                out.extend(updates);
+                self.emit(out);
                 b.write(&line).await?;
-                self.emit(updates);
                 Ok(json!({}))
             }
             "binding/options" => {
@@ -242,6 +274,7 @@ impl Driver {
                         other => return Err(RpcError::new(-32602, format!("unknown option {other}"))),
                     }
                 }
+                self.emit(vec![frame::frame(&b.id, &now(), json!({"options": p.values}))]);
                 let (result, update) = {
                     let state = b.state.lock().unwrap();
                     let result = BindingOptionsResult {
@@ -302,6 +335,15 @@ impl Driver {
         if let Some(m) = &mode {
             args.extend(["--permission-mode".into(), m.into()]);
         }
+        if start.pin.is_some() {
+            args.extend(data().levels.pin_args().into_iter().map(OsString::from));
+        }
+        let mut env = self.config.env.clone();
+        if let Some(mcp) = &start.mcp {
+            args.extend(["--mcp-config".into(), mcp_config(mcp).to_string().into()]);
+            // The token reaches the CLI only through its environment; the config names the variable.
+            env.push((MCP_TOKEN_ENV.into(), mcp.token.clone().into()));
+        }
         let mut cmd = if self.config.guard {
             parrot_guard::guarded_command(&self.config.claude_bin)
         } else {
@@ -311,7 +353,7 @@ impl Driver {
             c
         };
         cmd.args(&args)
-            .envs(self.config.env.iter().cloned())
+            .envs(env)
             .current_dir(&start.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -351,6 +393,16 @@ impl Driver {
                 return Err(RpcError::new(-32603, format!("claude did not initialize: {e}")));
             }
         };
+        let mut notices = vec![frame::frame(&start.binding, &now(), json!({"init": init}))];
+        if let Some(e) = load_error() {
+            notices.push(notice(
+                &start.binding,
+                NoticeLevel::Warning,
+                e.to_owned(),
+                "x.parrot/driver-data",
+            ));
+        }
+        self.emit(notices);
         let result = {
             let mut state = b.state.lock().unwrap();
             let mode = state.permission_mode.clone();
@@ -432,6 +484,9 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
         let Ok(msg) = wire::parse_line(&line) else {
             continue;
         };
+        if let Ok(raw) = serde_json::from_str::<Value>(&line) {
+            driver.emit(vec![frame::frame(&b.id, &now(), json!({"out": raw}))]);
+        }
         match &msg {
             Open::Known(wire::ClaudeOutMsg::ControlResponse(r)) => {
                 let Some(id) = r.request_id() else { continue };
@@ -471,6 +526,42 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
     }
 }
 
+/// The variable that carries the per-binding MCP token to the CLI.
+pub const MCP_TOKEN_ENV: &str = "PARROT_MCP_TOKEN";
+
+/// The `--mcp-config` for the injected `parrot` server (spec 26). It names the token's variable,
+/// which Claude Code expands, so the token itself is never in argv.
+pub fn mcp_config(mcp: &McpInjection) -> Value {
+    let server = match (&mcp.url, &mcp.command) {
+        (Some(url), _) => json!({
+            "type": "http",
+            "url": url,
+            "headers": {"Authorization": format!("Bearer ${{{MCP_TOKEN_ENV}}}")},
+        }),
+        (None, Some(cmd)) => json!({
+            "type": "stdio",
+            "command": cmd.first().cloned().unwrap_or_default(),
+            "args": cmd.iter().skip(1).collect::<Vec<_>>(),
+            "env": {MCP_TOKEN_ENV: format!("${{{MCP_TOKEN_ENV}}}")},
+        }),
+        (None, None) => json!({}),
+    };
+    json!({"mcpServers": {"parrot": server}})
+}
+
+fn notice(binding: &str, level: NoticeLevel, text: String, code: &str) -> DriverUpdate {
+    DriverUpdate {
+        binding: binding.to_owned(),
+        subagent: None,
+        update: Open::Known(DriverUpdateKind::Notice {
+            level,
+            text,
+            code: Some(code.to_owned()),
+        }),
+        extra: Map::new(),
+    }
+}
+
 fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUpdate {
     DriverUpdate {
         binding: binding.to_owned(),
@@ -491,6 +582,8 @@ pub fn agent() -> Agent {
     features.insert("session.resume".into(), json!({}));
     features.insert("session.steer".into(), json!({"when": "next_step"}));
     features.insert("usage".into(), json!({"cost": true, "context": true}));
+    features.insert("attachments".into(), input::feature());
+    features.insert("functions.mcp".into(), json!({}));
     Agent {
         id: "claude".into(),
         env: String::new(),

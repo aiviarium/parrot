@@ -17,12 +17,19 @@ struct Client {
 
 impl Client {
     fn start(scenario: &str) -> Client {
+        Client::start_with(scenario, vec![])
+    }
+
+    fn start_with(scenario: &str, extra: Vec<(std::ffi::OsString, std::ffi::OsString)>) -> Client {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/scenarios")
             .join(format!("{scenario}.jsonl"));
         let config = Config {
             claude_bin: env!("CARGO_BIN_EXE_fake-claude").into(),
-            env: vec![("PARROT_FAKE_CLAUDE_SCENARIO".into(), path.into())],
+            env: [("PARROT_FAKE_CLAUDE_SCENARIO".into(), path.into())]
+                .into_iter()
+                .chain(extra)
+                .collect(),
             guard: false,
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
@@ -78,6 +85,10 @@ impl Client {
     }
 
     async fn bind(&mut self) -> Value {
+        self.bind_with(json!({})).await
+    }
+
+    async fn bind_with(&mut self, more: Value) -> Value {
         let init = self
             .call("initialize", json!({"protocol": [1], "peer": {"kind": "runtime", "name": "test", "version": "0"}, "features": {}}))
             .await;
@@ -86,12 +97,12 @@ impl Client {
         assert_eq!(agents["agents"][0]["id"], "claude");
         assert!(agents["agents"][0]["features"]["session.steer"].is_object());
         let cwd = std::env::temp_dir();
-        self.call(
-            "binding/start",
-            json!({"session": "s1", "binding": "b1", "agent": "claude", "workspace": cwd, "cwd": cwd,
-                "options": {}, "control": "native", "deny": []}),
-        )
-        .await
+        let mut params = json!({"session": "s1", "binding": "b1", "agent": "claude", "workspace": cwd, "cwd": cwd,
+            "options": {}, "control": "native", "deny": []});
+        for (k, v) in more.as_object().unwrap() {
+            params[k] = v.clone();
+        }
+        self.call("binding/start", params).await
     }
 
     async fn prompt(&mut self, text: &str) {
@@ -115,7 +126,11 @@ async fn text_turn_streams_and_goes_idle() {
     let start = c.bind().await;
     assert_eq!(start["level"], "read");
     assert_eq!(start["actions"][0]["id"], "review");
-    assert_eq!(start["options"][0]["schema"]["enum"], json!(["default"]));
+    assert_eq!(start["options"][0]["schema"]["oneOf"][0]["const"], "default");
+    assert_eq!(
+        start["options"][1]["schema"]["oneOf"][2]["x-tags"],
+        json!(["plan", "read-only"])
+    );
     c.prompt("Say hello").await;
     c.wait(is_state("running")).await;
     let user = c.wait(|u| u["update"]["item"]["id"] == "m1").await;
@@ -175,4 +190,144 @@ async fn cancel_interrupts_the_turn() {
     assert_eq!(t["update"]["turn"]["status"], "interrupted");
     assert_eq!(t["update"]["turn"]["stop"], "cancelled");
     c.wait(is_state("idle")).await;
+}
+
+fn is_kind(kind: &'static str) -> impl Fn(&Value) -> bool {
+    move |u| u["update"]["type"] == kind
+}
+
+/// The item, turn and request updates a run sent, without frames.
+fn projected(updates: &[Value]) -> Vec<Value> {
+    updates
+        .iter()
+        .filter(|u| ["item", "turn", "request"].contains(&u["update"]["type"].as_str().unwrap_or("")))
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn attachments_and_context_reach_claude() {
+    let mut c = Client::start("attachments");
+    let start = c.bind().await;
+    assert_eq!(start["level"], "read");
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(
+        agents["agents"][0]["features"]["attachments"]["kinds"],
+        json!(["image", "file"])
+    );
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "message": "m1", "text": "Look", "steer": false,
+            "context": [{"uri": "file:///work/notes.md", "text": "Notes"}],
+            "attachments": [
+                {"name": "dot.png", "type": "image/png", "data": "iVBORw0KGgo="},
+                {"name": "tune.mp3", "type": "audio/mpeg", "data": "AAAA"}
+            ]}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    let n = c.wait(is_kind("notice")).await;
+    assert!(n["update"]["text"].as_str().unwrap().contains("tune.mp3"), "{n}");
+    let t = c
+        .wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running")
+        .await;
+    assert_eq!(t["update"]["turn"]["status"], "completed");
+    let user = c
+        .updates
+        .iter()
+        .find(|u| u["update"]["item"]["id"] == "m1")
+        .unwrap();
+    assert_eq!(user["update"]["item"]["set"]["attachments"][0]["name"], "dot.png");
+    assert!(user["update"]["item"]["set"]["attachments"][0]["data"].is_null());
+}
+
+#[tokio::test]
+async fn mcp_server_is_injected_with_the_token_in_the_environment() {
+    let record = std::env::temp_dir().join(format!("parrot-fake-claude-{}.json", std::process::id()));
+    let mut c = Client::start_with(
+        "text-turn",
+        vec![("PARROT_FAKE_CLAUDE_RECORD".into(), record.clone().into())],
+    );
+    c.bind_with(json!({"mcp": {"url": "http://127.0.0.1:4711/mcp", "token": "tok-made-up-123"}, "pin": {"level": "read", "network": false}}))
+        .await;
+    let seen: Value = serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
+    std::fs::remove_file(&record).ok();
+    let args: Vec<&str> = seen["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert!(!args.iter().any(|a| a.contains("tok-made-up-123")), "{args:?}");
+    let i = args.iter().position(|a| *a == "--mcp-config").unwrap();
+    let config: Value = serde_json::from_str(args[i + 1]).unwrap();
+    assert_eq!(config["mcpServers"]["parrot"]["url"], "http://127.0.0.1:4711/mcp");
+    assert_eq!(
+        config["mcpServers"]["parrot"]["headers"]["Authorization"],
+        "Bearer ${PARROT_MCP_TOKEN}"
+    );
+    assert_eq!(seen["mcpToken"], "tok-made-up-123");
+    let s = args.iter().position(|a| *a == "--setting-sources").unwrap();
+    assert_eq!(args[s + 1], "");
+}
+
+#[tokio::test]
+async fn frames_rebuild_the_same_items() {
+    for scenario in ["text-turn", "bash-allowed"] {
+        let mut c = Client::start(scenario);
+        c.bind().await;
+        c.prompt("Go").await;
+        if scenario == "bash-allowed" {
+            c.wait(is_kind("request")).await;
+            c.call(
+                "binding/answer",
+                json!({"binding": "b1", "request": "perm-1", "answer": {"choice": "allow"}}),
+            )
+            .await;
+        }
+        c.wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running")
+            .await;
+        c.wait(is_state("idle")).await;
+        let frames: Vec<Value> = c
+            .updates
+            .iter()
+            .filter(|u| u["update"]["type"] == "frame")
+            .map(|u| {
+                assert_eq!(u["update"]["source"], "native");
+                assert_eq!(u["update"]["data"]["v"], "1");
+                u["update"]["data"].clone()
+            })
+            .collect();
+        let rebuilt: Vec<Value> = parrot_driver_claude::frame::rebuild("b1", &frames)
+            .iter()
+            .map(|u| serde_json::to_value(u).unwrap())
+            .collect();
+        assert_eq!(rebuilt, projected(&c.updates), "{scenario}");
+    }
+}
+
+#[tokio::test]
+async fn answer_sends_running_before_the_turn_ends_and_options_still_apply() {
+    let mut c = Client::start("bash-allowed");
+    c.bind().await;
+    c.prompt("List the files").await;
+    c.wait(is_kind("request")).await;
+    c.call(
+        "binding/answer",
+        json!({"binding": "b1", "request": "perm-1", "answer": {"choice": "allow"}}),
+    )
+    .await;
+    c.wait(is_state("idle")).await;
+    let pos = |pred: &dyn Fn(&Value) -> bool| c.updates.iter().rposition(pred).unwrap();
+    let running = pos(&|u| is_state("running")(u));
+    let ended = pos(&|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] == "completed");
+    assert!(running < ended, "running at {running}, turn ended at {ended}");
+    let r = c
+        .call(
+            "binding/options",
+            json!({"binding": "b1", "values": {"permissionMode": "acceptEdits"}}),
+        )
+        .await;
+    assert_eq!(r["level"], "write");
 }

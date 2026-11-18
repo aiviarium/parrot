@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OptionsFile",
+  "description": "`options.kdl`: options the harness doesn't report itself (spec 15.1, 31).",
+  "type": "object",
+  "properties": {
+    "option": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OptionData"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "OptionData": {
+      "description": "`option \"<id>\" role= label= applies= default= { choice ...; depends-on ... }`.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The option id.",
+          "type": "string"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "applies": {
+          "description": "`start`, `now` or `next-turn`; `now` when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": true,
+        "type": {
+          "description": "The JSON type of a free value, such as `string`, when there are no choices.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "The harness's own name for the option, such as a config key or a flag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dynamic": {
+          "description": "The harness reports the choices at runtime; these are the fallback.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "choice": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceData"
+          },
+          "default": []
+        },
+        "depends-on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DependsOnData"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "label"
+      ]
+    },
+    "ChoiceData": {
+      "description": "`choice \"<value>\" label= tags=`, or a bare `choice \"<value>\"`.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ChoiceFull"
+        }
+      ]
+    },
+    "ChoiceFull": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "description": "Semantic tags, separated by spaces: `plan`, `bypass`, `ask`, `read-only` and so on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "The harness's own value, when it differs from `name`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "DependsOnData": {
+      "description": "`depends-on \"<option>\" { when \"<value>\" { choice ... } }`; `when \"*\"` matches any other value.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "when": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WhenChoices"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "WhenChoices": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "default": true,
+        "choice": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceData"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    }
+  }
+}
