@@ -149,7 +149,7 @@ fn unknown_events_are_kept_as_frames() {
 }
 
 #[test]
-fn usage_adds_up_and_names_the_context() {
+fn usage_reports_a_message_and_names_the_context() {
     let mut s = state();
     s.models = vec![parrot_driver_pi::wire::Model {
         id: "fake-1".into(),
@@ -168,10 +168,11 @@ fn usage_adds_up_and_names_the_context() {
         json!({"type": "message_end", "message": {"role": "assistant", "content": [], "stopReason": "stop",
             "usage": {"input": 2, "output": 1, "totalTokens": 3, "cost": {"total": 0.25}}}}),
     );
+    // A report is the message's own usage; the runtime adds the reports up.
     let usage = updates.iter().find(|u| u["type"] == "usage").unwrap();
-    assert_eq!(usage["usage"]["tokens"]["input"], 12);
-    assert_eq!(usage["usage"]["tokens"]["output"], 6);
-    assert_eq!(usage["usage"]["cost"]["amount"], 0.75);
+    assert_eq!(usage["usage"]["tokens"]["input"], 2);
+    assert_eq!(usage["usage"]["tokens"]["output"], 1);
+    assert_eq!(usage["usage"]["cost"]["amount"], 0.25);
     assert_eq!(usage["usage"]["context"]["used"], 3);
     assert_eq!(usage["usage"]["context"]["window"], 1000);
 }

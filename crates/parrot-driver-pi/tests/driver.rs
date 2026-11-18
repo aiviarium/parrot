@@ -148,10 +148,11 @@ async fn text_turn_streams_and_goes_idle() {
     assert_eq!(turn["update"]["turn"]["input"], "m1");
     c.wait(|u| u["update"]["item"]["append"]["text"] == "Hello ")
         .await;
-    let done = c.wait(ended("completed")).await;
-    assert_eq!(done["update"]["turn"]["stop"], "end");
+    // A usage update is the message's own tokens; the runtime adds them up.
     let usage = c.wait(|u| u["update"]["type"] == "usage").await;
     assert_eq!(usage["update"]["usage"]["tokens"]["input"], 10);
+    let done = c.wait(ended("completed")).await;
+    assert_eq!(done["update"]["turn"]["stop"], "end");
     c.wait(is_state("idle")).await;
     c.call("binding/stop", json!({"binding": "b1"})).await;
 }

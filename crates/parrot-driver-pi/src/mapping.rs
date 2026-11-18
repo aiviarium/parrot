@@ -20,7 +20,7 @@ use parrot_proto::request::{
 use parrot_proto::session::{Ref, RefStrength};
 use parrot_proto::state::{State, Turn, TurnError, TurnStatus, TurnStop};
 use parrot_proto::subscribe::NoticeLevel;
-use parrot_proto::usage::{ContextUsage, Cost, Usage};
+use parrot_proto::usage::{ContextUsage, Cost, TokenUsage, Usage};
 use serde_json::{Map, Value, json};
 
 use crate::data::DriverData;
@@ -71,6 +71,8 @@ pub struct MapState {
     blocks: HashMap<u64, String>,
     /// Token and cost totals over the whole session.
     usage: Usage,
+    /// Token and cost totals of the running turn, which its turn update reports.
+    turn_usage: Usage,
     /// Whether pi is running a turn.
     running: bool,
     last_error: Option<String>,
@@ -94,6 +96,7 @@ impl MapState {
             message: 0,
             blocks: HashMap::new(),
             usage: Usage::default(),
+            turn_usage: Usage::default(),
             running: false,
             last_error: None,
             unnamed: 1,
@@ -302,6 +305,7 @@ impl MapState {
 
     fn begin_turn(&mut self, input: Option<MessageId>, now: &str) -> Vec<DriverUpdate> {
         self.turns += 1;
+        self.turn_usage = Usage::default();
         let turn = TurnState {
             key: format!("turn-{}", self.turns),
             input,
@@ -528,8 +532,9 @@ impl MapState {
             return out;
         }
         if let Some(u) = &message.usage {
-            self.add_usage(u);
-            out.push(self.usage_update());
+            // The runtime adds every usage update, so each report is the message's own tokens.
+            let delta = self.add_usage(u);
+            out.push(self.update(DriverUpdateKind::Usage { usage: delta }));
         }
         if message.stop_reason.as_deref() == Some("error")
             && let Some(error) = &message.error_message
@@ -572,42 +577,50 @@ impl MapState {
         out
     }
 
-    fn add_usage(&mut self, u: &RawUsage) {
-        let mut tokens = self.usage.tokens.clone().unwrap_or_default();
-        tokens.input += u.input;
-        tokens.output += u.output;
-        tokens.cache_read = Some(tokens.cache_read.unwrap_or(0) + u.cache_read);
-        tokens.cache_write = Some(tokens.cache_write.unwrap_or(0) + u.cache_write);
-        self.usage.tokens = Some(tokens.clone());
-        let cost = self.usage.cost.as_ref().map(|c| c.amount).unwrap_or(0.0) + u.cost();
-        if cost > 0.0 {
-            self.usage.cost = Some(Cost {
-                amount: cost,
+    /// Adds one message's tokens and cost to the session and turn totals, and returns the message's
+    /// own usage, which is what the runtime is told.
+    fn add_usage(&mut self, u: &RawUsage) -> Usage {
+        let tokens = TokenUsage {
+            input: u.input,
+            output: u.output,
+            cache_read: Some(u.cache_read),
+            cache_write: Some(u.cache_write),
+            reasoning: None,
+        };
+        let mut delta = Usage {
+            tokens: Some(tokens),
+            ..Default::default()
+        };
+        if u.cost() > 0.0 {
+            delta.cost = Some(Cost {
+                amount: u.cost(),
                 currency: "USD".into(),
             });
+        }
+        for into in [&mut self.usage, &mut self.turn_usage] {
+            let mut totals = into.tokens.clone().unwrap_or_default();
+            totals.input += u.input;
+            totals.output += u.output;
+            totals.cache_read = Some(totals.cache_read.unwrap_or(0) + u.cache_read);
+            totals.cache_write = Some(totals.cache_write.unwrap_or(0) + u.cache_write);
+            into.tokens = Some(totals);
+            if let Some(cost) = &delta.cost {
+                let amount = into.cost.as_ref().map(|c| c.amount).unwrap_or(0.0) + cost.amount;
+                into.cost = Some(Cost {
+                    amount,
+                    currency: "USD".into(),
+                });
+            }
         }
         if u.total_tokens > 0
             && let Some(window) = self.window()
         {
-            self.usage.context = Some(ContextUsage {
+            delta.context = Some(ContextUsage {
                 used: u.total_tokens,
                 window,
             });
         }
-    }
-
-    fn window(&self) -> Option<u64> {
-        let key = self.model.as_ref()?;
-        self.models
-            .iter()
-            .find(|m| &m.key() == key)
-            .and_then(|m| m.context_window)
-    }
-
-    fn usage_update(&self) -> DriverUpdate {
-        self.update(DriverUpdateKind::Usage {
-            usage: self.usage.clone(),
-        })
+        delta
     }
 
     fn tool_start(&mut self, id: &str, name: &str, args: &Value) -> DriverUpdate {
@@ -629,6 +642,14 @@ impl MapState {
             set: Some(set),
             ..Default::default()
         })
+    }
+
+    fn window(&self) -> Option<u64> {
+        let key = self.model.as_ref()?;
+        self.models
+            .iter()
+            .find(|m| &m.key() == key)
+            .and_then(|m| m.context_window)
     }
 
     fn settled(&mut self, aborted: bool, now: &str) -> Vec<DriverUpdate> {
@@ -671,12 +692,11 @@ impl MapState {
                 started: turn.started,
                 ended: Some(now.to_owned()),
                 error,
-                usage: Some(self.usage.clone()),
+                usage: Some(self.turn_usage.clone()),
                 meta: None,
                 extra: Map::new(),
             },
         }));
-        out.push(self.usage_update());
         out.push(self.state(State::Idle));
         out
     }

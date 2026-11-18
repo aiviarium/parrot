@@ -798,7 +798,6 @@ pub fn agent(data: &DriverData) -> Agent {
     features.insert("session.steer".into(), json!({"when": "next_step"}));
     features.insert("attachments".into(), json!({"kinds": ["image", "file"]}));
     features.insert("functions.mcp".into(), json!({}));
-    features.insert("mcp.status".into(), json!({}));
     features.insert(
         "usage".into(),
         json!({"cost": true, "context": true, "rateLimits": false}),
