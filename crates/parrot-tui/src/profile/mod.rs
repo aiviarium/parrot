@@ -11,6 +11,7 @@
 
 mod types;
 
+use parrot_proto::driver_data::{Children, to_json};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -104,7 +105,9 @@ pub const DEFAULT_UNRECOGNISED_AFTER: Duration = Duration::from_secs(10);
 
 impl Profile {
     pub fn parse(text: &str) -> Result<Profile, ProfileError> {
-        let file: ProfileFile = toml::from_str(text).map_err(|e| ProfileError::Parse(e.to_string()))?;
+        let value = to_json(text, Children::Grouped).map_err(ProfileError::Parse)?;
+        let file: ProfileFile =
+            serde_json::from_value(value).map_err(|e| ProfileError::Parse(e.to_string()))?;
         let p = Profile {
             file,
             path: None,
@@ -1138,45 +1141,47 @@ mod tests {
     use super::*;
     use parrot_term::screen::Size;
 
-    const P: &str = r#"
-[profile]
-id = "test"
-unrecognised-after = "3s"
+    const P: &str = r##"
+profile id="test" unrecognised-after="3s"
 
-[[node]]
-tag = "prompt"
-where = { role = "input", contains-cursor = true }
+node tag="prompt" {
+  where role="input" contains-cursor=#true
+}
 
-[[node]]
-tag = "approval"
-role = "dialog"
-lines = { from = 'Do you want', to = 'Esc to' }
+node tag="approval" role="dialog" {
+  lines from="Do you want" to="Esc to"
+}
 
-[[node]]
-tag = "choices"
-inside = "approval"
-where = { role = "menu" }
+node tag="choices" inside="approval" {
+  where role="menu"
+}
 
-[[state]]
-name = "awaiting-approval"
-when = { exists = "approval" }
+state name="awaiting-approval" {
+  when exists="approval"
+}
 
-[[state]]
-name = "idle"
-when = { exists = "prompt", not = ["awaiting-approval"] }
+state name="idle" {
+  when exists="prompt" {
+    (array)not "awaiting-approval"
+  }
+}
 
-[[action]]
-name = "submit"
-require = { state = "idle" }
-steps = [{ paste = "$text" }, { wait = { text-in = "prompt", contains = "$text" } }, { key = "enter" }]
-expect = { state = "working", within = "5s" }
+(array)action name="submit" {
+  require state="idle"
+  steps paste="$text"
+  steps {
+    wait text-in="prompt" contains="$text"
+  }
+  steps key="enter"
+  expect state="working" within="5s"
+}
 
-[[variant]]
-version = ">=3"
-[[variant.state]]
-name = "idle"
-when = { exists = "prompt" }
-"#;
+(array)variant version=">=3" {
+  (array)state name="idle" {
+    when exists="prompt"
+  }
+}
+"##;
 
     fn tree_of(text: &str, rows: u16, cols: u16, cursor: Option<(u16, u16)>) -> (Tree, Screen) {
         let s = Screen::from_text(Size::new(rows, cols), text);
@@ -1237,7 +1242,7 @@ when = { exists = "prompt" }
         let a = p.compile_action("submit", &vars).unwrap();
         assert!(matches!(&a.steps[0], Step::Paste(t) if t == "hello"));
         assert!(p.compile_action("submit", &HashMap::new()).is_err());
-        let bad = P.replace(r#"{ key = "enter" }"#, r#"{ key = "nonsense-key" }"#);
+        let bad = P.replace(r#"steps key="enter""#, r#"steps key="nonsense-key""#);
         assert!(Profile::parse(&bad).is_err());
     }
 
@@ -1271,5 +1276,45 @@ when = { exists = "prompt" }
         p.label(&mut t, &s, &hooks);
         assert!(t.root.children[0].has_tag("first"));
         assert!(t.root.children[0].source.contains("+hook:mark-first"));
+    }
+}
+
+/// The JSON Schema of a profile file, as the KDL maps to JSON (`parrot_proto::driver_data`).
+pub fn schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(types::ProfileFile)).expect("schemas serialize")
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Fails when `spec/schema/driver-data/profile.schema.json` is stale; `PARROT_BLESS=1`
+    /// rewrites it.
+    #[test]
+    fn committed_profile_schema_is_current() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spec/schema/driver-data/profile.schema.json");
+        let fresh = serde_json::to_string_pretty(&super::schema()).unwrap() + "\n";
+        if std::env::var_os("PARROT_BLESS").is_some() {
+            std::fs::write(&path, &fresh).unwrap();
+            return;
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            committed,
+            fresh,
+            "{} is stale; run with PARROT_BLESS=1",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn egg_and_example_profiles_load() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for p in [
+            "eggs/claude/parrot/profile.kdl",
+            "eggs/codex/parrot/profile.kdl",
+            "spec/examples/driver-data/profile.kdl",
+        ] {
+            super::Profile::load(root.join(p)).unwrap_or_else(|e| panic!("{p}: {e}"));
+        }
     }
 }

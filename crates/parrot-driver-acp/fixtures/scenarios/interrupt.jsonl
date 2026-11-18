@@ -1,0 +1,2 @@
+// Streams a word at a time until the turn is cancelled.
+[[loop:Counted]]

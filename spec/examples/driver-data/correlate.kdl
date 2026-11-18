@@ -1,0 +1,25 @@
+// Items from stream-json (`native`) and the transcript on disk (`transcript`). Claude Code's
+// tool_use ids and message uuids are in both, so items match by ref first.
+kind "tool" {
+  match "ref"
+  prefer "native"
+  history "transcript"
+  compare "tool" "status"
+}
+kind "user" {
+  match "ref" "text"
+  prefer "native"
+  history "transcript"
+  compare "text"
+}
+kind "assistant" {
+  match "ref" "position"
+  prefer "native"
+  history "transcript"
+  compare "text"
+}
+kind "*" {
+  match "ref" "position"
+  prefer "native"
+  history "transcript"
+}

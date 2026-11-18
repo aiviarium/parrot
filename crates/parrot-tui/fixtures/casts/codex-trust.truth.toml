@@ -1,7 +1,7 @@
 # Ground truth for codex-trust.cast: the state a person sees on the screen.
 # Spans by hand from text anchors: 'loading' under the logo, the update and trust dialogs, 'esc to interrupt' until 'Worked for', the prompt row (shown between the two dialogs); gaps under 50 ms are '*'.
 cast = "codex-trust.cast"
-profile = "../profiles/codex.toml"
+profile = "../profiles/codex.kdl"
 holdout = false
 spans = [
   [0.000, "starting"],

@@ -255,6 +255,9 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
         _ => {
             if !steer {
                 crate::seeds::before_prompt(cx, session, &mut params);
+                // The prompt starts a turn: a client that looks before the driver reports it
+                // must not take the idle session for one that has finished.
+                set_state(cx, session, SessionState::Idle, SessionState::Running);
             }
             params["steer"] = json!(steer);
             if let Some(m) = &entry.message {
@@ -279,6 +282,17 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
             .or_default()
             .busy = true;
     }
+}
+
+/// Whether `dispatch` would send a prompt now, which starts a turn.
+pub fn sends_next(state: &State, session: &str) -> bool {
+    ready(state, session)
+        && state.queue.by_session.get(session).is_some_and(|q| {
+            !q.paused
+                && q.entries
+                    .front()
+                    .is_some_and(|e| e.kind != QueueEntryKind::Action)
+        })
 }
 
 /// Send the first entry if the session is idle and the queue isn't paused (spec 13.2).
@@ -631,6 +645,26 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
     }
 }
 
+/// Moves a session from `from` to `to` and publishes it; any other state is left alone.
+fn set_state(cx: &mut Cx, session: &str, from: SessionState, to: SessionState) {
+    let Some(s) = cx
+        .state
+        .sessions
+        .info
+        .get_mut(session)
+        .filter(|s| s.state == from)
+    else {
+        return;
+    };
+    s.state = to;
+    let background = s.background.clone();
+    cx.publish(
+        Some(session.to_string()),
+        json!({ "type": "state", "state": to, "background": background }),
+    );
+    sessions::changed(cx, session);
+}
+
 /// A prompt that fails after acceptance ends its turn as `failed` (spec 13.1).
 fn failed(cx: &mut Cx, session: &str, entry: &Entry, e: &RpcError) {
     let binding = crate::directory::binding_of(cx.state, session).unwrap_or_default();
@@ -648,6 +682,7 @@ fn failed(cx: &mut Cx, session: &str, entry: &Entry, e: &RpcError) {
     if let Some(q) = cx.state.queue.by_session.get_mut(session) {
         q.busy = false;
     }
+    set_state(cx, session, SessionState::Running, SessionState::Idle);
     dispatch(cx, session);
 }
 
