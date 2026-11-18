@@ -328,12 +328,12 @@ impl Driver {
                     if let Some(instructions) = instructions {
                         command = command.with("customInstructions", json!(instructions));
                     }
+                    // pi reports the item through `compaction_end`, for a manual compaction as
+                    // well as an automatic one, before this answer arrives.
                     let answer = b
                         .command(command, Some(COMPACT_TIMEOUT))
                         .await
                         .map_err(|e| RpcError::new(-32020, format!("pi refused the compaction: {e}")))?;
-                    let updates = b.state.lock().unwrap().compacted(&answer, "manual");
-                    self.emit(updates);
                     return Ok(to_value(&BindingActionResult {
                         status: ActionStatus::Done,
                         request: None,
@@ -389,8 +389,9 @@ impl Driver {
                     match &p.at {
                         Some(turn) => Some(
                             state
-                                .turn_input_text(turn)
+                                .turn_input(turn)
                                 .ok_or_else(|| RpcError::new(-32001, "pi forks only at a turn it has seen"))?
+                                .2
                                 .to_owned(),
                         ),
                         None => None,
@@ -402,13 +403,24 @@ impl Driver {
                     .map_err(|e| RpcError::new(-32020, format!("pi listed no forks: {e}")))?
                     .unwrap_or_default();
                 let entry = match text {
-                    Some(text) => messages
-                        .messages
-                        .iter()
-                        .rev()
-                        .find(|m| m.text == text)
-                        .cloned()
-                        .ok_or_else(|| RpcError::new(-32002, "pi has no message for that turn any more"))?,
+                    Some(text) => {
+                        // pi may add its own marker to the text it keeps, such as a note that an
+                        // image was left out, so an inexact text falls back to the turn's place
+                        // counted from the newest message, which a resumed binding still knows.
+                        let exact = messages.messages.iter().rev().find(|m| m.text == text).cloned();
+                        let position = p.at.as_deref().and_then(|turn| {
+                            let state = b.state.lock().unwrap();
+                            state.turn_input(turn).map(|(index, count, _)| (index, count))
+                        });
+                        let by_position = position.and_then(|(index, count)| {
+                            let from_end = count.checked_sub(index + 1)?;
+                            let at = messages.messages.len().checked_sub(from_end + 1)?;
+                            messages.messages.get(at).cloned()
+                        });
+                        exact.or(by_position).ok_or_else(|| {
+                            RpcError::new(-32002, "pi has no message for that turn any more")
+                        })?
+                    }
                     None => messages
                         .messages
                         .last()

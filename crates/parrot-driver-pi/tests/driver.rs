@@ -230,7 +230,10 @@ async fn options_come_from_pi_and_apply() {
     let model = options.iter().find(|o| o["id"] == "model").unwrap();
     assert_eq!(model["schema"]["enum"], json!(["fake/fake-1", "fake/fake-2"]));
     let effort = options.iter().find(|o| o["id"] == "effort").unwrap();
-    assert_eq!(effort["schema"]["enum"], json!(["low", "medium", "high"]));
+    assert_eq!(
+        effort["schema"]["enum"],
+        json!(["minimal", "low", "medium", "high"])
+    );
     let r = c
         .call(
             "binding/options",
@@ -334,7 +337,7 @@ async fn the_agent_reports_the_version_pi_prints() {
     )
     .await;
     let agents = c.call("agent/list", json!({})).await;
-    assert_eq!(agents["agents"][0]["harness"]["version"], "0.73.1");
+    assert_eq!(agents["agents"][0]["harness"]["version"], "1.5.1");
     assert!(agents["agents"][0]["features"]["session.fork"].is_object());
     assert!(agents["agents"][0]["features"]["session.history"].is_object());
 }

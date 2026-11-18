@@ -48,6 +48,10 @@ struct Fake {
     model: Arc<Mutex<String>>,
     thinking: Arc<Mutex<String>>,
     said: Arc<Mutex<Vec<String>>>,
+    /// The text of the assistant's last reply, for `get_last_assistant_text`.
+    replied: Arc<Mutex<String>>,
+    /// The session's display name, from `set_session_name`.
+    name: Arc<Mutex<Option<String>>>,
     dialogs: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     /// Set by an abort; the running script watches it.
     abort: Arc<AtomicBool>,
@@ -139,6 +143,12 @@ impl Fake {
         let mut streamed = String::new();
         for word in words(text) {
             if run.aborted.load(Ordering::Relaxed) {
+                self.send(json!({"type": "message_end", "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": streamed}],
+                    "stopReason": "aborted",
+                    "errorMessage": "Request was aborted",
+                }}));
                 return;
             }
             streamed.push_str(&word);
@@ -150,7 +160,6 @@ impl Fake {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
         }
-        let _ = streamed;
         self.send(json!({
             "type": "message_update",
             "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": text},
@@ -161,6 +170,7 @@ impl Fake {
             "stopReason": "stop",
             "usage": {"input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 15, "cost": {"total": 0.0001}},
         }}));
+        *self.replied.lock().unwrap() = text.to_owned();
     }
 
     async fn tool(&self, name: &str, args: Value, output: Result<String, String>) {
@@ -170,25 +180,27 @@ impl Fake {
             Ok(text) => json!({
                 "type": "tool_execution_end", "toolCallId": id, "toolName": name,
                 "result": {"content": [{"type": "text", "text": text}], "details": {}},
-                "isError": false,
+                "isError": false, "durationMs": 3,
             }),
             Err(text) => json!({
                 "type": "tool_execution_end", "toolCallId": id, "toolName": name,
                 "result": {"content": [{"type": "text", "text": text}], "details": {}},
-                "isError": true,
+                "isError": true, "durationMs": 3,
             }),
         });
     }
 
     /// Plays a prompt and ends the turn.
-    async fn play(&self, text: String, images: usize) {
+    async fn play(&self, text: String, images: Vec<Value>) {
         let run = Arc::new(Run {
             aborted: self.abort.clone(),
         });
+        let mut content = vec![json!({"type": "text", "text": text})];
+        content.extend(images.iter().cloned());
         self.send(json!({"type": "agent_start"}));
         self.send(json!({"type": "turn_start"}));
-        self.send(json!({"type": "message_start", "message": {"role": "user", "content": text}}));
-        self.send(json!({"type": "message_end", "message": {"role": "user", "content": text}}));
+        self.send(json!({"type": "message_start", "message": {"role": "user", "content": content.clone()}}));
+        self.send(json!({"type": "message_end", "message": {"role": "user", "content": content}}));
         let script = match std::env::var(SCENARIO_ENV).ok() {
             Some(scenario) => scenario_script(&scenario).to_owned(),
             None => text.clone(),
@@ -196,9 +208,9 @@ impl Fake {
         let tags = tags(&script);
         let mut delay = 0u64;
         let mut failed = false;
-        if images > 0 {
-            let word = if images == 1 { "image" } else { "images" };
-            self.text(&format!("Received {images} {word}."), delay, &run)
+        if !images.is_empty() {
+            let word = if images.len() == 1 { "image" } else { "images" };
+            self.text(&format!("Received {} {word}.", images.len()), delay, &run)
                 .await;
         }
         if tags.is_empty() {
@@ -366,6 +378,11 @@ impl Fake {
                 _ => {}
             }
         }
+        self.send(json!({"type": "turn_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": self.replied.lock().unwrap().clone()}],
+            "stopReason": "stop",
+        }, "toolResults": []}));
         self.send(json!({"type": "agent_end", "messages": [], "willRetry": false}));
         self.send(json!({"type": "agent_settled", "aborted": run.aborted.load(Ordering::Relaxed)}));
     }
@@ -472,7 +489,7 @@ fn split_tool(arg: &str) -> (String, String) {
 pub async fn run() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version") {
-        println!("0.73.1 (fake-pi)");
+        println!("1.5.1 (fake-pi)");
         return Ok(());
     }
     let flag = |name: &str| {
@@ -509,6 +526,8 @@ pub async fn run() -> std::io::Result<()> {
         )),
         thinking: Arc::new(Mutex::new(flag("--thinking").unwrap_or_else(|| "off".into()))),
         said: Arc::new(Mutex::new(said)),
+        replied: Arc::new(Mutex::new(String::new())),
+        name: Arc::new(Mutex::new(flag("--name"))),
         dialogs: Arc::default(),
         abort: Arc::new(AtomicBool::new(false)),
         counter: Arc::new(AtomicU64::new(1)),
@@ -542,11 +561,11 @@ pub async fn run() -> std::io::Result<()> {
             "prompt" => {
                 fake.reply(&id, "prompt", json!({"success": true, "data": {"disposition": "started"}}));
                 let text = message.get("message").and_then(Value::as_str).unwrap_or("").to_owned();
-                let images = message
+                let images: Vec<Value> = message
                     .get("images")
                     .and_then(Value::as_array)
-                    .map(|i| i.len())
-                    .unwrap_or(0);
+                    .cloned()
+                    .unwrap_or_default();
                 fake.said.lock().unwrap().push(text.clone());
                 fake.save();
                 fake.abort.store(false, Ordering::Relaxed);
@@ -572,13 +591,24 @@ pub async fn run() -> std::io::Result<()> {
                     Some((p, n)) => (p.to_owned(), n.to_owned()),
                     None => (model.clone(), model.clone()),
                 };
-                fake.reply(&id, "get_state", json!({"success": true, "data": {
-                    "model": {"id": name, "name": "Fake 1", "provider": provider},
+                let session = fake.session_id.lock().unwrap().clone();
+                let mut data = json!({
+                    "model": {"id": name, "name": "Fake 1", "provider": provider, "api": "openai-completions",
+                        "reasoning": true, "input": ["text", "image"], "contextWindow": 100000},
                     "thinkingLevel": fake.thinking.lock().unwrap().clone(),
                     "isStreaming": false,
-                    "sessionId": fake.session_id.lock().unwrap().clone(),
+                    "isCompacting": false,
+                    "steeringMode": "one-at-a-time",
+                    "followUpMode": "one-at-a-time",
+                    "sessionId": session,
+                    "autoCompactionEnabled": true,
                     "messageCount": fake.said.lock().unwrap().len(),
-                }}));
+                    "pendingMessageCount": 0,
+                });
+                if let Some(name) = fake.name.lock().unwrap().clone() {
+                    data["sessionName"] = json!(name);
+                }
+                fake.reply(&id, "get_state", json!({"success": true, "data": data}));
             }
             "get_available_models" => fake.reply(&id, "get_available_models", json!({"success": true, "data": {"models": [
                 {"id": "fake-1", "name": "Fake 1", "provider": "fake", "reasoning": true, "input": ["text", "image"], "contextWindow": 100000},
@@ -587,11 +617,15 @@ pub async fn run() -> std::io::Result<()> {
             "get_available_thinking_levels" => fake.reply(
                 &id,
                 "get_available_thinking_levels",
-                json!({"success": true, "data": {"levels": ["off", "low", "medium", "high"]}}),
+                json!({"success": true, "data": {"levels": ["off", "minimal", "low", "medium", "high"]}}),
             ),
             "get_commands" => fake.reply(&id, "get_commands", json!({"success": true, "data": {"commands": [
-                {"name": "review", "description": "Review the changes", "source": "prompt"},
-                {"name": "skill:fake-skill", "description": "A skill the fake offers", "source": "skill"},
+                {"name": "review", "description": "Review the changes", "source": "prompt",
+                 "sourceInfo": {"path": "/work/demo/.pi/agent/prompts/review.md", "source": "local", "scope": "project", "origin": "top-level"}},
+                {"name": "skill:fake-skill", "description": "A skill the fake offers", "source": "skill",
+                 "sourceInfo": {"path": "/home/dev/.pi/agent/skills/fake/SKILL.md", "source": "local", "scope": "user", "origin": "top-level"}},
+                {"name": "mcp", "description": "Manage MCP servers", "source": "extension",
+                 "sourceInfo": {"path": "builtin:mcp", "source": "builtin", "scope": "temporary", "origin": "top-level"}},
             ]}})),
             "set_model" => {
                 let provider = message.get("provider").and_then(Value::as_str).unwrap_or("fake");
@@ -602,19 +636,83 @@ pub async fn run() -> std::io::Result<()> {
             "set_thinking_level" => {
                 let level = message.get("level").and_then(Value::as_str).unwrap_or("off");
                 *fake.thinking.lock().unwrap() = level.to_owned();
+                fake.send(json!({"type": "thinking_level_changed", "level": level}));
                 fake.reply(&id, "set_thinking_level", json!({"success": true}));
             }
             "compact" => {
+                let result = json!({
+                    "summary": "The context was compacted.",
+                    "firstKeptEntryId": "entry-1",
+                    "tokensBefore": 1200,
+                    "estimatedTokensAfter": 300,
+                    "usage": {"input": 20, "output": 5, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 25, "cost": {"total": 0.0001}},
+                    "details": {},
+                });
+                fake.send(json!({"type": "compaction_start", "reason": "manual"}));
+                fake.send(json!({"type": "compaction_end", "reason": "manual", "result": result, "aborted": false, "willRetry": false}));
+                fake.reply(&id, "compact", json!({"success": true, "data": result}));
+            }
+            "get_session_stats" => fake.reply(&id, "get_session_stats", json!({"success": true, "data": {
+                "sessionId": fake.session_id.lock().unwrap().clone(),
+                "userMessages": fake.said.lock().unwrap().len(),
+                "assistantMessages": fake.said.lock().unwrap().len(),
+                "toolCalls": 0,
+                "toolResults": 0,
+                "totalMessages": fake.said.lock().unwrap().len() * 2,
+                "tokens": {"input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "total": 15},
+                "cost": 0.0001,
+                "contextUsage": {"tokens": 15, "contextWindow": 100000, "percent": 0.015},
+            }})),
+            "get_last_assistant_text" => fake.reply(
+                &id,
+                "get_last_assistant_text",
+                json!({"success": true, "data": {"text": fake.replied.lock().unwrap().clone()}}),
+            ),
+            "get_messages" => {
+                let messages: Vec<Value> = fake
+                    .said
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|text| json!({"role": "user", "content": [{"type": "text", "text": text}]}))
+                    .collect();
+                fake.reply(&id, "get_messages", json!({"success": true, "data": {"messages": messages}}));
+            }
+            "get_entries" | "get_tree" => {
+                let entries: Vec<Value> = fake
+                    .said
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| {
+                        json!({"type": "message", "id": format!("entry-{}", i + 1),
+                            "parentId": if i == 0 { Value::Null } else { json!(format!("entry-{i}")) },
+                            "timestamp": "2026-01-02T03:04:05.000Z",
+                            "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+                    })
+                    .collect();
+                let leaf = entries.len().to_string();
+                let data = if kind == "get_tree" {
+                    let tree: Vec<Value> = entries.iter().map(|e| json!({"entry": e, "children": []})).collect();
+                    json!({"tree": tree, "leafId": format!("entry-{leaf}")})
+                } else {
+                    json!({"entries": entries, "leafId": format!("entry-{leaf}")})
+                };
+                fake.reply(&id, kind.as_str(), json!({"success": true, "data": data}));
+            }
+            "set_session_name" => {
+                let name = message.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
+                *fake.name.lock().unwrap() = Some(name.clone());
+                fake.send(json!({"type": "session_info_changed", "name": name}));
+                fake.reply(&id, "set_session_name", json!({"success": true}));
+            }
+            "clear_queue" => {
+                fake.send(json!({"type": "queue_update", "steering": [], "followUp": []}));
                 fake.reply(
                     &id,
-                    "compact",
-                    json!({"success": true, "data": {
-                        "summary": "The context was compacted.",
-                        "firstKeptEntryId": "entry-1",
-                        "tokensBefore": 1200,
-                        "estimatedTokensAfter": 300,
-                        "usage": {"input": 20, "output": 5, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 25},
-                    }}),
+                    "clear_queue",
+                    json!({"success": true, "data": {"steering": [], "followUp": []}}),
                 );
             }
             "get_fork_messages" => {
