@@ -278,7 +278,10 @@ fn message_fixture() {
         .iter()
         .find(|u| u["update"]["item"]["set"]["text"] == "From the subagent.")
         .unwrap();
-    assert_eq!(sub["update"]["item"]["parent"], "toolu_task");
+    assert_eq!(
+        sub["subagent"], "toolu_task",
+        "a sidechain message belongs to its subagent"
+    );
     let turn = updates.iter().find(|u| u["update"]["turn"]["stop"] == "budget");
     assert!(turn.is_some());
     // The Write request is opened, then cancelled by the CLI.
@@ -349,4 +352,42 @@ fn steering_and_echoes() {
             .step(&wire::parse_line(&echo.to_string()).unwrap(), NOW)
             .is_empty()
     );
+}
+
+#[test]
+fn a_task_call_is_a_subagent() {
+    let (updates, _) = play("subagent");
+    let sub: Vec<&Value> = updates
+        .iter()
+        .filter(|u| u["update"]["item"]["kind"] == "subagent")
+        .collect();
+    assert_eq!(sub.len(), 1, "one subagent item");
+    let item = &sub[0]["update"]["item"];
+    assert_eq!(item["set"]["key"], "toolu_task_01");
+    assert_eq!(item["set"]["title"], "Count the files");
+    assert!(
+        sub[0].get("subagent").is_none(),
+        "the subagent item is in the parent"
+    );
+    let inside: Vec<&Value> = updates
+        .iter()
+        .filter(|u| u["subagent"] == "toolu_task_01")
+        .collect();
+    assert!(inside.iter().any(|u| u["update"]["item"]["id"] == "toolu_ls_01"));
+    assert!(
+        inside
+            .iter()
+            .any(|u| u["update"]["item"]["set"]["text"] == "Two files.")
+    );
+    assert!(inside.iter().all(|u| u["update"]["item"]["parent"].is_null()));
+    let done = updates
+        .iter()
+        .rfind(|u| u["update"]["item"]["id"] == "toolu_task_01:subagent")
+        .unwrap();
+    assert_eq!(done["update"]["item"]["set"]["status"], "ok");
+    let top = updates
+        .iter()
+        .find(|u| u["update"]["item"]["set"]["text"] == "There are two files.")
+        .unwrap();
+    assert!(top.get("subagent").is_none());
 }
