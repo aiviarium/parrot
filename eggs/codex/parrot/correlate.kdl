@@ -1,0 +1,25 @@
+// Items from the app-server (`native`) and the rollout file (`transcript`). Item ids are in
+// both for tools and commands; messages match by turn and position.
+kind "command" {
+  match "ref"
+  prefer "native"
+  history "transcript"
+  compare "command" "status" "exit"
+}
+kind "tool" {
+  match "ref"
+  prefer "native"
+  history "transcript"
+  compare "tool" "status"
+}
+kind "user" {
+  match "position" "text"
+  prefer "native"
+  history "transcript"
+  compare "text"
+}
+kind "*" {
+  match "ref" "position"
+  prefer "native"
+  history "transcript"
+}

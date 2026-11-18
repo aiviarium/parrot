@@ -81,6 +81,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
         accumulate(entry.by_turn.entry(turn.to_string()).or_default(), usage);
     }
     let total = entry.total.clone();
+    crate::budgets::on_usage(cx, &session, usage);
     cx.persist(json!({ "op": "put", "kind": "usage", "id": session, "value": total }));
     cx.publish(Some(session), json!({ "type": "usage", "usage": total }));
 }

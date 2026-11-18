@@ -1,7 +1,11 @@
 //! The Claude Code driver over stream-json, with a fake Claude for tests.
 
+pub mod data;
 pub mod driver;
 pub mod fake;
+pub mod frame;
+pub mod history;
+pub mod input;
 pub mod mapping;
 pub mod wire;
 

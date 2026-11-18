@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LevelsFile",
+  "description": "`levels.kdl`: the tools each level allows, and the level each combination of option values\ngives (spec 15.2, Appendix E4).",
+  "type": "object",
+  "properties": {
+    "level": {
+      "description": "`level \"read\" { tool \"Read\"; tool \"mcp__*\"; }`. A tool in no level is `host`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LevelTools"
+      },
+      "default": []
+    },
+    "map": {
+      "description": "`map level=\"write\" network=#false { when permissionMode=\"acceptEdits\"; }`, first match\nwins. Several `when` nodes are alternatives; the properties of one must all hold. A\ncombination no `map` matches is `host` with network.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LevelMap"
+      },
+      "default": []
+    },
+    "pin": {
+      "description": "Arguments that pin the harness's settings sources under a ceiling.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PinArgs"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "LevelTools": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "tool": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "PermissionLevel": {
+      "description": "What an agent can do without asking anyone, lowest first.",
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "sandboxed",
+        "host"
+      ]
+    },
+    "LevelMap": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "network": {
+          "type": "boolean",
+          "default": false
+        },
+        "when": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "level"
+      ]
+    },
+    "PinArgs": {
+      "description": "`pin { arg \"--setting-sources\" \"\" }`: the arguments to pass, in order.",
+      "type": "object",
+      "properties": {
+        "arg": {
+          "type": "array",
+          "items": true,
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

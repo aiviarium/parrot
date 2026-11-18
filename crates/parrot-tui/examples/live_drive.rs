@@ -29,7 +29,7 @@ struct Cli {
 
 const CLAUDE: Cli = Cli {
     name: "claude",
-    profile: "claude-code.toml",
+    profile: "claude-code.kdl",
     cmd: &[
         "claude",
         "--model",
@@ -45,7 +45,7 @@ const CLAUDE: Cli = Cli {
 
 const CODEX: Cli = Cli {
     name: "codex",
-    profile: "codex.toml",
+    profile: "codex.kdl",
     cmd: &[
         "codex",
         "--no-daemon",

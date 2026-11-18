@@ -229,7 +229,10 @@ pub fn push(cx: &mut Cx, session: &str, entry: Entry, front: bool) {
 /// Whether a prompt can be sent to the session right now.
 fn ready(state: &State, session: &str) -> bool {
     let idle = state.sessions.info.get(session).map(|s| s.state) == Some(SessionState::Idle);
-    idle && sessions::active(state, session) && !is_busy(state, session)
+    // A rebind holds the queue until the new binding runs (E6).
+    idle && sessions::active(state, session)
+        && !is_busy(state, session)
+        && !crate::seeds::rebinding(state, session)
 }
 
 /// Send an entry to the session's binding.
@@ -250,6 +253,12 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
             );
         }
         _ => {
+            if !steer {
+                crate::seeds::before_prompt(cx, session, &mut params);
+                // The prompt starts a turn: a client that looks before the driver reports it
+                // must not take the idle session for one that has finished.
+                set_state(cx, session, SessionState::Idle, SessionState::Running);
+            }
             params["steer"] = json!(steer);
             if let Some(m) = &entry.message {
                 inflight_begin(cx, session, m, &entry.text);
@@ -273,6 +282,17 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
             .or_default()
             .busy = true;
     }
+}
+
+/// Whether `dispatch` would send a prompt now, which starts a turn.
+pub fn sends_next(state: &State, session: &str) -> bool {
+    ready(state, session)
+        && state.queue.by_session.get(session).is_some_and(|q| {
+            !q.paused
+                && q.entries
+                    .front()
+                    .is_some_and(|e| e.kind != QueueEntryKind::Action)
+        })
 }
 
 /// Send the first entry if the session is idle and the queue isn't paused (spec 13.2).
@@ -449,7 +469,8 @@ fn prompt(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let delivery = p.delivery.unwrap_or_default();
     let session = p.session.clone();
     let starting = !sessions::active(cx.state, &session);
-    if starting {
+    // Prompting a stopped session in one's own subtree needs only `prompt` (E7).
+    if starting && crate::principals::session_principal(cx.state, conn).is_none() {
         check(cx.state, conn, Scope::Manage)?;
     }
     let busy = !ready(cx.state, &session);
@@ -624,6 +645,26 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
     }
 }
 
+/// Moves a session from `from` to `to` and publishes it; any other state is left alone.
+fn set_state(cx: &mut Cx, session: &str, from: SessionState, to: SessionState) {
+    let Some(s) = cx
+        .state
+        .sessions
+        .info
+        .get_mut(session)
+        .filter(|s| s.state == from)
+    else {
+        return;
+    };
+    s.state = to;
+    let background = s.background.clone();
+    cx.publish(
+        Some(session.to_string()),
+        json!({ "type": "state", "state": to, "background": background }),
+    );
+    sessions::changed(cx, session);
+}
+
 /// A prompt that fails after acceptance ends its turn as `failed` (spec 13.1).
 fn failed(cx: &mut Cx, session: &str, entry: &Entry, e: &RpcError) {
     let binding = crate::directory::binding_of(cx.state, session).unwrap_or_default();
@@ -641,6 +682,7 @@ fn failed(cx: &mut Cx, session: &str, entry: &Entry, e: &RpcError) {
     if let Some(q) = cx.state.queue.by_session.get_mut(session) {
         q.busy = false;
     }
+    set_state(cx, session, SessionState::Running, SessionState::Idle);
     dispatch(cx, session);
 }
 

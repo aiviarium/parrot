@@ -11,6 +11,7 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
+base64 = "0.22"
 parrot-proto.workspace = true
 parrot-driver.workspace = true
 parrot-guard.workspace = true

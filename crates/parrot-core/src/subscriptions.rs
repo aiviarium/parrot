@@ -31,6 +31,8 @@ pub struct Subscription {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Watch {
     Session(String),
+    /// A session and its descendants (spec 10.2, 21).
+    Tree(String),
     Index,
 }
 
@@ -65,6 +67,10 @@ fn matches(state: &State, sub: &Subscription, session: Option<&str>, update: &Va
     match &sub.target {
         Watch::Index => for_index(update),
         Watch::Session(target) => session == Some(target.as_str()) && ty != Some("summary"),
+        Watch::Tree(root) => {
+            session.is_some_and(|s| crate::directory::path_of(state, s).iter().any(|p| p == root))
+                && (ty != Some("summary") || session != Some(root.as_str()))
+        }
     }
 }
 
@@ -145,7 +151,8 @@ pub fn flush(cx: &mut Cx) {
 /// Subscribe a connection without a snapshot; returns the subscription id and the head cursor.
 pub fn subscribe_conn(cx: &mut Cx, conn: &str, target: Target) -> (String, String) {
     let target = match target {
-        Target::Session { session } | Target::Tree { tree: session } => Watch::Session(session),
+        Target::Session { session } => Watch::Session(session),
+        Target::Tree { tree } => Watch::Tree(tree),
         Target::Index { .. } => Watch::Index,
     };
     let id = cx.ids.next("sub");
@@ -235,6 +242,21 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
         (Watch::Session(s), None) => {
             let n = p.items.unwrap_or(50) as usize;
             result["snapshot"] = json!({ "sessions": [session_snapshot(cx.state, s, n)] });
+        }
+        (Watch::Tree(root), None) => {
+            // Paged like `session/tree` (E8).
+            let n = p.items.unwrap_or(50) as usize;
+            let all = crate::tree::subtree(cx.state, root);
+            let page: Vec<Value> = all
+                .iter()
+                .take(100)
+                .map(|s| session_snapshot(cx.state, s, n))
+                .collect();
+            let mut snap = json!({ "sessions": page });
+            if all.len() > 100 {
+                snap["next"] = json!("100");
+            }
+            result["snapshot"] = snap;
         }
         (Watch::Index, None) => {
             // The first page of what `session/list` returns; `next` continues it there (10.3).

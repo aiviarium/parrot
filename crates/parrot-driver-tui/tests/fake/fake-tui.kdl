@@ -1,0 +1,56 @@
+// The profile of tests/fake/fake-tui.sh.
+
+profile id="fake-tui" name="Fake TUI" unrecognised-after="1s"
+
+node tag="dialog" role="dialog" {
+  lines from="(Do you want to run|Do you trust)" through=#"^\s*(❯\s*)?2\.\s"#
+}
+
+node tag="choices" role="menu" inside="dialog" {
+  lines from=#"^\s*(❯\s*)?1\.\s"# through=#"^\s*(❯\s*)?2\.\s"#
+  item line-matches=#"^\s*(❯\s*)?\d+\.\s"# {
+    selected-when starts-with="❯"
+  }
+}
+
+state name="onboarding" {
+  when any-text-matches="Do you trust the files"
+}
+
+state name="awaiting-approval" {
+  when any-text-matches="Do you want to run"
+}
+
+state name="working" {
+  when any-text-matches="Working…"
+}
+
+state name="idle" {
+  when any-text-matches="Type a prompt and press Enter"
+}
+
+state name="starting" {
+  when until-seen="idle"
+}
+
+action name="submit" {
+  require state="idle" hold="200ms"
+  steps type="$text"
+  steps key="enter"
+  expect no-text-matches="Type a prompt" within="5s"
+}
+
+// The fake reads whole lines, so an attachment is its path typed ahead of the prompt.
+action name="attach" {
+  require state="idle" hold="200ms"
+  (array)steps type="@$path "
+}
+
+action name="choose" {
+  require hold="200ms" {
+    state "awaiting-approval" "onboarding"
+  }
+  steps type="$option"
+  steps key="enter"
+  expect not-exists="dialog" within="5s"
+}

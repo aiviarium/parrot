@@ -1534,6 +1534,7 @@ dependencies = [
 name = "parrot-driver-claude"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1547,6 +1548,7 @@ dependencies = [
 name = "parrot-driver-codex"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1603,6 +1605,7 @@ dependencies = [
 name = "parrot-driver-tui"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1688,6 +1691,7 @@ dependencies = [
 name = "parrot-proto"
 version = "0.1.0"
 dependencies = [
+ "kdl",
  "proptest",
  "schemars",
  "serde",
@@ -1703,8 +1707,10 @@ dependencies = [
  "parrot-core",
  "parrot-driver",
  "parrot-eggs",
+ "parrot-link",
  "parrot-proto",
  "parrot-store",
+ "parrot-workspace",
  "rustix",
  "serde",
  "serde_json",
@@ -1748,9 +1754,11 @@ dependencies = [
 name = "parrot-tui"
 version = "0.1.0"
 dependencies = [
+ "parrot-proto",
  "parrot-term",
  "regex",
  "rustix",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -178,6 +178,7 @@ pub fn session_json(state: &State, id: &str) -> Option<Value> {
         v["parent"] = json!({ "session": p });
         v["kind"] = json!("child");
     }
+    crate::tree::decorate(state, id, &mut v);
     Some(v)
 }
 
@@ -201,6 +202,7 @@ pub fn summary_json(state: &State, id: &str) -> Option<Value> {
     if let Some(p) = &r.parent {
         v["parent"] = json!(p);
     }
+    crate::tree::decorate_summary(state, id, &mut v);
     Some(v)
 }
 
@@ -337,9 +339,11 @@ pub fn restore_workspace(state: &mut State, id: &str, value: &Value) {
 pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<String> {
     let agent = cx.state.sessions.by_id.get(session)?.agent.clone();
     let s = cx.state.sessions.info.get(session).cloned().unwrap_or_default();
+    // Only the same agent's harness session can be resumed.
     let resume = s
         .bindings
         .last()
+        .filter(|b| cx.state.bindings.by_id.get(*b).is_some_and(|r| r.agent == agent))
         .and_then(|b| cx.state.bindings.info.get(b))
         .and_then(|b| b.reference.clone());
     let via = if resume.is_some() { BindingVia::Resume } else { via };
@@ -368,6 +372,7 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
     if let Some(mcp) = crate::functions::mcp_for(cx, session, &id) {
         start["mcp"] = mcp;
     }
+    let via = crate::seeds::start_extra(cx, session, &id, &mut start).unwrap_or(via);
     cx.state.bindings.by_id.insert(
         id.clone(),
         BindingRecord {
@@ -421,6 +426,13 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "session/prompt" | "session/cancel" => return queue::call(cx, conn, id, method, params),
         // Moving a session between runtimes belongs to the links (E1).
         "session/offer" | "session/commit" => return crate::links::call(cx, conn, id, method, params),
+        // The tree and workspaces (spec 8, 18, E8).
+        "session/tree" | "session/configure" => return crate::tree::call(cx, conn, id, method, params),
+        m if m.starts_with("workspace/") => return crate::tree::call(cx, conn, id, method, params),
+        // Seeds, rebinds and rewinds (spec 9.3, 9.4, 23).
+        "session/bundle" | "session/rebind" | "session/rewind" => {
+            return crate::seeds::call(cx, conn, id, method, params);
+        }
         "session/new" => new(cx, conn, id, params),
         "session/list" => list(cx, conn, params),
         "session/get" => get(cx, conn, params),
@@ -518,16 +530,43 @@ fn not_found(what: &str, id: &str) -> RpcError {
 /// Returns `Value::Null` once it has replied itself, so the caller's reply precedes the updates.
 fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result<Value, RpcError> {
     let p: SessionNewParams = parse(params)?;
-    if p.parent.is_some() || p.seed.is_some() || p.task.is_some() {
-        check(cx.state, conn, Scope::Delegate)?;
-        return Err(RpcError::new(-32001, "unsupported").with_data(json!({ "feature": "profile.tree" })));
-    }
-    check(cx.state, conn, Scope::Manage)?;
+    let mut plan = if p.parent.is_some()
+        || p.seed.is_some()
+        || p.task.is_some()
+        || p.ceiling.is_some()
+        || p.budget.is_some()
+        || p.wake.is_some()
+    {
+        Some(crate::tree::plan_new(cx, conn, &p)?)
+    } else {
+        check(cx.state, conn, Scope::Manage)?;
+        None
+    };
     if !cx.state.sessions.agents.contains_key(&p.agent) {
+        if let Some(plan) = &plan {
+            crate::tree::unplan(cx, plan);
+        }
         return Err(not_found("agent", &p.agent));
     }
+    if let (Some(seed), Some(plan)) = (&p.seed, plan.as_mut()) {
+        match crate::seeds::plan(cx, conn, seed, &p.agent) {
+            Ok(s) => plan.seed = Some(s),
+            Err(e) => {
+                crate::tree::unplan(cx, plan);
+                return Err(e);
+            }
+        }
+    }
+    let ceiling = plan.as_ref().map(|p| p.node.ceiling.clone()).unwrap_or_default();
+    let fenced = |path: &str| crate::ceilings::check_path(&ceiling, path);
     let (workspace, path) = match &p.workspace {
         WorkspaceRequest::Dir { path } => {
+            if let Err(e) = fenced(path) {
+                if let Some(plan) = &plan {
+                    crate::tree::unplan(cx, plan);
+                }
+                return Err(e);
+            }
             let existing = cx.state.sessions.workspaces.values().find(|w| &w.path == path);
             match existing {
                 Some(w) => (w.id.clone(), w.path.clone()),
@@ -556,16 +595,91 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
                 .workspaces
                 .get(workspace)
                 .ok_or_else(|| not_found("workspace", workspace))?;
-            (w.id.clone(), w.path.clone())
+            let found = (w.id.clone(), w.path.clone());
+            if let Err(e) = fenced(&found.1) {
+                if let Some(plan) = &plan {
+                    crate::tree::unplan(cx, plan);
+                }
+                return Err(e);
+            }
+            found
         }
-        WorkspaceRequest::Worktree { .. } => {
-            return Err(
-                RpcError::new(-32001, "unsupported").with_data(json!({ "feature": "workspace.worktree" }))
-            );
+        WorkspaceRequest::Worktree { repo, branch, base } => {
+            if let Err(e) = fenced(repo) {
+                if let Some(plan) = &plan {
+                    crate::tree::unplan(cx, plan);
+                }
+                return Err(e);
+            }
+            check(cx.state, conn, Scope::Workspace)?;
+            let sid = cx.ids.next("ses");
+            let wid = cx.ids.next("wsp");
+            let branch = branch.clone().unwrap_or_else(|| format!("parrot/{sid}"));
+            let meta = crate::tree::WorkspaceMeta {
+                kind: "worktree".into(),
+                repo: Some(repo.clone()),
+                branch: Some(branch.clone()),
+                base: base.clone(),
+                owner: Some(sid.clone()),
+            };
+            let base = base.clone();
+            let pending = crate::tree::Pending::New {
+                conn: conn.to_string(),
+                id: id.cloned(),
+                params: Box::new(p.clone()),
+                plan: Box::new(plan.unwrap_or_default()),
+                session: sid,
+                workspace: wid.clone(),
+                meta,
+            };
+            crate::tree::create_worktree(cx, repo, &branch, base.as_deref(), &wid, pending);
+            return Ok(Value::Null);
         }
     };
-    let sid = cx.ids.next("ses");
-    let origin = json!({ "kind": "client", "principal": principal_of(cx.state, conn) });
+    finish_new(cx, conn, id, p, plan, workspace, path, None);
+    Ok(Value::Null)
+}
+
+/// Create the session once its workspace exists, start it and reply.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_new(
+    cx: &mut Cx,
+    conn: &str,
+    id: Option<&RequestId>,
+    p: SessionNewParams,
+    plan: Option<crate::tree::Plan>,
+    workspace: String,
+    path: String,
+    sid: Option<String>,
+) {
+    let sid = sid.unwrap_or_else(|| cx.ids.next("ses"));
+    let origin = match crate::principals::session_principal(cx.state, conn) {
+        Some(s) => json!({ "kind": "session", "principal": s }),
+        None => json!({ "kind": "client", "principal": principal_of(cx.state, conn) }),
+    };
+    // A child's grant is at most its parent's (spec 5.1).
+    let mut grant = p.grant.clone().unwrap_or_default();
+    if let Some(parent) = plan.as_ref().and_then(|p| p.parent.clone()) {
+        let parent_grant = cx
+            .state
+            .sessions
+            .info
+            .get(&parent)
+            .map(|i| i.grant.clone())
+            .unwrap_or_default();
+        if crate::principals::session_principal(cx.state, conn).is_some() || !parent_grant.is_empty() {
+            grant.retain(|g| parent_grant.contains(g));
+        }
+    } else if let Some(me) = crate::principals::session_principal(cx.state, conn) {
+        let mine = cx
+            .state
+            .sessions
+            .info
+            .get(me)
+            .map(|i| i.grant.clone())
+            .unwrap_or_default();
+        grant.retain(|g| mine.contains(g));
+    }
     cx.state.sessions.by_id.insert(
         sid.clone(),
         SessionRecord {
@@ -581,7 +695,7 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
             workspace,
             cwd: p.cwd.clone().unwrap_or(path),
             origin,
-            grant: p.grant.clone().unwrap_or_default(),
+            grant,
             options: p.options.clone().unwrap_or_default(),
             control: p.control.unwrap_or(Control::Native),
             created_ms: cx.now_ms,
@@ -589,10 +703,22 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
             ..Default::default()
         },
     );
+    match &plan {
+        Some(plan) => {
+            crate::tree::attach(cx, &sid, plan);
+            if let Some(seed) = &plan.seed {
+                crate::seeds::apply(cx, &sid, seed);
+            }
+        }
+        None => crate::tree::ensure(cx.state, &sid),
+    }
     let (subscription, head) =
         subscriptions::subscribe_conn(cx, conn, Target::Session { session: sid.clone() });
     if p.start.unwrap_or(true) {
-        start_binding(cx, &sid, BindingVia::New);
+        let binding = start_binding(cx, &sid, BindingVia::New);
+        if let (Some(b), Some(seed)) = (&binding, plan.as_ref().and_then(|p| p.seed.as_ref())) {
+            crate::seeds::after_seed(cx, b, seed);
+        }
     } else {
         changed(cx, &sid);
     }
@@ -604,7 +730,23 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
     if let Some(id) = id {
         cx.reply(conn, id.clone(), Ok(result));
     }
-    Ok(Value::Null)
+    // The first prompt: the task's brief, else the seed's (spec 19, 23.2).
+    if let Some(plan) = plan {
+        if let Some(task) = plan.task {
+            crate::tasks::begin(cx, &sid, task);
+        } else if let Some(brief) = plan.seed.and_then(|s| s.brief) {
+            let origin = json!({ "kind": "runtime" });
+            queue::enqueue(
+                cx,
+                &sid,
+                parrot_proto::prompt::QueueEntryKind::Prompt,
+                brief,
+                origin,
+                json!({}),
+            );
+            queue::dispatch(cx, &sid);
+        }
+    }
 }
 
 fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
@@ -701,9 +843,49 @@ pub fn stop_session(cx: &mut Cx, session: &str) {
 
 fn stop(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: SessionStopParams = parse(params)?;
-    check_session(cx.state, conn, Scope::Manage, &p.session)?;
-    stop_session(cx, &p.session);
+    // A parent's agent stops its children with `delegate` (spec 18.1).
+    let own_subtree = crate::principals::session_principal(cx.state, conn).is_some();
+    check_session(
+        cx.state,
+        conn,
+        if own_subtree {
+            Scope::Delegate
+        } else {
+            Scope::Manage
+        },
+        &p.session,
+    )?;
+    let targets = if p.tree.unwrap_or(false) {
+        crate::tree::subtree(cx.state, &p.session)
+    } else {
+        vec![p.session.clone()]
+    };
+    let mut stopped = Vec::new();
+    for s in targets {
+        stop_tree(cx, &s, &mut stopped);
+    }
     Ok(json!({}))
+}
+
+/// Stop a session, cancel its task and stop the children that asked to end with it.
+fn stop_tree(cx: &mut Cx, session: &str, done: &mut Vec<String>) {
+    if done.iter().any(|d| d == session) {
+        return;
+    }
+    done.push(session.to_string());
+    stop_session(cx, session);
+    crate::tasks::on_stop(cx, session);
+    for child in crate::tree::children(cx.state, session) {
+        let stop = cx
+            .state
+            .tree
+            .nodes
+            .get(&child)
+            .is_some_and(|n| n.on_parent_end == "stop");
+        if stop {
+            stop_tree(cx, &child, done);
+        }
+    }
 }
 
 fn rename(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
@@ -729,7 +911,26 @@ fn archive(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
 fn delete(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: SessionRef = parse(params)?;
     check_session(cx.state, conn, Scope::Destructive, &p.session)?;
+    let running: Vec<String> = crate::tree::children(cx.state, &p.session)
+        .into_iter()
+        .filter(|c| active(cx.state, c))
+        .collect();
+    if !running.is_empty() {
+        return Err(RpcError::new(-32004, "the session has running children")
+            .with_data(json!({ "sessions": running })));
+    }
     stop_session(cx, &p.session);
+    crate::budgets::give_back(cx, &p.session);
+    let workspace = cx
+        .state
+        .sessions
+        .info
+        .get(&p.session)
+        .map(|i| i.workspace.clone())
+        .unwrap_or_default();
+    crate::seeds::on_delete(cx, &p.session, &workspace);
+    cx.state.tree.nodes.remove(&p.session);
+    cx.persist(json!({ "op": "delete", "kind": "tree", "id": p.session }));
     cx.publish(
         Some(p.session.clone()),
         json!({ "type": "deleted", "kind": "session", "id": p.session }),
