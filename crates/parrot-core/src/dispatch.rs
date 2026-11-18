@@ -14,6 +14,8 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         Input::Disconnected { conn } => {
             requests::disconnected(cx, &conn);
             subscriptions::disconnected(cx, &conn);
+            functions::disconnected(cx, &conn);
+            links::disconnected(cx, &conn);
             principals::disconnected(cx, &conn);
         }
         Input::Call {
@@ -55,6 +57,7 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         Input::Tick { .. } => {
             requests::tick(cx);
             queue::tick(cx);
+            links::tick(cx);
         }
     }
     subscriptions::flush(cx);
@@ -76,13 +79,16 @@ fn reply_to(cx: &mut Cx, owner: CallOwner, call: u64, result: Result<serde_json:
     }
 }
 
-fn call(
+pub(crate) fn call(
     cx: &mut Cx,
     conn: &str,
     id: Option<&serde_json::Value>,
     method: &str,
     params: serde_json::Value,
 ) -> Reply {
+    if let Some(reply) = links::intercept(cx, conn, id, method, &params) {
+        return reply;
+    }
     let area = method.split('/').next().unwrap_or("");
     match area {
         "initialize" | "token" => principals::call(cx, conn, id, method, params),

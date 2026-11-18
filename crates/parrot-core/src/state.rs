@@ -1,6 +1,9 @@
 //! The core's state, one part per module so modules can be written side by side.
 
-use crate::{actions, bindings, items, options, principals, queue, requests, sessions, subscriptions, usage};
+use crate::{
+    actions, bindings, functions, items, links, options, principals, queue, requests, sessions,
+    subscriptions, usage,
+};
 
 #[derive(Debug, Default)]
 pub struct State {
@@ -14,6 +17,8 @@ pub struct State {
     pub options: options::Options,
     pub actions: actions::Actions,
     pub usage: usage::Usage,
+    pub links: links::Links,
+    pub functions: functions::Functions,
     /// The runtime-wide update sequence (spec 10.1).
     pub seq: u64,
     /// The next id for calls the core makes to drivers and clients.
