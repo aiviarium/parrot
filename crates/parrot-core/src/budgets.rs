@@ -9,6 +9,21 @@ use parrot_proto::rpc::RpcError;
 use parrot_proto::usage::{Budget, Cost, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+/// Turns running now, for the `seconds` dimension: counted from turn wall time.
+#[derive(Debug, Default)]
+pub struct Clocks {
+    /// By `(session, turn)`.
+    pub running: BTreeMap<(String, String), TurnClock>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TurnClock {
+    pub started_ms: u64,
+    /// Seconds of this turn already charged.
+    pub charged: u64,
+}
 
 /// A session's allotment.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -263,6 +278,99 @@ pub fn on_turn(cx: &mut Cx, session: &str) {
             ..Default::default()
         },
     );
+}
+
+/// A turn's status changed: a running turn starts its clock, an ended one charges its wall time,
+/// rounded up to whole seconds.
+pub fn on_turn_status(cx: &mut Cx, session: &str, turn: &str, running: bool) {
+    let key = (session.to_string(), turn.to_string());
+    if running {
+        if !cx.state.budgets.running.contains_key(&key) {
+            cx.state.budgets.running.insert(
+                key,
+                TurnClock {
+                    started_ms: cx.now_ms,
+                    charged: 0,
+                },
+            );
+            schedule(cx, session);
+        }
+    } else if let Some(clock) = cx.state.budgets.running.remove(&key) {
+        let total = cx.now_ms.saturating_sub(clock.started_ms).div_ceil(1000);
+        charge_seconds(cx, session, total.saturating_sub(clock.charged));
+    }
+}
+
+/// A session went idle: whatever turn it ran has ended.
+pub fn on_idle(cx: &mut Cx, session: &str) {
+    let turns: Vec<String> = cx
+        .state
+        .budgets
+        .running
+        .keys()
+        .filter(|(s, _)| s == session)
+        .map(|(_, t)| t.clone())
+        .collect();
+    for t in turns {
+        on_turn_status(cx, session, &t, false);
+    }
+}
+
+/// Time passed: running turns charge the whole seconds they have run so far, so a turn that
+/// outlasts the budget is interrupted while it runs.
+pub fn tick(cx: &mut Cx) {
+    let now = cx.now_ms;
+    let due: Vec<((String, String), u64)> = cx
+        .state
+        .budgets
+        .running
+        .iter()
+        .filter_map(|(k, c)| {
+            let whole = now.saturating_sub(c.started_ms) / 1000;
+            (whole > c.charged).then(|| (k.clone(), whole - c.charged))
+        })
+        .collect();
+    for ((session, turn), delta) in due {
+        if let Some(c) = cx.state.budgets.running.get_mut(&(session.clone(), turn)) {
+            c.charged += delta;
+        }
+        charge_seconds(cx, &session, delta);
+        schedule(cx, &session);
+    }
+}
+
+fn charge_seconds(cx: &mut Cx, session: &str, seconds: u64) {
+    if seconds == 0 {
+        return;
+    }
+    charge(
+        cx,
+        session,
+        &Budget {
+            seconds: Some(seconds),
+            ..Default::default()
+        },
+    );
+}
+
+/// Wake when the payer's `seconds` would run out if nothing else spent them.
+fn schedule(cx: &mut Cx, session: &str) {
+    let Some(payer) = payer(cx.state, session) else {
+        return;
+    };
+    let left = cx
+        .state
+        .tree
+        .nodes
+        .get(&payer)
+        .and_then(|n| n.budget.as_ref())
+        .filter(|a| !a.exhausted)
+        .and_then(|a| remaining(a).seconds);
+    if let Some(left) = left {
+        cx.emit(crate::Effect::TimerAt {
+            at_ms: cx.now_ms + left.max(1) * 1000,
+        });
+    }
 }
 
 /// A budget ran out: interrupt running turns in the subtree, fail their tasks with `budget` and

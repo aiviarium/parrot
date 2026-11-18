@@ -83,6 +83,33 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked --workspace
 
+  # macOS and Windows build the whole workspace; their platform code (PTYs, guards, pipes) has
+  # no test on Linux. Tests that need a shell are Unix only, so each OS runs what applies to it.
+  platform:
+    needs: changes
+    if: needs.changes.outputs.rust
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: platform-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the workspace
+        run: cargo build --locked --workspace
+      - name: Test the platform crates
+        run: cargo test --locked -p parrot-term -p parrot-guard -p parrot-driver -p parrot-serve
+
   typescript:
     needs: changes
     if: needs.changes.outputs.typescript

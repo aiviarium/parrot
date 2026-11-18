@@ -40,7 +40,7 @@ pub use cast::{Cast, CastEvent, CastHeader, CastWriter, EventKind, Frame, Replay
 pub use emulator::{Emulator, EmulatorConfig, Fed, Palette};
 pub use input::{Input, Key, Mods, Mouse, MouseButton, MouseKind, encode, parse_key};
 pub use io::{ByteSink, ByteSource};
-pub use pty::{ExitStatus, Pty, PtyCommand};
+pub use pty::{ExitStatus, Pty, PtyCommand, Signal};
 pub use queries::ResponseFilter;
 pub use screen::*;
 pub use serialize::{SerializeOptions, serialize, serialize_with};

@@ -11,6 +11,13 @@ fn main() {
         let seen = serde_json::json!({"args": args, "mcpToken": std::env::var("PARROT_MCP_TOKEN").ok()});
         let _ = std::fs::write(record, seen.to_string());
     }
+    // One line per start, for tests that start the CLI more than once.
+    if let Some(log) = std::env::var_os("PARROT_FAKE_CLAUDE_ARGS_LOG") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+            let _ = writeln!(f, "{}", serde_json::json!(args));
+        }
+    }
     let Some(path) = fake::scenario_arg(&args).or_else(|| std::env::var(fake::SCENARIO_ENV).ok()) else {
         eprintln!(
             "fake-claude: give --scenario <path> or set {}",

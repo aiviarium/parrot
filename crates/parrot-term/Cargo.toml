@@ -18,8 +18,10 @@ unicode-width = "0.2"
 regex.workspace = true
 bitflags = "2"
 portable-pty = "0.9"
-rustix = { version = "1", features = ["process", "termios", "stdio"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process", "termios", "stdio"] }
