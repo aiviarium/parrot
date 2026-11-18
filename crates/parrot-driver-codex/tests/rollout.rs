@@ -168,3 +168,30 @@ fn history_discovers_and_reads_rollouts() {
     assert_eq!(turns, ["completed", "interrupted"]);
     assert!(rollout::find(root.path(), "../x").is_none());
 }
+
+/// The image input the driver builds has the shape Codex accepted in the trace.
+#[test]
+fn image_input_matches_the_trace() {
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../parrot-conform/fixtures/traces/codex-0.167.1.jsonl"),
+    )
+    .unwrap();
+    let start: Value = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|v| v["msg"]["method"] == "turn/start")
+        .unwrap();
+    let recorded = &start["msg"]["params"]["input"][1];
+    let url = recorded["url"].as_str().unwrap();
+    let data = url.split_once(",").unwrap().1;
+    let p: parrot_proto::driver::BindingPromptParams = serde_json::from_value(serde_json::json!({
+        "binding": "b1", "message": "m1", "text": "Name the color", "steer": false,
+        "attachments": [{"name": "red.png", "type": "image/png", "data": data}]
+    }))
+    .unwrap();
+    let input = parrot_driver_codex::input::input(&p);
+    assert!(input.skipped.is_empty());
+    let image = input.items.iter().find(|i| i["type"] == "image").unwrap();
+    assert_eq!(image, recorded);
+}

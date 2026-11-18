@@ -152,3 +152,31 @@ fn trace_maps_to_items_tools_requests_and_turns() {
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0]["ref"]["id"], "1047c330-5f7f-46a0-9341-bc7d57588a73");
 }
+
+/// The image block the driver builds has the shape Claude Code accepted in the trace.
+#[test]
+fn image_blocks_match_the_trace() {
+    let text = std::fs::read_to_string(trace()).unwrap();
+    let sent: Value = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|v| v["dir"] == "in" && v["msg"]["type"] == "user")
+        .unwrap();
+    let recorded = &sent["msg"]["message"]["content"][0];
+    let data = recorded["source"]["data"].as_str().unwrap();
+    let att: parrot_proto::prompt::Attachment = serde_json::from_value(serde_json::json!({
+        "name": "red.png", "type": "image/png", "data": data
+    }))
+    .unwrap();
+    let input = parrot_driver_claude::input::content("Name the color", &[], &[att]);
+    assert!(input.skipped.is_empty());
+    let image = input.blocks.iter().find(|b| b["type"] == "image").unwrap();
+    assert_eq!(image, recorded);
+    // A kind Claude Code takes no block for is named in a notice, not dropped silently.
+    let odd: parrot_proto::prompt::Attachment = serde_json::from_value(serde_json::json!({
+        "name": "clip.mp4", "type": "video/mp4", "data": "AAAA"
+    }))
+    .unwrap();
+    let input = parrot_driver_claude::input::content("x", &[], &[odd]);
+    assert_eq!(input.skipped.len(), 1, "{:?}", input.blocks);
+}
