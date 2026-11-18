@@ -1,0 +1,15 @@
+{"fixture": {"scenario": "text-turn", "about": "A child with a task runs its brief, its task is done on idle, task/wait reports it, and session/tree lists both."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/new", "params": {"agent": "$agent", "parent": "$id:session", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir", "task": {"brief": "Say hello.", "completeOn": "idle"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"session": {"id": "$id:child", "parent": {"session": "$id:session"}}, "subscription": "$id:sub2", "head": "$any"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:child", "update": {"type": "turn", "turn": {"status": "completed"}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "task/wait", "params": {"sessions": ["$id:child"], "timeout": 5}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"changes": {"$has": {"session": "$id:child", "task": {"id": "$id:task", "status": "done"}}}, "cursor": "$any", "timedOut": false}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "session/tree", "params": {"session": "$id:session"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {"nodes": [{"session": {"id": "$id:session"}, "depth": 0}, {"session": {"id": "$id:child"}, "depth": 1}]}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 6, "method": "task/finish", "params": {"session": "$id:child", "output": {"text": "done"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 6, "error": {"code": "$any"}}}

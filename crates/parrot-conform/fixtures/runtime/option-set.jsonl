@@ -1,0 +1,13 @@
+{"fixture": {"scenario": "text-turn", "about": "option/set changes the permission mode by its role's choice while idle; the next turn runs."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "option/set", "params": {"session": "$id:session", "values": {"permissionMode": "acceptEdits"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"options": {"$has": {"id": "permissionMode", "value": "acceptEdits"}}, "reset": "$any"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "option/set", "params": {"session": "$id:session", "values": {"permissionMode": "no-such-mode"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "error": {"code": -32602}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "session/prompt", "params": {"session": "$id:session", "text": "Say hello."}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {"message": "$id:msg", "disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "turn", "turn": {"status": "completed"}}}}}

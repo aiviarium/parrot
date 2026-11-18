@@ -403,6 +403,15 @@ fn is_initialize(v: &Value) -> bool {
     v["type"] == "control_request" && v["request"]["subtype"] == "initialize"
 }
 
+/// A control request that changes a setting: the permission mode or the model.
+fn is_setting(v: &Value) -> bool {
+    v["type"] == "control_request"
+        && matches!(
+            v["request"]["subtype"].as_str(),
+            Some("set_permission_mode" | "set_model")
+        )
+}
+
 struct Run<R, W> {
     input: R,
     output: W,
@@ -451,6 +460,13 @@ impl<R: BufRead, W: Write> Run<R, W> {
             if is_initialize(&v) && !wants(&v) {
                 let id = v["request_id"].as_str().unwrap_or_default().to_owned();
                 self.write(&initialize_reply(&id))?;
+                continue;
+            }
+            // Option changes are answered whenever they come, as the CLI does, unless the
+            // scenario waits for one.
+            if is_setting(&v) && !wants(&v) {
+                let id = v["request_id"].as_str().unwrap_or_default();
+                self.write(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {}}}))?;
                 continue;
             }
             return Ok(Some(v));

@@ -1,0 +1,13 @@
+{"fixture": {"scenario": "steer", "about": "A prompt with delivery steer joins the running turn, and the turn completes with both messages."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {"session": "$id:session", "text": "Say hello."}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"message": "$id:msg", "disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "item", "item": {"id": "$id:reply", "kind": "assistant"}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "session/prompt", "params": {"session": "$id:session", "text": "And wave.", "delivery": "steer"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"message": "$id:steer", "disposition": "steered"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "turn", "turn": {"status": "completed"}}}}}
+{"check": {"projection": {"items": {"kind": "user"}, "session": "$id:session"}, "expect": [{"id": "$id:msg", "text": "Say hello."}, {"id": "$id:steer", "text": "And wave."}]}}
