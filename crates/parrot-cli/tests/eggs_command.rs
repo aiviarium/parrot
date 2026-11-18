@@ -2,6 +2,8 @@
 //! `parrot serve`, through `parrot probe`, and with a harness version its data doesn't cover.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -12,29 +14,10 @@ const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(15);
 const GREETING: &str = "hello from the tiny egg";
 
-/// Builds the tiny driver once and returns its path.
+/// The tiny driver example.
 fn tiny_driver() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "parrot-eggs",
-                "--example",
-                "tiny-driver",
-            ])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building tiny-driver failed");
-        let path = Path::new(PARROT)
-            .with_file_name("examples")
-            .join(format!("tiny-driver{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no tiny-driver at {}", path.display());
-        path
-    })
+    PATH.get_or_init(|| common::workspace_example("tiny-driver"))
 }
 
 /// A package folder for the agent `tiny`: its driver binary is a Hatchery variant for this OS,

@@ -6,7 +6,6 @@ mod common;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -15,25 +14,7 @@ const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(20);
 
 fn fake_claude() -> &'static Path {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "parrot-driver-claude",
-                "--bin",
-                "fake-claude",
-            ])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-claude failed");
-        let path = Path::new(PARROT).with_file_name(format!("fake-claude{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no fake-claude at {}", path.display());
-        path
-    })
+    common::fake_claude()
 }
 
 fn scenario(name: &str) -> PathBuf {

@@ -44,7 +44,7 @@ jobs:
           # Markdown alone runs only the docs job.
           code=$(printf '%s\n' "$files" | grep -v '\.md$' || true)
           has() { printf '%s\n' "$3" | grep -qE "$1" && echo "$2=true" >> "$GITHUB_OUTPUT" || true; }
-          has '^(crates/|Cargo\.(toml|lock)$|rustfmt\.toml$|\.github/workflows/ci\.yml$)' rust "$code"
+          has '^(crates/|Cargo\.(toml|lock)$|rustfmt\.toml$|\.config/nextest\.toml$|\.github/workflows/ci\.yml$)' rust "$code"
           has '^(packages/|package\.json$|bun\.lock$|biome\.json$|tsconfig\.base\.json$|\.github/workflows/ci\.yml$)' typescript "$code"
           has '(\.md$|^\.vale\.ini$|^\.vale/|^\.github/workflows/ci\.yml$)' docs "$files"
 
@@ -81,7 +81,11 @@ jobs:
         with:
           shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test --locked --workspace
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --locked --workspace --profile ci
+      - run: cargo test --locked --workspace --doc
 
   # macOS and Windows build the whole workspace; their platform code (PTYs, guards, pipes) has
   # no test on Linux. Tests that need a shell are Unix only, so each OS runs what applies to it.
@@ -107,8 +111,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the workspace
         run: cargo build --locked --workspace
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Test the platform crates
-        run: cargo test --locked -p parrot-term -p parrot-guard -p parrot-driver -p parrot-serve
+        run: cargo nextest run --locked --profile ci -p parrot-term -p parrot-guard -p parrot-driver -p parrot-serve
 
   typescript:
     needs: changes

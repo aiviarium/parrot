@@ -276,27 +276,62 @@ pub fn initialize_params(name: &str) -> Value {
     })
 }
 
-/// Builds `fake-claude` once and returns its path, beside the `parrot` binary.
+/// `fake-claude`, beside the `parrot` binary.
 pub fn fake_claude() -> &'static Path {
     static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    PATH.get_or_init(|| {
+    PATH.get_or_init(|| workspace_bin("fake-claude"))
+}
+
+/// A binary of the workspace, beside `parrot`. The first call in a test process builds every
+/// binary, test and example the way `cargo test --workspace` does, which is a no-op after that
+/// build. A narrower `cargo build -p` resolves features differently and would rebuild the
+/// dependency graph.
+pub fn workspace_bin(name: &str) -> PathBuf {
+    static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BUILT.get_or_init(|| {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "parrot-driver-claude",
-                "--bin",
-                "fake-claude",
-            ])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-claude failed");
-        let path = Path::new(PARROT).with_file_name(format!("fake-claude{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no fake-claude at {}", path.display());
-        path
-    })
+        let mut cmd = Command::new(cargo);
+        cmd.args([
+            "build",
+            "--locked",
+            "--quiet",
+            "--workspace",
+            "--bins",
+            "--tests",
+            "--examples",
+        ]);
+        // Cargo sets these for the test process. Build scripts that watch them (ring watches
+        // CARGO_MANIFEST_DIR) would rerun and rebuild what the outer build just made.
+        const PER_PACKAGE: &[&str] = &[
+            "CARGO_MANIFEST_DIR",
+            "CARGO_MANIFEST_PATH",
+            "CARGO_CRATE_NAME",
+            "CARGO_PRIMARY_PACKAGE",
+            "CARGO_BIN_NAME",
+            "CARGO_TARGET_TMPDIR",
+        ];
+        for (key, _) in std::env::vars_os() {
+            let key = key.to_string_lossy().into_owned();
+            if key.starts_with("CARGO_PKG_") || PER_PACKAGE.contains(&key.as_str()) {
+                cmd.env_remove(&key);
+            }
+        }
+        let status = cmd.status().expect("cargo runs");
+        assert!(status.success(), "building the workspace binaries failed");
+    });
+    let path = bin_dir().join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    assert!(path.exists(), "no {name} at {}", path.display());
+    path
+}
+
+/// An example of a workspace crate, built by [`workspace_bin`].
+pub fn workspace_example(name: &str) -> PathBuf {
+    workspace_bin("parrot");
+    let path = bin_dir()
+        .join("examples")
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    assert!(path.exists(), "no example {name} at {}", path.display());
+    path
 }
 
 /// A scenario of the fake Claude CLI.
@@ -336,29 +371,31 @@ pub fn bin_dir() -> &'static Path {
 
 /// Builds every driver binary and fake CLI once, beside `parrot`.
 pub fn build_drivers() {
-    static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    BUILT.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let mut cmd = Command::new(cargo);
-        cmd.args(["build", "--locked", "--bins"]);
-        for id in DRIVER_EGGS {
-            cmd.args(["-p", &format!("parrot-driver-{id}")]);
-        }
-        cmd.args(["-p", "parrot-driver-acp"]);
-        let status = cmd.status().expect("cargo runs");
-        assert!(status.success(), "building the driver binaries failed");
-    });
+    workspace_bin("parrot");
 }
 
 /// A copy of the in-repo `eggs/` folder with this platform's driver binaries in their variant
 /// folders, as a release packs them, and a state directory with every egg installed from it.
-/// Built once per test process; [`install_eggs`] copies the installed eggs from here.
+/// Test processes share one template per set of inputs, because test runners such as nextest
+/// start a process per test; [`install_eggs`] copies the installed eggs from here.
 pub fn egg_template() -> &'static Path {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
         build_drivers();
-        let root = bin_dir().join(format!("test-eggs-{}", std::process::id()));
-        // Earlier test processes leave their templates; drop those older than an hour.
+        let eggs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eggs");
+        let exes: Vec<String> = DRIVER_EGGS
+            .iter()
+            .map(|id| format!("parrot-driver-{id}{}", std::env::consts::EXE_SUFFIX))
+            .collect();
+        let mut inputs: Vec<PathBuf> = exes.iter().map(|e| bin_dir().join(e)).collect();
+        inputs.push(PathBuf::from(PARROT));
+        files_under(&eggs, &mut inputs);
+        let root = bin_dir().join(format!("test-eggs-{:016x}", fingerprint(&inputs)));
+        let state = root.join("state");
+        if root.join("done").exists() {
+            return state;
+        }
+        // Templates of earlier inputs are dropped once nothing has used them for an hour.
         for e in std::fs::read_dir(bin_dir()).into_iter().flatten().flatten() {
             let old = e
                 .metadata()
@@ -368,21 +405,17 @@ pub fn egg_template() -> &'static Path {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
-        let _ = std::fs::remove_dir_all(&root);
-        let registry = root.join("registry");
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eggs"),
-            &registry,
-            false,
-        );
+        // Built aside and renamed into place, so a process never sees half a template.
+        let building = bin_dir().join(format!("test-eggs-{}-building", std::process::id()));
+        let _ = std::fs::remove_dir_all(&building);
+        let registry = building.join("registry");
+        copy_tree(&eggs, &registry, false);
         let key = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-        for id in DRIVER_EGGS {
-            let exe = format!("parrot-driver-{id}{}", std::env::consts::EXE_SUFFIX);
+        for (id, exe) in DRIVER_EGGS.iter().zip(&exes) {
             let variant = registry.join(id).join("parrot/variants").join(&key);
             std::fs::create_dir_all(&variant).unwrap();
-            std::fs::copy(bin_dir().join(&exe), variant.join(&exe)).unwrap();
+            std::fs::copy(bin_dir().join(exe), variant.join(exe)).unwrap();
         }
-        let state = root.join("state");
         let mut cmd = Command::new(PARROT);
         cmd.args(["eggs", "install"]);
         for id in DRIVER_EGGS.iter().chain(&["acp"]) {
@@ -392,7 +425,7 @@ pub fn egg_template() -> &'static Path {
             .arg("--registry")
             .arg(&registry)
             .arg("--state-dir")
-            .arg(&state)
+            .arg(building.join("state"))
             .output()
             .unwrap();
         assert!(
@@ -400,8 +433,45 @@ pub fn egg_template() -> &'static Path {
             "installing the in-repo eggs failed:\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
+        std::fs::write(building.join("done"), "").unwrap();
+        // Another process may have finished the same template first; then use that one.
+        if std::fs::rename(&building, &root).is_err() {
+            let _ = std::fs::remove_dir_all(&building);
+            assert!(
+                root.join("done").exists(),
+                "no egg template at {}",
+                root.display()
+            );
+        }
         state
     })
+}
+
+/// Every file under `dir`.
+fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.path().is_dir() {
+            files_under(&e.path(), out);
+        } else {
+            out.push(e.path());
+        }
+    }
+}
+
+/// A hash of the paths, sizes and modification times of `files`.
+fn fingerprint(files: &[PathBuf]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut sorted = files.to_vec();
+    sorted.sort();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for f in &sorted {
+        f.hash(&mut h);
+        if let Ok(m) = std::fs::metadata(f) {
+            m.len().hash(&mut h);
+            m.modified().ok().hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 /// Installs every in-repo egg into `state` as `parrot eggs install` would, so the runtime
