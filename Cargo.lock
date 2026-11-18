@@ -1539,6 +1539,7 @@ dependencies = [
  "parrot-link",
  "parrot-proto",
  "parrot-store",
+ "parrot-workspace",
  "rustix",
  "serde",
  "serde_json",
