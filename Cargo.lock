@@ -1295,6 +1295,7 @@ name = "parrot-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "parrot-conform",
  "parrot-core",
  "parrot-driver",
  "parrot-driver-claude",
@@ -1317,6 +1318,7 @@ dependencies = [
 name = "parrot-conform"
 version = "0.1.0"
 dependencies = [
+ "parrot-proto",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -1,0 +1,19 @@
+{"fixture": {"scenario": "bash-allowed", "about": "An approval reaches the subscriber, is listed, and is answered; the tool then runs and the turn completes."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {"session": "$id:session", "text": "Run ls."}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"message": "$id:msg", "disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"subscription": "$id:sub", "seq": "$any", "at": "$time", "session": "$id:session", "update": {"type": "request", "request": {"id": "$id:req", "session": "$id:session", "kind": "approval", "status": "open"}}}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "requires_action"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "request/list", "params": {"session": "$id:session", "status": "open"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"requests": [{"id": "$id:req", "kind": "approval", "status": "open", "path": ["$id:session"]}]}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "request/answer", "params": {"request": "$id:req", "answer": {"choice": "allow"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 6, "method": "request/answer", "params": {"request": "$id:req", "answer": {"choice": "deny"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 6, "error": {"code": -32013}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"session": "$id:session", "update": {"type": "turn", "turn": {"status": "completed"}}}}}
+{"check": {"projection": {"requests": true, "session": "$id:session"}, "expect": [{"id": "$id:req", "status": "answered", "answer": {"choice": "allow"}}]}}
+{"check": {"projection": {"items": {"kind": "tool"}, "session": "$id:session"}, "expect": [{"status": "ok", "output": "README.md\nsrc"}]}}

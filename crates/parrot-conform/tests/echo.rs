@@ -37,13 +37,6 @@ impl Target for Echo {
     fn recv(&mut self) -> Option<Value> {
         self.out.pop_front()
     }
-    fn projection(&mut self, what: &Value) -> Value {
-        if what["items"] == json!(true) {
-            Value::Array(self.items.clone())
-        } else {
-            Value::Null
-        }
-    }
 }
 
 fn fixture(name: &str) -> String {
@@ -77,9 +70,9 @@ fn reports_mismatches() {
         fn recv(&mut self) -> Option<Value> {
             None
         }
-        fn projection(&mut self, _: &Value) -> Value {
-            Value::Null
-        }
     }
-    assert_eq!(run(&mut Mute, &steps).mismatches.len(), 2);
+    // The run stops at the first step that fails, since later ones depend on it.
+    let report = run(&mut Mute, &steps);
+    assert_eq!(report.mismatches.len(), 1);
+    assert_eq!(report.mismatches[0].line, 2);
 }

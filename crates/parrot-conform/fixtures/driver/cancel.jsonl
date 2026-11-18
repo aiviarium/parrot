@@ -1,0 +1,16 @@
+{"fixture": {"scenario": "interrupt", "about": "The turn is cancelled while text streams; the turn ends interrupted and the binding goes idle."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "runtime", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1, "peer": {"kind": "driver"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "binding/start", "params": {"session": "ses_conform", "binding": "bnd_conform", "agent": "$agent", "workspace": "$dir", "cwd": "$dir", "options": {}, "control": "native", "deny": []}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"isolation": "$any", "level": "$any", "network": "$any", "options": "$any", "actions": "$any"}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "binding/prompt", "params": {"binding": "bnd_conform", "message": "msg_conform_1", "text": "Count slowly.", "steer": false}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"binding": "bnd_conform", "update": {"type": "item", "item": {"id": "$id:reply", "kind": "assistant"}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "binding/cancel", "params": {"binding": "bnd_conform"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"interrupted": true}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"binding": "bnd_conform", "update": {"type": "turn", "turn": {"status": "interrupted"}}}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 9, "method": "binding/stop", "params": {"binding": "bnd_conform"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 9, "result": {}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "stopped"}}
