@@ -13,7 +13,10 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         Input::Connected { conn, peer } => principals::connected(cx, &conn, peer),
         Input::Disconnected { conn } => {
             requests::disconnected(cx, &conn);
+            tasks::disconnected(cx, &conn);
             subscriptions::disconnected(cx, &conn);
+            functions::disconnected(cx, &conn);
+            links::disconnected(cx, &conn);
             principals::disconnected(cx, &conn);
         }
         Input::Call {
@@ -46,8 +49,11 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         },
         Input::AgentReply { agent, call, result } => agents::on_agent_reply(cx, &agent, call, result),
         Input::WorkspaceReply { call, result } => {
-            if let Some(owner) = cx.state.pending_calls.remove(&call) {
-                reply_to(cx, owner, call, result);
+            match cx.state.pending_calls.remove(&call) {
+                // The tree's workspace calls go out under `Tasks`.
+                Some(CallOwner::Tasks) if crate::tree::on_reply(cx, call, result.clone()) => {}
+                Some(owner) => reply_to(cx, owner, call, result),
+                None => {}
             }
         }
         Input::Restore(restore) => crate::restore::restore(cx, restore),
@@ -55,6 +61,10 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         Input::Tick { .. } => {
             requests::tick(cx);
             queue::tick(cx);
+            tasks::tick(cx);
+            seeds::tick(cx);
+            crate::ceilings::tick(cx);
+            links::tick(cx);
         }
     }
     subscriptions::flush(cx);
@@ -76,13 +86,16 @@ fn reply_to(cx: &mut Cx, owner: CallOwner, call: u64, result: Result<serde_json:
     }
 }
 
-fn call(
+pub(crate) fn call(
     cx: &mut Cx,
     conn: &str,
     id: Option<&serde_json::Value>,
     method: &str,
     params: serde_json::Value,
 ) -> Reply {
+    if let Some(reply) = links::intercept(cx, conn, id, method, &params) {
+        return reply;
+    }
     let area = method.split('/').next().unwrap_or("");
     match area {
         "initialize" | "token" => principals::call(cx, conn, id, method, params),

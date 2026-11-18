@@ -87,6 +87,9 @@ pub struct RuntimeBackend {
     bindings: HashMap<BindingId, mpsc::UnboundedSender<BindingCmd>>,
     next_call: u64,
     writer: Option<std::sync::mpsc::Sender<Write>>,
+    links: Option<std::sync::Arc<crate::link_hub::LinkHub>>,
+    scratch: PathBuf,
+    notifier: crate::notify::Notifier,
 }
 
 impl RuntimeBackend {
@@ -135,7 +138,28 @@ impl RuntimeBackend {
             bindings: HashMap::new(),
             next_call: 0,
             writer: Some(tx),
+            links: None,
+            scratch: std::env::temp_dir(),
+            notifier: crate::notify::Notifier::default(),
         }
+    }
+
+    /// Runs `link.*` operations with this hub (spec 24).
+    pub fn with_links(mut self, hub: std::sync::Arc<crate::link_hub::LinkHub>) -> Self {
+        self.links = Some(hub);
+        self
+    }
+
+    /// Delivers notification events to these push targets (spec 36).
+    pub fn with_notifier(mut self, notifier: crate::notify::Notifier) -> Self {
+        self.notifier = notifier;
+        self
+    }
+
+    /// Where runtime functions put files they return by `uri`, such as screenshots.
+    pub fn with_scratch(mut self, dir: PathBuf) -> Self {
+        self.scratch = dir;
+        self
     }
 
     /// Runs `agent`'s driver as `program args…` instead of the built-in resolution.
@@ -241,6 +265,7 @@ impl Backend for RuntimeBackend {
     }
 
     fn persist(&mut self, record: Value) {
+        self.notifier.record(&record);
         if let Some(writer) = &self.writer {
             let _ = writer.send(Write::Record(record));
         }
@@ -256,6 +281,32 @@ impl Backend for RuntimeBackend {
 
     fn workspace(&mut self, call: u64, op: String, params: Value) {
         let rt = self.rt.clone();
+        if op.starts_with("link.") || op.starts_with("carrier.") {
+            let hub = self.links.clone();
+            tokio::spawn(async move {
+                let result = match hub {
+                    Some(hub) => hub.op(&op, params).await,
+                    None => Err(RpcError::new(-32001, "links are off")
+                        .with_data(json!({ "feature": "profile.link" }))),
+                };
+                let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+            });
+            return;
+        }
+        if let Some(name) = op.strip_prefix("function.") {
+            let name = name.to_string();
+            let scratch = self.scratch.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::desktop::call(&name, &params, &scratch)
+                        .unwrap_or_else(|| Err(RpcError::new(-32002, format!("function not found: {name}"))))
+                })
+                .await
+                .unwrap_or_else(|e| Err(RpcError::new(-32603, format!("function task failed: {e}"))));
+                let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+            });
+            return;
+        }
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || crate::workspace_ops::run(&op, params))
                 .await
