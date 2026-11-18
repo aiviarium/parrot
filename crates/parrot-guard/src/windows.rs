@@ -1,7 +1,8 @@
 //! The guard on Windows: a job object that kills the child tree when the guard's handle closes.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use windows_sys::Win32::System::JobObjects::{
@@ -9,7 +10,43 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 
+/// The extensions npm and bun shims use when `PATHEXT` is not set.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.PS1";
+
+/// Finds a bare program name the way the shell would, including the `.cmd` and `.ps1` shims that
+/// npm and bun install. A name with a directory is left to `CreateProcess`.
+fn resolve(program: &OsStr) -> Option<PathBuf> {
+    let name = program.to_string_lossy();
+    if name.contains('\\') || name.contains('/') {
+        return None;
+    }
+    let path = std::env::var_os("PATH")?;
+    let pathext = std::env::var_os("PATHEXT").unwrap_or_else(|| DEFAULT_PATHEXT.into());
+    resolve_in(program, &path, &pathext)
+}
+
+fn resolve_in(program: &OsStr, path: &OsStr, pathext: &OsStr) -> Option<PathBuf> {
+    let mut names = vec![program.to_owned()];
+    if Path::new(program).extension().is_none() {
+        for ext in pathext.to_string_lossy().split(';').filter(|e| !e.is_empty()) {
+            let mut name = program.to_owned();
+            name.push(ext);
+            names.push(name);
+        }
+    }
+    for dir in std::env::split_paths(path).filter(|dir| !dir.as_os_str().is_empty()) {
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 pub fn run(program: OsString, args: Vec<OsString>) -> std::io::Result<i32> {
+    let program = resolve(&program).unwrap_or_else(|| PathBuf::from(&program));
     // SAFETY: null attributes and name create an anonymous job; the handle lives until the guard
     // exits, when the system closes it and kills the job.
     let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -40,4 +77,29 @@ pub fn run(program: OsString, args: Vec<OsString>) -> std::io::Result<i32> {
     }
     let status = child.wait()?;
     Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_in;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn finds_an_npm_cmd_shim_on_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("codex.cmd"), b"").unwrap();
+        let path = dir.path().as_os_str();
+        let found = resolve_in(OsStr::new("codex"), path, OsStr::new(".EXE;.CMD"));
+        assert!(found.is_some_and(|path| path.ends_with("codex.cmd")));
+    }
+
+    #[test]
+    fn a_program_with_a_directory_is_not_searched() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("codex.cmd"), b"").unwrap();
+        assert_eq!(
+            resolve_in(OsStr::new(r".\codex"), dir.path().as_os_str(), OsStr::new(".CMD")),
+            None
+        );
+    }
 }
