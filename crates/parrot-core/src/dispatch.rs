@@ -65,6 +65,7 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
             seeds::tick(cx);
             crate::ceilings::tick(cx);
             links::tick(cx);
+            functions::tick(cx);
         }
     }
     subscriptions::flush(cx);
@@ -93,6 +94,9 @@ pub(crate) fn call(
     method: &str,
     params: serde_json::Value,
 ) -> Reply {
+    if let Some(reply) = functions::intercept(cx, conn, id, method, &params) {
+        return reply;
+    }
     if let Some(reply) = links::intercept(cx, conn, id, method, &params) {
         return reply;
     }

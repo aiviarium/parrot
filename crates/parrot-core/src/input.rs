@@ -19,6 +19,8 @@ pub enum Peer {
         token: String,
         scopes: Vec<String>,
         sessions: Option<Vec<String>>,
+        /// Function name patterns the client may provide (E8); `None` allows any.
+        provides: Option<Vec<String>>,
     },
     /// A linked runtime, after the link handshake.
     Link { link: String, scopes: Vec<String> },

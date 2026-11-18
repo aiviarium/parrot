@@ -40,6 +40,7 @@ snow = "0.10"
 proptest = "1"
 tempfile = "3"
 sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.28"
 rand = "0.9"
