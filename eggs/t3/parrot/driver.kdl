@@ -1,6 +1,6 @@
 driver "command" {
   run "variants/{os}-{arch}/parrot-driver-t3{exe}"
 }
-cli "t3"
+cli "t3" versions=">=0.1.10, <0.2.0"
 data-version "1"
 controls "native"

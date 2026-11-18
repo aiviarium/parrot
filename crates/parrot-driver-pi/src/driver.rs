@@ -13,8 +13,9 @@ use parrot_proto::action::ActionStatus;
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
     BindingActionParams, BindingActionResult, BindingAnswerParams, BindingCancelParams, BindingCancelResult,
-    BindingDisposition, BindingOptionsParams, BindingOptionsResult, BindingPromptParams, BindingPromptResult,
-    BindingRef, BindingStart, BindingStartResult, DriverUpdate, DriverUpdateKind,
+    BindingDisposition, BindingForkParams, BindingForkResult, BindingOptionsParams, BindingOptionsResult,
+    BindingPromptParams, BindingPromptResult, BindingRef, BindingStart, BindingStartResult, DriverUpdate,
+    DriverUpdateKind, HistoryDiscoverParams, HistoryReadParams,
 };
 use parrot_proto::open::Open;
 use parrot_proto::option::PermissionLevel;
@@ -28,6 +29,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::data::{DriverData, Sources};
+use crate::history;
 use crate::mapping::MapState;
 use crate::wire::{self, Command, Image, Inbound};
 
@@ -37,6 +39,8 @@ pub const PI_BIN_ENV: &str = "PARROT_PI_BIN";
 pub const MCP_TOKEN_ENV: &str = "PARROT_MCP_TOKEN";
 /// How long pi has to answer a command.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long pi may take to compact the context.
+pub const COMPACT_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long `binding/stop` waits after closing stdin before killing pi.
 pub const STOP_GRACE: Duration = Duration::from_secs(5);
 
@@ -210,7 +214,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent(&self.config.data)],
+                agents: vec![probed(&self.config.data, &self.config.pi_bin).await],
                 hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
@@ -306,6 +310,36 @@ impl Driver {
                     .clone()
                     .ok_or_else(|| RpcError::new(-32602, "pi actions need a binding"))?;
                 let b = self.binding(&id)?;
+                if p.action == "compact" {
+                    let mut command = Command::new("", "compact");
+                    let instructions = p
+                        .args
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|a| !a.is_empty())
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            p.input
+                                .as_ref()
+                                .and_then(|i| i.get("note"))
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        });
+                    if let Some(instructions) = instructions {
+                        command = command.with("customInstructions", json!(instructions));
+                    }
+                    let answer = b
+                        .command(command, Some(COMPACT_TIMEOUT))
+                        .await
+                        .map_err(|e| RpcError::new(-32020, format!("pi refused the compaction: {e}")))?;
+                    let updates = b.state.lock().unwrap().compacted(&answer, "manual");
+                    self.emit(updates);
+                    return Ok(to_value(&BindingActionResult {
+                        status: ActionStatus::Done,
+                        request: None,
+                        result: Some(answer),
+                    }));
+                }
                 let text = match (&p.args, &p.input) {
                     (Some(args), _) if !args.trim().is_empty() => {
                         format!("/{} {}", p.action, args.trim())
@@ -346,6 +380,77 @@ impl Driver {
                     self.emit(vec![state_update(&b.id, State::Stopped, None)]);
                 }
                 Ok(json!({}))
+            }
+            "binding/fork" => {
+                let p: BindingForkParams = params(p)?;
+                let b = self.binding(&p.binding)?;
+                let text = {
+                    let state = b.state.lock().unwrap();
+                    match &p.at {
+                        Some(turn) => Some(
+                            state
+                                .turn_input_text(turn)
+                                .ok_or_else(|| RpcError::new(-32001, "pi forks only at a turn it has seen"))?
+                                .to_owned(),
+                        ),
+                        None => None,
+                    }
+                };
+                let messages: wire::ForkMessages = b
+                    .command_json(Command::new("", "get_fork_messages"), None)
+                    .await
+                    .map_err(|e| RpcError::new(-32020, format!("pi listed no forks: {e}")))?
+                    .unwrap_or_default();
+                let entry = match text {
+                    Some(text) => messages
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.text == text)
+                        .cloned()
+                        .ok_or_else(|| RpcError::new(-32002, "pi has no message for that turn any more"))?,
+                    None => messages
+                        .messages
+                        .last()
+                        .cloned()
+                        .ok_or_else(|| RpcError::new(-32004, "pi has no message to fork from"))?,
+                };
+                b.command(
+                    Command::new("", "fork").with("entryId", json!(entry.entry_id)),
+                    None,
+                )
+                .await
+                .map_err(|e| RpcError::new(-32020, format!("pi refused the fork: {e}")))?;
+                let state: wire::SessionState = b
+                    .command_json(Command::new("", "get_state"), None)
+                    .await
+                    .map_err(|e| RpcError::new(-32020, format!("pi has no session after the fork: {e}")))?
+                    .unwrap_or_default();
+                let id = state
+                    .session_id
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| RpcError::new(-32020, "pi did not name the forked session"))?;
+                Ok(to_value(&BindingForkResult {
+                    reference: parrot_proto::session::Ref {
+                        id,
+                        strength: parrot_proto::session::RefStrength::Strong,
+                    },
+                }))
+            }
+            "history/discover" => {
+                let p: HistoryDiscoverParams = params(p)?;
+                let root = history::root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                Ok(to_value(&history::discover(&root, &p)))
+            }
+            "history/read" => {
+                let p: HistoryReadParams = params(p)?;
+                let root = history::root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let path = history::find(&root, &p.reference.id).ok_or_else(|| {
+                    RpcError::new(-32602, format!("no session file for {}", p.reference.id))
+                })?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| RpcError::new(-32603, format!("cannot read the session: {e}")))?;
+                Ok(to_value(&history::read(&text, p.cursor.as_deref())))
             }
             _ => Err(RpcError::new(-32601, format!("method not found: {method}"))),
         }
@@ -756,6 +861,9 @@ pub fn agent(data: &DriverData) -> Agent {
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
     features.insert("session.steer".into(), json!({"when": "next_step"}));
+    features.insert("session.history".into(), json!({}));
+    features.insert("session.fork".into(), json!({"at": ["turn"]}));
+    features.insert("attachments".into(), json!({"kinds": ["image"]}));
     features.insert(
         "usage".into(),
         json!({"cost": true, "context": true, "rateLimits": false}),
@@ -789,6 +897,18 @@ pub fn agent(data: &DriverData) -> Agent {
         meta: None,
         extra: Map::new(),
     }
+}
+
+/// [`agent`] with the version the installed `pi` prints, when it answers.
+pub async fn probed(data: &DriverData, bin: &std::ffi::OsStr) -> Agent {
+    let mut a = agent(data);
+    if let Some(version) = parrot_driver::probe::version(bin).await {
+        a.harness = Some(parrot_proto::agent::HarnessInfo {
+            version,
+            verified: true,
+        });
+    }
+    a
 }
 
 /// The current time in RFC 3339, UTC, to the millisecond.

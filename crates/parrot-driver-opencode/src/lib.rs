@@ -3,6 +3,7 @@
 pub mod data;
 pub mod driver;
 pub mod fake;
+pub mod history;
 pub mod http;
 pub mod mapping;
 pub mod wire;

@@ -64,6 +64,8 @@ pub struct MapState {
     pub current_thinking: Option<String>,
     pub actions: Vec<Action>,
     pub requests: BTreeMap<String, PendingDialog>,
+    /// Each turn's input text, so a fork can name the message it starts from.
+    pub turn_inputs: Vec<(String, String)>,
     pub data: DriverData,
     /// The assistant message streaming now, counting from 1.
     message: u64,
@@ -92,6 +94,7 @@ impl MapState {
             current_thinking: None,
             actions: Vec::new(),
             requests: BTreeMap::new(),
+            turn_inputs: Vec::new(),
             data,
             message: 0,
             blocks: HashMap::new(),
@@ -236,6 +239,7 @@ impl MapState {
             .filter(|c| c.source.as_deref() != Some("extension"))
             .filter(|c| !c.name.is_empty())
             .map(command_action)
+            .chain(std::iter::once(compact_action()))
             .collect();
         if actions != self.actions {
             self.actions = actions.clone();
@@ -256,6 +260,9 @@ impl MapState {
         if self.turn.is_none() && disposition != BindingDisposition::Handled {
             self.running = true;
             out.extend(self.begin_turn(Some(p.message.clone()), now));
+            if let Some(turn) = &self.turn {
+                self.turn_inputs.push((turn.key.clone(), p.text.clone()));
+            }
         }
         let mut set = Map::new();
         set.insert("text".into(), json!(p.text));
@@ -426,11 +433,13 @@ impl MapState {
                     set.insert("output".into(), json!(clip(&text)));
                 }
                 out.push(self.item(ItemPatch {
-                    id: tool_call_id,
+                    id: tool_call_id.clone(),
                     set: Some(set),
                     streaming: Some(false),
                     ..Default::default()
                 }));
+                // A tool may have called other tools; they hang under it (Appendix C).
+                out.extend(self.nested(&tool_call_id, &result));
             }
             Event::AgentEnd { .. } => {}
             Event::AgentSettled { aborted, .. } => out.extend(self.settled(aborted, now)),
@@ -456,17 +465,8 @@ impl MapState {
                 }
             }
             Event::CompactionEnd { result, .. } => {
-                if result.is_some() {
-                    let mut set = map_of("trigger", json!("auto"));
-                    set.insert("summary".into(), result.unwrap_or(Value::Null));
-                    self.unnamed += 1;
-                    out.push(self.item(ItemPatch {
-                        id: format!("compaction-{}", self.unnamed),
-                        kind: Some(Open::Known(ItemKind::Compaction)),
-                        turn: self.turn_key(),
-                        set: Some(set),
-                        ..Default::default()
-                    }));
+                if let Some(result) = result {
+                    out.extend(self.compacted(&result, "auto"));
                 }
             }
         }
@@ -528,6 +528,27 @@ impl MapState {
 
     fn message_end(&mut self, message: &Message) -> Vec<DriverUpdate> {
         let mut out = Vec::new();
+        if message.role == "toolResult" {
+            let id = match &message.tool_call_id {
+                Some(id) => id.clone(),
+                None => self.fresh("tool"),
+            };
+            let mut set = map_of("status", json!(if message.is_error { "error" } else { "ok" }));
+            let text = result_text(&message.content);
+            if !text.is_empty() {
+                set.insert("output".into(), json!(text));
+            }
+            out.push(self.item(ItemPatch {
+                id: id.clone(),
+                set: Some(set),
+                streaming: Some(false),
+                ..Default::default()
+            }));
+            if let Some(nested) = &message.nested_calls {
+                out.extend(self.nested_calls(&id, nested));
+            }
+            return out;
+        }
         if message.role != "assistant" {
             return out;
         }
@@ -621,6 +642,97 @@ impl MapState {
             });
         }
         delta
+    }
+
+    fn fresh(&mut self, prefix: &str) -> String {
+        self.unnamed += 1;
+        format!("{prefix}-{}", self.unnamed)
+    }
+
+    /// A compaction item from pi's `compact` answer or its `compaction_end` event.
+    pub fn compacted(&mut self, result: &Value, trigger: &str) -> Vec<DriverUpdate> {
+        let id = self.fresh("compaction");
+        let mut set = map_of("trigger", json!(trigger));
+        if let Some(summary) = result.get("summary").filter(|v| !v.is_null()) {
+            set.insert("summary".into(), summary.clone());
+        }
+        if let Some(before) = result.get("tokensBefore").filter(|v| !v.is_null()) {
+            set.insert("tokensBefore".into(), before.clone());
+        }
+        if let Some(after) = result.get("estimatedTokensAfter").filter(|v| !v.is_null()) {
+            set.insert("tokensAfter".into(), after.clone());
+        }
+        vec![self.item(ItemPatch {
+            id,
+            kind: Some(Open::Known(ItemKind::Compaction)),
+            turn: self.turn_key(),
+            source: Some(ItemSource::Native),
+            set: Some(set),
+            ..Default::default()
+        })]
+    }
+
+    /// Calls a tool made to other tools, from a tool result's `nestedCalls`. They hang under the
+    /// tool that made them and keep an id derived from its own.
+    fn nested(&mut self, parent: &str, result: &Value) -> Vec<DriverUpdate> {
+        let Some(value) = result.get("nestedCalls").filter(|v| !v.is_null()) else {
+            return vec![];
+        };
+        let Ok(nested) = serde_json::from_value::<wire::NestedCalls>(value.clone()) else {
+            return vec![];
+        };
+        self.nested_calls(parent, &nested)
+    }
+
+    fn nested_calls(&mut self, parent: &str, nested: &wire::NestedCalls) -> Vec<DriverUpdate> {
+        nested
+            .calls
+            .iter()
+            .map(|call| {
+                let key = if call.id.is_empty() {
+                    format!("{parent}/{}", call.name)
+                } else {
+                    format!("{parent}/{}", call.id)
+                };
+                let args = call.arguments.clone().unwrap_or_else(|| json!({}));
+                let mut set = map_of("tool", json!(call.name));
+                set.insert("title".into(), json!(describe(&call.name, &args)));
+                set.insert("input".into(), args);
+                set.insert(
+                    "status".into(),
+                    json!(match call.status.as_deref() {
+                        Some("ok") => "ok",
+                        Some("error") => "error",
+                        _ => "running",
+                    }),
+                );
+                set.insert("caller".into(), json!("model"));
+                if let Some(error) = &call.error {
+                    set.insert("output".into(), json!(error));
+                }
+                if let Some(ms) = call.duration_ms {
+                    set.insert("durationMs".into(), json!(ms));
+                }
+                self.item(ItemPatch {
+                    id: key,
+                    kind: Some(Open::Known(ItemKind::Tool)),
+                    parent: Some(parent.to_owned()),
+                    turn: self.turn_key(),
+                    source: Some(ItemSource::Native),
+                    set: Some(set),
+                    streaming: Some(false),
+                    ..Default::default()
+                })
+            })
+            .collect()
+    }
+
+    /// The text of the prompt a turn was started with, for a fork at that turn.
+    pub fn turn_input_text(&self, turn: &str) -> Option<&str> {
+        self.turn_inputs
+            .iter()
+            .find(|(key, _)| key == turn)
+            .map(|(_, text)| text.as_str())
     }
 
     fn tool_start(&mut self, id: &str, name: &str, args: &Value) -> DriverUpdate {
@@ -922,6 +1034,25 @@ fn option(id: &str, role: OptionRole, label: &str, schema: Value, value: Option<
         applies: Applies::Now,
         depends_on: None,
         complete: None,
+        meta: None,
+        extra: Map::new(),
+    }
+}
+
+/// The compaction pi runs on demand, which it does not list with its commands.
+fn compact_action() -> Action {
+    Action {
+        id: "compact".into(),
+        name: Some("/compact".into()),
+        label: "Compact".into(),
+        description: Some("Compact the context".into()),
+        input: None,
+        hint: None,
+        scope: ActionScope::Session,
+        when: vec![ActionWhen::Idle, ActionWhen::Running],
+        effects: vec![Effect::Turn],
+        requires: None,
+        source: Open::Known(ActionSource::Harness),
         meta: None,
         extra: Map::new(),
     }

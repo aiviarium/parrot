@@ -252,6 +252,140 @@ async fn options_come_from_pi_and_apply() {
 }
 
 #[tokio::test]
+async fn compact_is_an_action_and_becomes_a_compaction_item() {
+    let mut c = Client::temp();
+    let start = c.bind().await;
+    assert!(
+        start["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "compact"),
+        "the compact action is offered: {}",
+        start["actions"]
+    );
+    let r = c
+        .call(
+            "binding/action",
+            json!({"binding": "b1", "action": "compact", "args": "Focus on the notes"}),
+        )
+        .await;
+    assert_eq!(r["status"], "done");
+    assert_eq!(r["result"]["summary"], "The context was compacted.");
+    let item = c.wait(|u| u["update"]["item"]["kind"] == "compaction").await;
+    assert_eq!(item["update"]["item"]["set"]["trigger"], "manual");
+    assert_eq!(
+        item["update"]["item"]["set"]["summary"],
+        "The context was compacted."
+    );
+    c.call("binding/stop", json!({"binding": "b1"})).await;
+}
+
+#[tokio::test]
+async fn nested_tool_calls_hang_under_the_tool_that_made_them() {
+    let mut c = Client::temp();
+    c.bind().await;
+    c.prompt("[[nested]]").await;
+    let outer = c.wait(|u| u["update"]["item"]["set"]["tool"] == "task").await;
+    let outer_id = outer["update"]["item"]["id"].as_str().unwrap().to_owned();
+    c.wait(|u| u["update"]["item"]["id"] == outer_id && u["update"]["item"]["set"]["status"] == "ok")
+        .await;
+    let inner = c.wait(|u| u["update"]["item"]["set"]["tool"] == "grep").await;
+    assert_eq!(inner["update"]["item"]["parent"], outer_id);
+    assert_eq!(inner["update"]["item"]["set"]["status"], "ok");
+    let failed = c.wait(|u| u["update"]["item"]["set"]["status"] == "error").await;
+    assert_eq!(failed["update"]["item"]["set"]["tool"], "read");
+    assert_eq!(failed["update"]["item"]["parent"], outer_id);
+    assert_eq!(failed["update"]["item"]["set"]["output"], "no such file");
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "The task looked.")
+        .await;
+    c.wait(is_state("idle")).await;
+}
+
+#[tokio::test]
+async fn a_fork_returns_the_new_session_and_a_start_resumes_it() {
+    let mut c = Client::temp();
+    c.bind().await;
+    c.prompt("[[text:First.]]").await;
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "First.").await;
+    c.wait(is_state("idle")).await;
+    let forked = c.call("binding/fork", json!({"binding": "b1"})).await;
+    let id = forked["ref"]["id"].as_str().unwrap().to_owned();
+    assert!(id.starts_with("forked-"), "the fork names its session: {id}");
+    assert_eq!(forked["ref"]["strength"], "strong");
+    let start = c
+        .call(
+            "binding/start",
+            json!({"session": "s1", "binding": "b2", "agent": "pi", "workspace": std::env::temp_dir(),
+                "cwd": std::env::temp_dir(), "options": {}, "control": "native", "deny": [],
+                "resume": {"id": id, "strength": "strong"}}),
+        )
+        .await;
+    assert_eq!(start["ref"]["id"], id);
+    c.call("binding/stop", json!({"binding": "b2"})).await;
+}
+
+#[tokio::test]
+async fn the_agent_reports_the_version_pi_prints() {
+    let mut c = Client::temp();
+    c.call(
+        "initialize",
+        json!({"protocol": [1], "peer": {"kind": "runtime", "name": "test", "version": "0"}, "features": {}}),
+    )
+    .await;
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["version"], "0.73.1");
+    assert!(agents["agents"][0]["features"]["session.fork"].is_object());
+    assert!(agents["agents"][0]["features"]["session.history"].is_object());
+}
+
+#[tokio::test]
+async fn history_reads_a_session_file() {
+    let dir = tempfile::tempdir().expect("a scratch folder");
+    let sessions = dir.path().join("sessions/--work-demo--");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("2026_01_02_sess-made-up.jsonl"),
+        concat!(
+            r#"{"type":"session","version":3,"id":"sess-made-up","timestamp":"2026-01-02T03:04:05.000Z","cwd":"/work/demo"}"#,
+            "\n",
+            r#"{"type":"message","id":"e1","parentId":null,"timestamp":"2026-01-02T03:04:05.100Z","message":{"role":"user","content":"List the notes"}}"#,
+            "\n",
+            r#"{"type":"message","id":"e2","parentId":"e1","timestamp":"2026-01-02T03:04:06.000Z","message":{"role":"assistant","content":[{"type":"text","text":"One note."}]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let mut c = Client::temp();
+    c.call(
+        "initialize",
+        json!({"protocol": [1], "peer": {"kind": "runtime", "name": "test", "version": "0"}, "features": {}}),
+    )
+    .await;
+    // The driver reads the root at call time, so the environment set here applies.
+    unsafe { std::env::set_var("PI_CODING_AGENT_SESSION_DIR", dir.path().join("sessions")) };
+    let found = c
+        .call("history/discover", json!({"agent": "pi", "cwd": "/work/demo"}))
+        .await;
+    assert_eq!(found["found"][0]["ref"]["id"], "sess-made-up");
+    assert_eq!(found["found"][0]["title"], "List the notes");
+    let read = c
+        .call(
+            "history/read",
+            json!({"agent": "pi", "ref": {"id": "sess-made-up", "strength": "strong"}}),
+        )
+        .await;
+    unsafe { std::env::remove_var("PI_CODING_AGENT_SESSION_DIR") };
+    let items = read["updates"].as_array().unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|u| u["update"]["item"]["set"]["text"] == "One note.")
+    );
+    assert!(items.iter().all(|u| u["binding"] == ""));
+}
+
+#[tokio::test]
 async fn mcp_reaches_pi_with_the_token_in_the_environment() {
     let mut c = Client::temp();
     let cwd = std::env::temp_dir();

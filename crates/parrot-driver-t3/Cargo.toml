@@ -15,6 +15,11 @@ name = "fake-t3"
 path = "src/bin/fake-t3.rs"
 test = false
 
+[[bin]]
+name = "fake-t3-http"
+path = "src/bin/fake-t3-http.rs"
+test = false
+
 [dependencies]
 parrot-proto.workspace = true
 parrot-driver.workspace = true
