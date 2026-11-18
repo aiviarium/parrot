@@ -18,7 +18,7 @@ use parrot_proto::request::{
     Answer, Answerable, Choice, ChoiceIntent, ChoiceScope, Notify, Request, RequestKind, RequestStatus,
     Subject,
 };
-use parrot_proto::session::{Ref, RefStrength};
+use parrot_proto::session::{McpServer, McpStatus, Ref, RefStrength};
 use parrot_proto::state::{State, Turn, TurnError, TurnStatus, TurnStop};
 use parrot_proto::subscribe::NoticeLevel;
 use parrot_proto::usage::{ContextUsage, RateLimit, TokenUsage, Usage};
@@ -89,6 +89,16 @@ pub struct PendingRequest {
     pub request: Request,
     /// The decision each choice sends, by choice id.
     pub decisions: BTreeMap<String, Value>,
+    /// Codex resolves it by itself when its time runs out (`autoResolutionMs`).
+    pub auto: bool,
+}
+
+/// A skill from `skills/list`, offered as an action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Skill {
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
 }
 
 /// What the mapping remembers between lines.
@@ -123,6 +133,18 @@ pub struct MapState {
     /// Set by the compact action, so the compaction item reads as manual.
     pub compact_requested: bool,
     unnamed: u64,
+    /// The states of subagent threads, by thread id (spec 30.3). Their updates carry `subagent`.
+    pub subagents: BTreeMap<String, MapState>,
+    /// The subagent key this state's updates carry, when it is a subagent's thread.
+    pub sub_key: Option<String>,
+    /// Skills from `skills/list`, offered as actions.
+    pub skills: Vec<Skill>,
+    /// The running turn's latest diff (`turn/diff/updated`), put on the turn when it ends.
+    diff: Option<String>,
+    /// MCP servers by name, from `mcpServer/startupStatus/updated`.
+    mcp: BTreeMap<String, McpStatus>,
+    /// The sign-in the `login` action started: its login id and the request's key.
+    pub login: Option<(String, String)>,
 }
 
 impl Default for MapState {
@@ -154,13 +176,72 @@ impl MapState {
             usage: None,
             compact_requested: false,
             unnamed: 0,
+            subagents: BTreeMap::new(),
+            sub_key: None,
+            skills: vec![],
+            diff: None,
+            mcp: BTreeMap::new(),
+            login: None,
+        }
+    }
+
+    /// The subagent thread that a message about `thread` belongs to: any thread but this
+    /// binding's own, once that is known.
+    pub fn sub_thread<'a>(&self, thread: Option<&'a str>) -> Option<&'a str> {
+        let t = thread?;
+        match &self.thread_id {
+            Some(main) if main != t && self.sub_key.is_none() => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The state of subagent thread `thread`, made on first use with this thread's settings.
+    pub fn sub(&mut self, thread: &str) -> &mut MapState {
+        if !self.subagents.contains_key(thread) {
+            let mut s = MapState::new(self.binding.clone());
+            s.cwd = self.cwd.clone();
+            s.thread_id = Some(thread.to_owned());
+            s.sub_key = Some(thread.to_owned());
+            s.approval = self.approval.clone();
+            s.sandbox = self.sandbox.clone();
+            s.model = self.model.clone();
+            self.subagents.insert(thread.to_owned(), s);
+        }
+        self.subagents.get_mut(thread).expect("just made")
+    }
+
+    /// [`MapState::step`] for a notification about `thread`; a subagent's goes to its state.
+    pub fn step_in(
+        &mut self,
+        thread: Option<&str>,
+        n: &Open<ServerNotification>,
+        now: &str,
+    ) -> Vec<DriverUpdate> {
+        match self.sub_thread(thread).map(str::to_owned) {
+            Some(t) => self.sub(&t).step(n, now),
+            None => self.step(n, now),
+        }
+    }
+
+    /// [`MapState::server_request_at`] for a request about `thread`.
+    pub fn server_request_in(
+        &mut self,
+        thread: Option<&str>,
+        raw: &RequestId,
+        method: &str,
+        params: &Value,
+        now: &str,
+    ) -> (Vec<DriverUpdate>, Option<Message>) {
+        match self.sub_thread(thread).map(str::to_owned) {
+            Some(t) => self.sub(&t).server_request_at(raw, method, params, now),
+            None => self.server_request_at(raw, method, params, now),
         }
     }
 
     fn update(&self, kind: DriverUpdateKind) -> DriverUpdate {
         DriverUpdate {
             binding: self.binding.clone(),
-            subagent: None,
+            subagent: self.sub_key.clone(),
             update: Open::Known(kind),
             extra: Map::new(),
         }
@@ -486,7 +567,11 @@ impl MapState {
                 ended: ended.map(str::to_owned),
                 error,
                 usage: if ended.is_some() { self.usage.clone() } else { None },
-                meta: None,
+                meta: ended.and(self.diff.as_ref()).map(|d| {
+                    let mut m = Map::new();
+                    m.insert("diff".into(), json!(d));
+                    m
+                }),
                 extra: Map::new(),
             },
         })
@@ -547,20 +632,56 @@ impl MapState {
         };
         out.push(self.turn_update(&t, status, Some(stop), error, Some(now)));
         out.push(self.state(State::Idle));
+        self.diff = None;
         self.echoes.clear();
         self.compact_requested = false;
         out
     }
 
-    /// A request from Codex. Requests the driver does not take get an error reply, returned as the
-    /// second value.
+    /// [`MapState::server_request_at`] without a clock, so a request Codex resolves by itself
+    /// gets no `expires`.
     pub fn server_request(
         &mut self,
         raw: &RequestId,
         method: &str,
         params: &Value,
     ) -> (Vec<DriverUpdate>, Option<Message>) {
+        self.server_request_at(raw, method, params, "")
+    }
+
+    /// A request from Codex, at time `now`. Requests the driver does not take get an error reply,
+    /// returned as the second value.
+    pub fn server_request_at(
+        &mut self,
+        raw: &RequestId,
+        method: &str,
+        params: &Value,
+        now: &str,
+    ) -> (Vec<DriverUpdate>, Option<Message>) {
         let key = format!("req-{raw}");
+        if method == sr::AUTH_TOKENS_REFRESH {
+            // Parrot holds no ChatGPT tokens to hand over; Codex falls back to its own sign-in.
+            let error = Message::Error {
+                id: raw.clone(),
+                error: wire::RpcError {
+                    code: -32601,
+                    message: "parrot holds no ChatGPT tokens".into(),
+                    data: None,
+                },
+            };
+            let text = "Codex asked for new ChatGPT tokens. Sign in again with the login action if its requests fail.";
+            return (
+                vec![self.update(DriverUpdateKind::Notice {
+                    level: NoticeLevel::Warning,
+                    text: text.into(),
+                    code: Some(AUTH_NOTICE.into()),
+                })],
+                Some(error),
+            );
+        }
+        // `autoResolutionMs`: Codex answers by itself when the time runs out.
+        let auto_ms = params.get("autoResolutionMs").and_then(Value::as_u64);
+        let blocking = params.get("isBlocking").and_then(Value::as_bool).unwrap_or(true);
         let item = params.get("itemId").and_then(Value::as_str).map(str::to_owned);
         let reason = params.get("reason").and_then(Value::as_str).map(str::to_owned);
         let mut decisions = BTreeMap::new();
@@ -811,10 +932,15 @@ impl MapState {
             network: Some(network),
             choices: (!choices.is_empty()).then_some(choices),
             input,
-            blocking: true,
+            blocking,
             answerable: Answerable::Connection,
-            expires: None,
-            fallback: None,
+            expires: auto_ms.and_then(|ms| add_ms(now, ms)),
+            fallback: auto_ms.map(|_| Answer {
+                choice: None,
+                value: None,
+                input: None,
+                message: Some("Codex goes on without an answer".into()),
+            }),
             notify: Notify::Normal,
             status: RequestStatus::Open,
             answer: None,
@@ -836,6 +962,7 @@ impl MapState {
                 params: params.clone(),
                 request,
                 decisions,
+                auto: auto_ms.is_some(),
             },
         );
         (out, None)
@@ -843,6 +970,11 @@ impl MapState {
 
     /// The answer to the request with driver key `key`, as the response to write.
     pub fn answer(&mut self, key: &str, answer: &Answer) -> Result<(Message, Vec<DriverUpdate>), String> {
+        if !self.requests.contains_key(key)
+            && let Some(sub) = self.subagents.values_mut().find(|s| s.requests.contains_key(key))
+        {
+            return sub.answer(key, answer);
+        }
         let pending = self
             .requests
             .remove(key)
@@ -911,7 +1043,89 @@ impl MapState {
             ServerNotification::CommandOutputDelta(d) => {
                 self.append(&d.item_id, ItemKind::Command, "output", &d.delta)
             }
-            ServerNotification::FileChangeOutputDelta(_) => vec![],
+            ServerNotification::FileChangeOutputDelta(d) => {
+                self.append(&d.item_id, ItemKind::FileChange, "output", &d.delta)
+            }
+            ServerNotification::FileChangePatchUpdated(p) => {
+                self.changes.insert(
+                    p.item_id.clone(),
+                    p.changes.iter().map(|c| c.path.clone()).collect(),
+                );
+                let first = !self.items.contains_key(&p.item_id);
+                if first {
+                    self.items.insert(p.item_id.clone(), ItemKind::FileChange);
+                }
+                let mut set = Map::new();
+                set.insert("changes".into(), changes_of(&p.changes));
+                vec![self.item(ItemPatch {
+                    id: p.item_id.clone(),
+                    kind: first.then_some(Open::Known(ItemKind::FileChange)),
+                    turn: if first { self.turn_key() } else { None },
+                    set: Some(set),
+                    ..Default::default()
+                })]
+            }
+            ServerNotification::TurnDiffUpdated(d) => {
+                if self.turn.as_ref().is_some_and(|t| t.key == d.turn_id) {
+                    self.diff = Some(d.diff.clone());
+                }
+                vec![]
+            }
+            ServerNotification::Warning(w) => {
+                vec![self.notice(NoticeLevel::Warning, w.message.clone(), "warning")]
+            }
+            ServerNotification::GuardianWarning(w) => {
+                vec![self.notice(NoticeLevel::Warning, w.message.clone(), "guardian")]
+            }
+            ServerNotification::DeprecationNotice(d) => {
+                let text = match &d.details {
+                    Some(more) if !more.is_empty() => format!("{} {more}", d.summary),
+                    _ => d.summary.clone(),
+                };
+                vec![self.notice(NoticeLevel::Info, text, "deprecation")]
+            }
+            ServerNotification::ThreadStatusChanged(t) => match t.status["type"].as_str() {
+                Some("systemError") => vec![self.notice(
+                    NoticeLevel::Error,
+                    "Codex reports a system error on the thread".into(),
+                    "thread-status",
+                )],
+                _ => vec![],
+            },
+            ServerNotification::McpServerStatusUpdated(m) => {
+                let status = match m.status.as_str() {
+                    "ready" => McpStatus::Connected,
+                    "starting" => McpStatus::Pending,
+                    _ if m
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.to_lowercase().contains("auth")) =>
+                    {
+                        McpStatus::NeedsAuth
+                    }
+                    _ => McpStatus::Failed,
+                };
+                if self.mcp.get(&m.name) == Some(&status) {
+                    return vec![];
+                }
+                self.mcp.insert(m.name.clone(), status);
+                let servers = self
+                    .mcp
+                    .iter()
+                    .map(|(name, status)| McpServer {
+                        name: name.clone(),
+                        status: *status,
+                        tools: None,
+                    })
+                    .collect();
+                vec![self.update(DriverUpdateKind::Mcp { servers })]
+            }
+            ServerNotification::AccountUpdated(a) => match &a.auth_mode {
+                None => vec![self.notice(NoticeLevel::Warning, "Codex is signed out".into(), AUTH_NOTICE)],
+                Some(_) => vec![],
+            },
+            ServerNotification::AccountLoginCompleted(l) => self.login_completed(l),
+            ServerNotification::SkillsChanged(_) => vec![],
             ServerNotification::TurnPlanUpdated(p) => {
                 let entries: Vec<Value> = p
                     .plan
@@ -963,8 +1177,14 @@ impl MapState {
                     return vec![];
                 };
                 let mut request = p.request;
-                request.status = RequestStatus::Cancelled;
-                request.answered_by = Some("harness".into());
+                if p.auto {
+                    // Its time ran out and Codex went on with its own answer.
+                    request.status = RequestStatus::Expired;
+                    request.answered_by = Some("fallback".into());
+                } else {
+                    request.status = RequestStatus::Cancelled;
+                    request.answered_by = Some("harness".into());
+                }
                 let mut out = vec![self.update(DriverUpdateKind::Request {
                     request: Box::new(request),
                 })];
@@ -1001,6 +1221,184 @@ impl MapState {
                 }
             }
         }
+    }
+
+    fn notice(&self, level: NoticeLevel, text: String, code: &str) -> DriverUpdate {
+        self.update(DriverUpdateKind::Notice {
+            level,
+            text,
+            code: Some(code.to_owned()),
+        })
+    }
+
+    /// The `auth` request for a sign-in the `login` action started (spec 16.1): a device code
+    /// to enter at a URL, which works from any machine.
+    pub fn login_started(
+        &mut self,
+        login_id: &str,
+        url: &str,
+        code: Option<&str>,
+    ) -> (String, Vec<DriverUpdate>) {
+        let key = format!("login-{login_id}");
+        self.login = Some((login_id.to_owned(), key.clone()));
+        let title = match code {
+            Some(c) => format!("Sign in to Codex: open {url} and enter {c}"),
+            None => format!("Sign in to Codex: open {url}"),
+        };
+        let mut subject = json!({"type": "url", "url": url});
+        if let Some(c) = code {
+            subject["code"] = json!(c);
+        }
+        let request = Request {
+            id: key.clone(),
+            session: String::new(),
+            path: vec![],
+            reference: None,
+            turn: None,
+            item: None,
+            kind: Open::Known(RequestKind::Auth),
+            title,
+            description: Some("Codex finishes the sign-in by itself once the code is entered.".into()),
+            subject: Some(Open::Unknown(subject)),
+            level: PermissionLevel::Write,
+            network: Some(true),
+            choices: Some(vec![choice("cancel", "Cancel", ChoiceIntent::Deny, None, None)]),
+            input: None,
+            blocking: false,
+            answerable: Answerable::Connection,
+            expires: None,
+            fallback: None,
+            notify: Notify::Normal,
+            status: RequestStatus::Open,
+            answer: None,
+            answered_by: None,
+            meta: None,
+            extra: Map::new(),
+        };
+        let out = vec![self.update(DriverUpdateKind::Request {
+            request: Box::new(request),
+        })];
+        (key, out)
+    }
+
+    /// The open sign-in's request, taken so it can be closed.
+    pub fn take_login(&mut self, key: &str) -> Option<String> {
+        match &self.login {
+            Some((id, k)) if k == key => {
+                let id = id.clone();
+                self.login = None;
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
+    fn login_completed(&mut self, l: &wire::LoginCompleted) -> Vec<DriverUpdate> {
+        let Some((id, key)) = self.login.clone() else {
+            return vec![];
+        };
+        if l.login_id.as_ref().is_some_and(|i| *i != id) {
+            return vec![];
+        }
+        self.login = None;
+        let mut out = vec![self.login_closed(&key, l.success)];
+        if !l.success {
+            let why = l.error.clone().unwrap_or_else(|| "the sign-in failed".into());
+            out.push(self.notice(
+                NoticeLevel::Error,
+                format!("Codex sign-in failed: {why}"),
+                AUTH_NOTICE,
+            ));
+        }
+        out
+    }
+
+    /// The update that closes the sign-in request `key`.
+    pub fn login_closed(&self, key: &str, success: bool) -> DriverUpdate {
+        let (status, by) = if success {
+            (RequestStatus::Answered, "harness")
+        } else {
+            (RequestStatus::Cancelled, "harness")
+        };
+        self.update(DriverUpdateKind::Request {
+            request: Box::new(Request {
+                id: key.to_owned(),
+                session: String::new(),
+                path: vec![],
+                reference: None,
+                turn: None,
+                item: None,
+                kind: Open::Known(RequestKind::Auth),
+                title: "Sign in to Codex".into(),
+                description: None,
+                subject: None,
+                level: PermissionLevel::Write,
+                network: Some(true),
+                choices: None,
+                input: None,
+                blocking: false,
+                answerable: Answerable::Connection,
+                expires: None,
+                fallback: None,
+                notify: Notify::Normal,
+                status,
+                answer: None,
+                answered_by: Some(by.into()),
+                meta: None,
+                extra: Map::new(),
+            }),
+        })
+    }
+
+    /// The actions: compact, review, sign-in, and a skill action per skill.
+    pub fn actions(&self) -> Vec<Action> {
+        let mut out = actions();
+        out.extend(self.skills.iter().map(skill_action));
+        out
+    }
+
+    /// Takes the skills `skills/list` returned. Returns the `actions` update when they changed.
+    pub fn skills_listed(&mut self, result: &Value) -> Option<DriverUpdate> {
+        let mut skills: Vec<Skill> = result["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|e| e["skills"].as_array().cloned().unwrap_or_default())
+            .filter(|s| s["enabled"].as_bool() != Some(false))
+            .filter_map(|s| {
+                Some(Skill {
+                    name: s["name"].as_str()?.to_owned(),
+                    path: s["path"].as_str()?.to_owned(),
+                    description: s["shortDescription"]
+                        .as_str()
+                        .or_else(|| s["description"].as_str())
+                        .map(str::to_owned),
+                })
+            })
+            .collect();
+        skills.dedup_by(|a, b| a.name == b.name);
+        if skills == self.skills {
+            return None;
+        }
+        self.skills = skills;
+        Some(self.update(DriverUpdateKind::Actions {
+            actions: self.actions(),
+        }))
+    }
+
+    /// The `turn/start` parameters that run skill `name` with `text`.
+    pub fn skill_turn_params(&self, name: &str, text: &str, message: &str) -> Option<Value> {
+        let skill = self.skills.iter().find(|s| s.name == name)?;
+        Some(json!({
+            "threadId": self.thread_id,
+            "input": [
+                {"type": "text", "text": format!("${} {text}", skill.name).trim_end(), "text_elements": []},
+                {"type": "skill", "name": skill.name, "path": skill.path},
+            ],
+            "clientUserMessageId": message,
+            "approvalPolicy": self.approval,
+            "sandboxPolicy": sandbox_policy(&self.sandbox, &self.cwd),
+        }))
     }
 
     fn append(&mut self, id: &str, kind: ItemKind, field: &str, text: &str) -> Vec<DriverUpdate> {
@@ -1187,9 +1585,12 @@ impl MapState {
         })]
     }
 
-    /// Codex exited: open requests and the turn end.
+    /// Codex exited: open requests and the turn end, in subagents too.
     pub fn exited(&mut self, now: &str) -> Vec<DriverUpdate> {
         let mut out = Vec::new();
+        for sub in self.subagents.values_mut() {
+            out.extend(sub.exited(now));
+        }
         if self.turn.is_some() {
             out.extend(self.end_turn(
                 Some("failed"),
@@ -1205,9 +1606,53 @@ impl MapState {
     }
 }
 
-/// The `compact` and `review` actions, which Codex offers as methods (spec 16).
+/// The notice code for sign-in news.
+pub const AUTH_NOTICE: &str = "x.parrot/auth";
+
+/// The action id prefix of a skill.
+pub const SKILL_PREFIX: &str = "skill:";
+
+fn skill_action(s: &Skill) -> Action {
+    Action {
+        id: format!("{SKILL_PREFIX}{}", s.name),
+        name: Some(format!("${}", s.name)),
+        label: s.name.clone(),
+        description: s.description.clone(),
+        input: Some(json!({"type": "object", "properties": {"text": {"type": "string", "title": "Text"}}})),
+        hint: Some("[text]".into()),
+        scope: ActionScope::Session,
+        when: vec![ActionWhen::Idle],
+        effects: vec![Effect::Turn],
+        requires: None,
+        source: Open::Known(ActionSource::Skill),
+        meta: None,
+        extra: Map::new(),
+    }
+}
+
+fn account_action(id: &str, label: &str, description: &str) -> Action {
+    Action {
+        id: id.into(),
+        name: Some(format!("/{id}")),
+        label: label.into(),
+        description: Some(description.into()),
+        input: None,
+        hint: None,
+        scope: ActionScope::Agent,
+        when: vec![ActionWhen::Idle, ActionWhen::Running],
+        effects: vec![Effect::Write],
+        requires: None,
+        source: Open::Known(ActionSource::Harness),
+        meta: None,
+        extra: Map::new(),
+    }
+}
+
+/// The `compact`, `review`, `login` and `logout` actions, which Codex offers as methods (spec 16).
 pub fn actions() -> Vec<Action> {
     vec![
+        account_action("login", "Sign in", "Sign in to ChatGPT with a device code"),
+        account_action("logout", "Sign out", "Sign Codex out"),
         Action {
             id: "compact".into(),
             name: Some("/compact".into()),
@@ -1317,6 +1762,40 @@ fn truncate(s: &str) -> String {
     format!("{}\n…", &s[..end])
 }
 
+/// File changes as `file_change` entries: `{ path, op, from?, diff? }`.
+fn changes_of(changes: &[wire::FileUpdateChange]) -> Value {
+    let changes: Vec<Value> = changes
+        .iter()
+        .map(|c| {
+            let ty = c
+                .kind
+                .as_ref()
+                .and_then(|k| k.get("type"))
+                .and_then(Value::as_str);
+            let moved = c
+                .kind
+                .as_ref()
+                .and_then(|k| k.get("move_path"))
+                .and_then(Value::as_str);
+            let op = match (ty, moved) {
+                (Some("add"), _) => "add",
+                (Some("delete"), _) => "delete",
+                (_, Some(_)) => "move",
+                _ => "modify",
+            };
+            let mut e = json!({"path": moved.unwrap_or(&c.path), "op": op});
+            if moved.is_some() {
+                e["from"] = json!(c.path);
+            }
+            if let Some(d) = &c.diff {
+                e["diff"] = json!(d);
+            }
+            e
+        })
+        .collect();
+    Value::Array(changes)
+}
+
 /// The kind and fields of an item, at its start or at its end.
 fn fields_of(item: &ThreadItem, done: bool) -> Option<(ItemKind, Map<String, Value>)> {
     let mut set = Map::new();
@@ -1346,37 +1825,7 @@ fn fields_of(item: &ThreadItem, done: bool) -> Option<(ItemKind, Map<String, Val
             ItemKind::Command
         }
         ThreadItem::FileChange(f) => {
-            let changes: Vec<Value> = f
-                .changes
-                .iter()
-                .map(|c| {
-                    let ty = c
-                        .kind
-                        .as_ref()
-                        .and_then(|k| k.get("type"))
-                        .and_then(Value::as_str);
-                    let moved = c
-                        .kind
-                        .as_ref()
-                        .and_then(|k| k.get("move_path"))
-                        .and_then(Value::as_str);
-                    let op = match (ty, moved) {
-                        (Some("add"), _) => "add",
-                        (Some("delete"), _) => "delete",
-                        (_, Some(_)) => "move",
-                        _ => "modify",
-                    };
-                    let mut e = json!({"path": moved.unwrap_or(&c.path), "op": op});
-                    if moved.is_some() {
-                        e["from"] = json!(c.path);
-                    }
-                    if let Some(d) = &c.diff {
-                        e["diff"] = json!(d);
-                    }
-                    e
-                })
-                .collect();
-            set.insert("changes".into(), Value::Array(changes));
+            set.insert("changes".into(), changes_of(&f.changes));
             set.insert("status".into(), json!(status_of(f.status.as_deref(), done)));
             ItemKind::FileChange
         }
@@ -1436,10 +1885,40 @@ fn fields_of(item: &ThreadItem, done: bool) -> Option<(ItemKind, Map<String, Val
         }
         ThreadItem::CollabAgentToolCall(c) => {
             let tool = c.tool.clone().unwrap_or_else(|| "agent".into());
-            let title = c.prompt.clone().unwrap_or_else(|| tool.clone());
-            set.extend(tool_fields(&tool, &title, &json!({"prompt": c.prompt})));
-            set.insert("status".into(), json!(status_of(c.status.as_deref(), done)));
-            ItemKind::Tool
+            let status = status_of(c.status.as_deref(), done);
+            if tool == "spawnAgent" {
+                // The new agent runs in its own thread, whose id is the subagent's key (30.3).
+                let title = c
+                    .prompt
+                    .as_deref()
+                    .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
+                    .map(|l| l.trim().chars().take(80).collect::<String>())
+                    .unwrap_or_else(|| "Subagent".into());
+                set.insert("title".into(), json!(title));
+                set.insert("status".into(), json!(status));
+                if let Some(thread) = c.receiver_thread_ids.first() {
+                    set.insert("key".into(), json!(thread));
+                }
+                if let Some(p) = &c.prompt {
+                    set.insert("prompt".into(), json!(p));
+                }
+                if let Some(m) = &c.model {
+                    set.insert("model".into(), json!(m));
+                }
+                ItemKind::Subagent
+            } else {
+                let title = match c.receiver_thread_ids.as_slice() {
+                    [] => tool.clone(),
+                    agents => format!("{tool}: {}", agents.join(", ")),
+                };
+                let input = json!({"prompt": c.prompt, "agents": c.receiver_thread_ids});
+                set.extend(tool_fields(&tool, &title, &input));
+                set.insert("status".into(), json!(status));
+                if !c.agents_states.is_empty() {
+                    set.insert("output".into(), Value::Object(c.agents_states.clone()));
+                }
+                ItemKind::Tool
+            }
         }
         ThreadItem::WebSearch(w) => {
             if let Some(q) = &w.query {
@@ -1550,6 +2029,36 @@ pub fn rfc3339(secs: i64) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+/// `now` (RFC 3339, UTC) plus `ms` milliseconds, or `None` when `now` can't be read.
+pub fn add_ms(now: &str, ms: u64) -> Option<String> {
+    let ms_now = epoch_ms(now)?;
+    let t = ms_now + ms as i64;
+    let s = rfc3339(t.div_euclid(1000));
+    Some(format!("{}.{:03}Z", s.trim_end_matches('Z'), t.rem_euclid(1000)))
+}
+
+/// Milliseconds since the epoch of an RFC 3339 time in UTC, such as `2026-11-18T08:23:03.250Z`.
+pub fn epoch_ms(t: &str) -> Option<i64> {
+    let t = t.strip_suffix('Z')?;
+    let (date, time) = t.split_once('T')?;
+    let mut d = date.split('-').map(|p| p.parse::<i64>());
+    let (y, m, day) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
+    let (hms, frac) = time.split_once('.').unwrap_or((time, "0"));
+    let mut h = hms.split(':').map(|p| p.parse::<i64>());
+    let (hh, mm, ss) = (h.next()?.ok()?, h.next()?.ok()?, h.next()?.ok()?);
+    let frac: String = frac.chars().chain("000".chars()).take(3).collect();
+    let millis: i64 = frac.parse().ok()?;
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(((days * 86_400 + hh * 3600 + mm * 60 + ss) * 1000) + millis)
 }
 
 /// The result to send for an answer.

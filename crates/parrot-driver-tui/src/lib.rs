@@ -8,7 +8,7 @@ pub mod input;
 pub mod stdio;
 pub mod transcript;
 
-pub use driver::{Config, TranscriptDir, TuiDriver};
+pub use driver::{Config, McpStyle, TranscriptDir, TranscriptFormat, TuiDriver};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

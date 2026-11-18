@@ -9,13 +9,15 @@
 //! | `{"emit": <message>}` | writes the message |
 //! | `{"await_response": <id>, "match": <pattern>}` | reads until the answer to its own request `<id>`; the optional pattern is checked against `result` |
 //! | `{"exit": <code>}` | exits with the code |
+//! | `{"args": [<string>, ...]}` | fails unless the fake's command line holds these arguments in this order |
 //!
 //! A pattern matches when every key it names matches, recursively; arrays match element by element.
 //! In an emitted message the string `"{{id}}"` stands for the id of the last request read, so a
 //! scenario can answer the driver's requests.
 //!
 //! Unless the current `expect` asks for them, the fake answers `initialize`, `model/list`,
-//! `thread/start` and `thread/resume` by itself and skips the `initialized` notification. When the
+//! `skills/list`, `thread/start` and `thread/resume` by itself and skips the `initialized`
+//! notification. Its skill list holds the one skill [`FAKE_SKILL`]. When the
 //! steps run out it reads until stdin closes and exits with 0.
 
 use std::io::{BufRead, Write};
@@ -25,6 +27,12 @@ use serde_json::{Value, json};
 
 /// The variable that names a scenario when `--scenario` is not given.
 pub const SCENARIO_ENV: &str = "PARROT_FAKE_CODEX_SCENARIO";
+
+/// The skill the fake lists.
+pub const FAKE_SKILL: &str = "fake-lint";
+
+/// The variable that makes `fake-codex login status` report signed out when set to `out`.
+pub const LOGIN_ENV: &str = "PARROT_FAKE_CODEX_LOGIN";
 
 /// The thread id the fake gives a new thread.
 pub const FAKE_THREAD: &str = "thr-fake-0001";
@@ -38,6 +46,7 @@ pub enum Step {
     Emit(Value),
     AwaitResponse { id: Value, pattern: Option<Value> },
     Exit(i32),
+    Args(Vec<String>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +76,9 @@ pub fn parse_scenario(text: &str) -> Result<Vec<Step>, ScenarioError> {
                 id: id.clone(),
                 pattern: v.get("match").cloned(),
             }
+        } else if let Some(a) = v.get("args") {
+            let args = serde_json::from_value(a.clone()).map_err(|e| bad(format!("args: {e}")))?;
+            Step::Args(args)
         } else if let Some(c) = v.get("exit") {
             Step::Exit(c.as_i64().ok_or_else(|| bad("exit takes an integer".into()))? as i32)
         } else {
@@ -209,8 +221,25 @@ fn auto_answer(v: &Value) -> Option<Vec<Value>> {
     let id = v.get("id")?.clone();
     let reply = |result: Value| json!({"id": id, "result": result});
     match v["method"].as_str()? {
-        "initialize" => Some(vec![reply(json!({"userAgent": "fake-codex/0.0.0"}))]),
+        "initialize" => Some(vec![reply(
+            json!({"userAgent": "fake-codex/0.167.1 (Fake OS; x86_64)"}),
+        )]),
         "model/list" => Some(vec![reply(fake_models())]),
+        "skills/list" => {
+            let cwd = v["params"]["cwds"][0].clone();
+            Some(vec![reply(json!({"data": [{
+                "cwd": cwd,
+                "skills": [{
+                    "name": FAKE_SKILL,
+                    "description": "Lints the fake project",
+                    "shortDescription": "Lint",
+                    "path": "/fake/skills/fake-lint/SKILL.md",
+                    "scope": "user",
+                    "enabled": true,
+                }],
+                "errors": [],
+            }]}))])
+        }
         m @ ("thread/start" | "thread/resume") => {
             let thread = if m == "thread/resume" {
                 v["params"]["threadId"].as_str().unwrap_or(FAKE_THREAD).to_owned()
@@ -344,6 +373,13 @@ fn play<R: BufRead, W: Write>(steps: &[Step], run: &mut Run<R, W>) -> std::io::R
                 break;
             },
             Step::Exit(code) => return Ok(*code),
+            Step::Args(want) => {
+                let have: Vec<String> = std::env::args().skip(1).collect();
+                if !have.windows(want.len()).any(|w| w == want.as_slice()) {
+                    eprintln!("fake-codex: step {}: arguments {have:?} lack {want:?}", i + 1);
+                    return Ok(MISMATCH_EXIT);
+                }
+            }
         }
     }
     while run.next(|_| false)?.is_some() {}

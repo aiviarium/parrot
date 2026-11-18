@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use parrot_driver::correlate::{self, Fold};
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
     BindingAnswerParams, BindingCancelParams, BindingCancelResult, BindingForkParams, BindingForkResult,
@@ -48,6 +49,11 @@ pub struct Config {
     pub env: Vec<(OsString, OsString)>,
     /// Start the CLI through `parrot guard --`, which needs the current executable to be `parrot`.
     pub guard: bool,
+    /// Shadow mode (spec 32.1): after each turn, read the transcript, report where it differs
+    /// from stream-json and merge in what only the transcript has.
+    pub shadow: bool,
+    /// The folder of Claude Code's project transcripts, when not the default.
+    pub projects: Option<std::path::PathBuf>,
 }
 
 impl Config {
@@ -58,6 +64,8 @@ impl Config {
             claude_bin: std::env::var_os(CLAUDE_BIN_ENV).unwrap_or_else(|| "claude".into()),
             env: vec![],
             guard,
+            shadow: parrot_driver::correlate::shadow_from_env(),
+            projects: None,
         }
     }
 }
@@ -72,6 +80,80 @@ struct Binding {
     pending: Pending,
     next: AtomicU64,
     stopping: std::sync::atomic::AtomicBool,
+    /// The items of this binding, kept for shadow mode.
+    fold: Mutex<Fold>,
+    /// How many transcript items earlier shadow passes have looked at.
+    shadowed: Mutex<usize>,
+}
+
+impl Binding {
+    fn record(&self, shadow: bool, updates: &[DriverUpdate]) {
+        if shadow {
+            let mut f = self.fold.lock().unwrap();
+            // The transcript's main chain holds no sidechain lines, so subagent updates stay out.
+            for u in updates.iter().filter(|u| u.subagent.is_none()) {
+                f.push(&to_value(u));
+            }
+        }
+    }
+}
+
+/// Whether the updates end a top-level turn.
+fn ends_turn(updates: &[DriverUpdate]) -> bool {
+    updates.iter().filter(|u| u.subagent.is_none()).any(|u| {
+        matches!(&u.update, Open::Known(DriverUpdateKind::Turn { turn }) if turn.status != parrot_proto::state::TurnStatus::Running)
+    })
+}
+
+/// Shadow mode at the end of a turn: reads the transcript, reports where the turn differs from
+/// what stream-json said, and merges in the items only the transcript has. The transcript holds
+/// no turn ids, so the turn's part of it is what earlier passes have not looked at.
+async fn shadow_turn(driver: Arc<Driver>, b: Arc<Binding>) {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (session, turn) = {
+        let s = b.state.lock().unwrap();
+        (s.session_id.clone(), s.last_turn_key())
+    };
+    let Some(session) = session else { return };
+    let path = driver.projects().and_then(|root| history::find(&root, &session));
+    let Some(text) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
+        let d = correlate::Difference {
+            kind: "*".into(),
+            item: session.clone(),
+            text: format!("no transcript for session {session}"),
+        };
+        driver.send(&Notification::new("update", correlate::notice(&b.id, &d)));
+        return;
+    };
+    let mut disk = Fold::new();
+    for u in history::read(&text, None).updates {
+        disk.push(&to_value(&u));
+    }
+    let from = {
+        let mut seen = b.shadowed.lock().unwrap();
+        let from = (*seen).min(disk.items.len());
+        *seen = disk.items.len();
+        from
+    };
+    let passive: Vec<&correlate::Item> = disk.items[from..].iter().collect();
+    let live = b.fold.lock().unwrap().clone();
+    let data = &data().correlate;
+    let pairs = correlate::correlate(data, &live.last_turn(), &passive);
+    let mut out: Vec<Value> = correlate::differences(data, &pairs, "native", "transcript")
+        .iter()
+        .map(|d| correlate::notice(&b.id, d))
+        .collect();
+    let merged = correlate::merged(data, &pairs, &b.id, turn.as_deref(), "native");
+    {
+        let mut f = b.fold.lock().unwrap();
+        for m in &merged {
+            f.push(m);
+        }
+    }
+    out.extend(merged);
+    for u in out {
+        driver.send(&Notification::new("update", u));
+    }
 }
 
 struct Driver {
@@ -155,6 +237,10 @@ impl Driver {
         }
     }
 
+    fn projects(&self) -> Option<std::path::PathBuf> {
+        self.config.projects.clone().or_else(history::projects_root)
+    }
+
     fn binding(&self, id: &str) -> Result<Arc<Binding>, RpcError> {
         self.bindings
             .lock()
@@ -180,16 +266,28 @@ impl Driver {
                 let p: BindingForkParams = params(p)?;
                 let b = self.binding(&p.binding)?;
                 let state = b.state.lock().unwrap();
-                if p.at.is_some()
-                    && p.at != state.turn.as_ref().map(|t| t.key.clone())
-                    && p.at != state.last_turn_key()
-                {
-                    return Err(RpcError::new(-32001, "Claude Code forks only at the latest turn"));
-                }
                 let id = state
                     .session_id
                     .clone()
                     .ok_or_else(|| RpcError::new(-32004, "the session has no harness id yet"))?;
+                let latest = p.at.is_none()
+                    || p.at == state.turn.as_ref().map(|t| t.key.clone())
+                    || p.at == state.last_turn_key();
+                if !latest {
+                    // An earlier turn: the fork resumes at that turn's last message
+                    // (`--resume-session-at`), so the later turns are left out.
+                    let at = p.at.as_deref().unwrap_or_default();
+                    let uuid = state
+                        .turn_ends
+                        .get(at)
+                        .ok_or_else(|| RpcError::new(-32602, format!("no ended turn {at} to fork at")))?;
+                    return Ok(to_value(&BindingForkResult {
+                        reference: Ref {
+                            id: format!("{FORK_PREFIX}{id}{FORK_AT}{uuid}"),
+                            strength: RefStrength::Strong,
+                        },
+                    }));
+                }
                 self.forks.lock().unwrap().insert(id.clone());
                 // The runtime may start the fork in another driver process, so the ref itself
                 // says it is a fork.
@@ -202,12 +300,16 @@ impl Driver {
             }
             "history/discover" => {
                 let p: HistoryDiscoverParams = params(p)?;
-                let root = history::projects_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let root = self
+                    .projects()
+                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
                 Ok(to_value(&history::discover(&root, &p)))
             }
             "history/read" => {
                 let p: HistoryReadParams = params(p)?;
-                let root = history::projects_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let root = self
+                    .projects()
+                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
                 let path = history::find(&root, &p.reference.id)
                     .ok_or_else(|| RpcError::new(-32602, format!("no transcript for {}", p.reference.id)))?;
                 let text = std::fs::read_to_string(&path)
@@ -250,6 +352,19 @@ impl Driver {
             "binding/cancel" => {
                 let p: BindingCancelParams = params(p)?;
                 let b = self.binding(&p.binding)?;
+                if let Some(sub) = &p.subagent {
+                    // A subagent stops through its task, which the CLI named in `task_started`.
+                    let task = b.state.lock().unwrap().tasks.get(sub).cloned();
+                    let Some(task_id) = task else {
+                        return Ok(to_value(&BindingCancelResult { interrupted: false }));
+                    };
+                    let body = ControlRequestBody::StopTask {
+                        task_id,
+                        extra: Extra::new(),
+                    };
+                    let interrupted = b.control("stop", body).await.is_ok();
+                    return Ok(to_value(&BindingCancelResult { interrupted }));
+                }
                 let running = {
                     let mut state = b.state.lock().unwrap();
                     state.cancel();
@@ -362,9 +477,16 @@ impl Driver {
                 Some(id) => (id.to_owned(), true),
                 None => (r.id.clone(), false),
             };
+            let (id, at) = match id.split_once(FORK_AT) {
+                Some((id, at)) => (id.to_owned(), Some(at.to_owned())),
+                None => (id, None),
+            };
             args.extend(["--resume".into(), id.clone().into()]);
             if fork || self.forks.lock().unwrap().remove(&id) {
                 args.push("--fork-session".into());
+            }
+            if let Some(at) = at {
+                args.extend(["--resume-session-at".into(), at.into()]);
             }
         }
         let model = start
@@ -416,7 +538,8 @@ impl Driver {
         state.model = model;
         state.permission_mode = mode;
         if let Some(r) = &start.resume {
-            state.session_id = Some(r.id.clone());
+            let id = r.id.strip_prefix(FORK_PREFIX).unwrap_or(&r.id);
+            state.session_id = Some(id.split_once(FORK_AT).map_or(id, |(id, _)| id).to_owned());
         }
         let b = Arc::new(Binding {
             id: start.binding.clone(),
@@ -426,6 +549,8 @@ impl Driver {
             pending: Mutex::default(),
             next: AtomicU64::new(1),
             stopping: Default::default(),
+            fold: Mutex::new(Fold::new()),
+            shadowed: Mutex::new(0),
         });
         self.bindings
             .lock()
@@ -441,6 +566,10 @@ impl Driver {
                 return Err(RpcError::new(-32603, format!("claude did not initialize: {e}")));
             }
         };
+        // The CLI's version picks the egg's version shim; the next start uses it.
+        if let Some(v) = init.get("claude_code_version").and_then(Value::as_str) {
+            crate::data::observe_version(v);
+        }
         let mut notices = vec![frame::frame(&start.binding, &now(), json!({"init": init}))];
         if let Some(e) = load_error() {
             notices.push(notice(
@@ -561,7 +690,12 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             }
             _ => {
                 let updates = b.state.lock().unwrap().step(&msg, &at);
+                b.record(driver.config.shadow, &updates);
+                let ended = ends_turn(&updates);
                 driver.emit(updates);
+                if ended && driver.config.shadow {
+                    tokio::spawn(shadow_turn(driver.clone(), b.clone()));
+                }
             }
         }
     }
@@ -627,6 +761,8 @@ fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUp
 
 /// Marks a ref from `binding/fork`: resuming it forks the harness session (`--fork-session`).
 pub const FORK_PREFIX: &str = "fork:";
+/// Separates a fork ref's session id from the message it resumes at.
+pub const FORK_AT: &str = "@";
 
 /// The `claude` agent as `agent/list` reports it.
 pub fn agent() -> Agent {
@@ -641,7 +777,7 @@ pub fn agent() -> Agent {
     features.insert("session.fork".into(), json!({"at": ["turn"]}));
     features.insert(
         "session.subagents".into(),
-        json!({"prompt": false, "cancel": false}),
+        json!({"prompt": false, "cancel": true}),
     );
     Agent {
         id: parrot_proto::driver_data::agent_id("claude"),
@@ -680,12 +816,17 @@ pub const VERIFIED: (&str, &str) = ("2.1.0", "2.2.0");
 /// skills and MCP server names. What can't be found out is left out.
 pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
     use parrot_driver::probe;
+    // The version picks the version shim, so it is read before the options are built.
+    let version = probe::version(bin).await;
+    if let Some(v) = &version {
+        crate::data::observe_version(v);
+    }
     let mut a = agent();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let config = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(std::path::PathBuf::from)
         .or_else(|| home.as_ref().map(|h| h.join(".claude")));
-    match probe::version(bin).await {
+    match version {
         Some(v) => {
             a.harness = Some(parrot_proto::agent::HarnessInfo {
                 verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
@@ -701,9 +842,19 @@ pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
     let credentials = config
         .as_ref()
         .is_some_and(|c| c.join(".credentials.json").is_file());
-    if credentials || std::env::var_os("ANTHROPIC_API_KEY").is_some() {
-        a.auth = AuthStatus::SignedIn;
-    }
+    // `claude auth status` also sees a sign-in kept in the OS keychain, where no credentials
+    // file exists. Only `loggedIn` is read, so the account's details stay out of the driver.
+    let status = probe::run(bin, &["auth", "status", "--json"])
+        .await
+        .and_then(|o| serde_json::from_str::<Value>(o.stdout.trim()).ok())
+        .and_then(|v| v.get("loggedIn").and_then(Value::as_bool));
+    a.auth = match status {
+        _ if std::env::var_os("ANTHROPIC_API_KEY").is_some() => AuthStatus::SignedIn,
+        Some(true) => AuthStatus::SignedIn,
+        Some(false) => AuthStatus::SignedOut,
+        None if credentials => AuthStatus::SignedIn,
+        None => a.auth,
+    };
     let mut meta = Map::new();
     if let Some(c) = &config {
         let skills = probe::folders_with(&c.join("skills"), "SKILL.md");

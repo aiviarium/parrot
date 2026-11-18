@@ -2,6 +2,7 @@
 
 pub mod bin;
 pub mod correlate;
+pub mod data;
 pub mod host;
 pub mod paths;
 pub mod probe;

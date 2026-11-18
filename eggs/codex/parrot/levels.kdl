@@ -26,3 +26,11 @@ map level="sandboxed" network=#false {
   when sandbox="workspace-write" approvalPolicy="never"
 }
 
+
+// Under a ceiling, the user's config.toml can't loosen what Parrot sets: approvals go to the
+// person, the workspace sandbox has no network, and web search (a host tool) is off.
+pin {
+  arg "-c" "approvals_reviewer=\"user\""
+  arg "-c" "sandbox_workspace_write.network_access=false"
+  arg "-c" "web_search=\"disabled\""
+}

@@ -25,9 +25,37 @@ pub async fn version(bin: &OsStr) -> Option<String> {
     version_in(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// What a CLI subcommand printed, such as `claude auth status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Output {
+    /// The exit code; `None` when a signal ended it.
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Runs `bin args…` with no input and returns what it printed, or `None` when it can't run or
+/// takes longer than five seconds. Status commands print no secrets, and nothing here logs them.
+pub async fn run(bin: &OsStr, args: &[&str]) -> Option<Output> {
+    let run = tokio::process::Command::new(bin)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .ok()?
+        .ok()?;
+    Some(Output {
+        code: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
 /// The first word of `text` that looks like `major.minor.patch`.
 pub fn version_in(text: &str) -> Option<String> {
-    text.split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+    text.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '/' | ';'))
         .map(|w| w.trim_start_matches('v'))
         .find(|w| {
             let parts: Vec<&str> = w.split('.').collect();
@@ -115,6 +143,10 @@ mod tests {
         assert_eq!(version_in("2.1.327 (Claude Code)").as_deref(), Some("2.1.327"));
         assert_eq!(version_in("codex-cli 0.167.1").as_deref(), Some("0.167.1"));
         assert_eq!(version_in("nothing here"), None);
+        assert_eq!(
+            version_in("parrot/0.167.1 (Ubuntu 26.4.0; x86_64)").as_deref(),
+            Some("0.167.1")
+        );
         assert!(in_range("2.1.327", "2.1.0", "2.2.0"));
         assert!(!in_range("2.2.0", "2.1.0", "2.2.0"));
     }

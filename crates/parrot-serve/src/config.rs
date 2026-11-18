@@ -27,6 +27,15 @@ pub struct Config {
 }
 
 /// One agent under TUI control.
+/// `transcript` of a TUI agent: `claude`, `codex` or `jsonl`, with an optional folder.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptConfig {
+    pub format: String,
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TuiAgent {
@@ -38,9 +47,12 @@ pub struct TuiAgent {
     pub name: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// A folder whose newest `.jsonl` is the transcript; `"claude"` for Claude Code's own folder.
+    /// The harness's transcript: its format and, if not the format's own, its folder.
     #[serde(default)]
-    pub transcript: Option<String>,
+    pub transcript: Option<TranscriptConfig>,
+    /// How the harness takes the `parrot` MCP server: `mcp-config` or `config-override`.
+    #[serde(default)]
+    pub mcp: Option<String>,
     /// Milliseconds an unmatched screen is held before it is `unrecognised`.
     #[serde(default)]
     pub unrecognised_after_ms: Option<u64>,
