@@ -9,7 +9,7 @@ use crate::{CallOwner, Cx, Effect, Reply, principals};
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default)]
 pub struct Functions {
@@ -159,6 +159,40 @@ fn check_spec(spec: &Value) -> Result<(String, String), RpcError> {
     ))
 }
 
+/// The pinned provided functions, by name, with their specs as text to compare.
+fn pinned(state: &crate::State) -> BTreeMap<String, String> {
+    state
+        .functions
+        .provided
+        .iter()
+        .filter(|(_, (_, spec))| spec["pinned"] == true)
+        .map(|((name, env), (_, spec))| (format!("{name}@{env}"), spec.to_string()))
+        .collect()
+}
+
+/// Tells each session with an MCP server that the pinned functions changed (spec 26), so the
+/// server lists them again.
+fn pinned_changed(cx: &mut Cx, before: &BTreeMap<String, String>) {
+    let after = pinned(cx.state);
+    if &after == before {
+        return;
+    }
+    let names: BTreeSet<String> = after
+        .keys()
+        .filter_map(|k| k.split('@').next().map(str::to_string))
+        .collect();
+    let sessions: BTreeSet<String> = cx
+        .state
+        .functions
+        .tokens
+        .values()
+        .filter_map(|b| crate::directory::session_of(cx.state, b))
+        .collect();
+    for session in sessions {
+        cx.publish(Some(session), json!({ "type": "functions", "pinned": names }));
+    }
+}
+
 /// Replace a connection's provided functions (spec 25.2).
 pub fn provide(cx: &mut Cx, conn: &str, specs: &[Value]) -> Result<(), RpcError> {
     let mut keys = Vec::new();
@@ -180,10 +214,12 @@ pub fn provide(cx: &mut Cx, conn: &str, specs: &[Value]) -> Result<(), RpcError>
         }
         keys.push((key, spec.clone()));
     }
+    let before = pinned(cx.state);
     cx.state.functions.provided.retain(|_, (owner, _)| owner != conn);
     for (key, spec) in keys {
         cx.state.functions.provided.insert(key, (conn.to_string(), spec));
     }
+    pinned_changed(cx, &before);
     Ok(())
 }
 
@@ -869,7 +905,9 @@ pub fn on_client_reply(cx: &mut Cx, _conn: &str, call: u64, result: Result<Value
 
 /// A connection closed: its functions go away, and calls waiting on it fail.
 pub fn disconnected(cx: &mut Cx, conn: &str) {
+    let before = pinned(cx.state);
     cx.state.functions.provided.retain(|_, (owner, _)| owner != conn);
+    pinned_changed(cx, &before);
 }
 
 #[cfg(test)]

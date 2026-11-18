@@ -7917,6 +7917,26 @@
             "kind",
             "id"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "functions"
+            },
+            "pinned": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "pinned"
+          ],
+          "description": "The pinned functions changed, so an MCP listing built from them is stale (spec 26)."
         }
       ]
     },

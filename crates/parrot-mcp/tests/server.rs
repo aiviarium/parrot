@@ -15,9 +15,11 @@ const CHILD: &str = "ses_01FAKECHILD00000000000000";
 const TOKEN: &str = "tok-made-up-secret";
 
 type Calls = Arc<Mutex<Vec<(String, Value)>>>;
+/// Pinned functions the fake lists beyond its fixed ones; a test adds one to stand for a provide.
+type Extra = Arc<Mutex<Vec<Value>>>;
 
 /// A fake runtime: answers the methods the server uses and records every call.
-fn fake_runtime(stream: DuplexStream, calls: Calls) -> mpsc::UnboundedSender<Value> {
+fn fake_runtime(stream: DuplexStream, calls: Calls, extra: Extra) -> mpsc::UnboundedSender<Value> {
     let (r, mut w) = tokio::io::split(stream);
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     tokio::spawn(async move {
@@ -61,13 +63,17 @@ fn fake_runtime(stream: DuplexStream, calls: Calls) -> mpsc::UnboundedSender<Val
                     json!({ "result": { "items": [{ "id": "itm_1", "kind": "assistant", "text": "hello" }] } })
                 }
                 "subscribe" => json!({ "result": { "subscription": "sub_FAKE", "head": 1 } }),
-                "function/list" => json!({ "result": { "functions": [
-                    { "name": "acme.notes.add", "description": "Add a note", "pinned": true, "effects": ["write"], "provider": "con_X",
-                      "input": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
-                      "output": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } },
-                    { "name": "acme.deploy.run", "description": "Deploy the site", "effects": ["destructive"], "provider": "con_X",
-                      "input": { "type": "object" }, "output": { "type": "object" } },
-                ]}}),
+                "function/list" => {
+                    let mut functions = vec![
+                        json!({ "name": "acme.notes.add", "description": "Add a note", "pinned": true, "effects": ["write"], "provider": "con_X",
+                          "input": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] },
+                          "output": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } }),
+                        json!({ "name": "acme.deploy.run", "description": "Deploy the site", "effects": ["destructive"], "provider": "con_X",
+                          "input": { "type": "object" }, "output": { "type": "object" } }),
+                    ];
+                    functions.extend(extra.lock().unwrap().iter().cloned());
+                    json!({ "result": { "functions": functions } })
+                }
                 "function/search" => json!({ "result": { "functions": [
                     { "name": "acme.deploy.run", "description": "Deploy the site", "effects": ["destructive"], "provider": "con_X",
                       "input": { "type": "object" } },
@@ -106,6 +112,7 @@ struct Harness {
     to_server: WriteHalf<DuplexStream>,
     from_server: Lines<BufReader<ReadHalf<DuplexStream>>>,
     calls: Calls,
+    extra: Extra,
     runtime: mpsc::UnboundedSender<Value>,
     next: u64,
 }
@@ -114,7 +121,8 @@ impl Harness {
     async fn start(config: Config) -> Harness {
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let calls = Calls::default();
-        let runtime = fake_runtime(theirs, calls.clone());
+        let extra = Extra::default();
+        let runtime = fake_runtime(theirs, calls.clone(), extra.clone());
         let (r, w) = tokio::io::split(ours);
         let (up, notes) = Upstream::spawn(r, w);
         let auth = Auth {
@@ -131,6 +139,7 @@ impl Harness {
             to_server: cw,
             from_server: BufReader::new(cr).lines(),
             calls,
+            extra,
             runtime,
             next: 1,
         }
@@ -448,7 +457,7 @@ async fn scope_change_sends_list_changed() {
 #[tokio::test]
 async fn a_wrong_token_fails_the_handshake() {
     let (ours, theirs) = tokio::io::duplex(1 << 16);
-    fake_runtime(theirs, Calls::default());
+    fake_runtime(theirs, Calls::default(), Extra::default());
     let (r, w) = tokio::io::split(ours);
     let (up, _notes) = Upstream::spawn(r, w);
     let auth = Auth {
@@ -459,5 +468,59 @@ async fn a_wrong_token_fails_the_handshake() {
     assert!(
         !err.contains("wrong"),
         "the error must not echo the credential: {err}"
+    );
+}
+
+#[tokio::test]
+async fn a_provided_pinned_function_sends_list_changed() {
+    let mut h = Harness::start(Config::default()).await;
+    let _ = h.request("ping", json!({})).await;
+    h.extra.lock().unwrap().push(json!({
+        "name": "acme.notes.find", "description": "Find notes", "pinned": true, "effects": ["read"],
+        "provider": "con_X", "input": { "type": "object" }, "output": { "type": "object" },
+    }));
+    h.runtime
+        .send(json!({ "jsonrpc": "2.0", "method": "update", "params": {
+            "subscription": "sub_FAKE", "seq": 3, "at": "2026-01-01T00:00:00Z", "session": SESSION,
+            "update": { "type": "functions", "pinned": ["acme.notes.add", "acme.notes.find"] },
+        }}))
+        .unwrap();
+    let note = h.line().await;
+    assert_eq!(note["method"], "notifications/tools/list_changed");
+    let names = list_all(&mut h).await;
+    assert!(names.contains(&"acme__notes__find".to_string()), "{names:?}");
+
+    // The same listing again sends nothing; the next line is the ping's answer.
+    h.runtime
+        .send(json!({ "jsonrpc": "2.0", "method": "update", "params": {
+            "subscription": "sub_FAKE", "seq": 4, "at": "2026-01-01T00:00:01Z", "session": SESSION,
+            "update": { "type": "functions", "pinned": ["acme.notes.add", "acme.notes.find"] },
+        }}))
+        .unwrap();
+    let pong = h.request("ping", json!({})).await;
+    assert!(pong.get("result").is_some(), "{pong}");
+}
+
+#[tokio::test]
+async fn bad_arguments_fail_locally_with_the_path() {
+    let mut h = Harness::start(Config::default()).await;
+    let (body, is_error) = h.tool("acme__notes__add", json!({ "text": 7 })).await;
+    assert!(is_error);
+    assert_eq!(body["error"]["code"], "invalid_input", "{body}");
+    assert_eq!(
+        body["error"]["message"], "input.text: expected string, got integer",
+        "{body}"
+    );
+    let (body, is_error) = h
+        .tool(
+            "parrot__functions__call",
+            json!({ "function": "acme.notes.add", "input": {} }),
+        )
+        .await;
+    assert!(is_error);
+    assert_eq!(body["error"]["message"], "input.text: is required", "{body}");
+    assert!(
+        h.calls_of("function/call").is_empty(),
+        "a bad call reached the runtime"
     );
 }

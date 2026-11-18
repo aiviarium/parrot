@@ -573,6 +573,7 @@ type Update =
   | { type: "env"; env: Environment }                   // index
   | { type: "workspace"; workspace: Workspace }         // index
   | { type: "deleted"; kind: "session" | "workspace"; id: string }   // index
+  | { type: "functions"; pinned: string[] }             // sessions with an MCP server (26)
 ```
 
 - Only items are patched; everything else is sent whole.
@@ -1331,7 +1332,11 @@ interface FunctionResult {
   - `parrot__functions__search`, `parrot__functions__describe` and `parrot__functions__call`, which
     reach every other function the session may call without listing it.
 - The listing changes only when the session's scopes or ceiling change, or a pinned function is
-  provided or removed; the server then sends `notifications/tools/list_changed`.
+  provided or removed. The runtime then sends a `functions` update on the stream of each session
+  with an MCP server, and the server sends `notifications/tools/list_changed` once its listing has
+  changed.
+- The server checks arguments against the input schema of a tool it lists before calling, and a
+  bad call returns `invalid_input` with the path of the first problem.
 - Without `functions.mcp`, the session has no functions; tasks complete on `idle`.
 
 ## 27. Calls from harness code

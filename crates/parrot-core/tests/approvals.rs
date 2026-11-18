@@ -287,3 +287,56 @@ fn the_wait_follows_the_harness_tool_timeout_from_its_egg() {
         .unwrap();
     assert_eq!(r["error"]["code"], "pending_approval", "{r}");
 }
+
+#[test]
+fn providing_a_pinned_function_tells_sessions_with_an_mcp_server() {
+    let mut sim = Sim::new();
+    sim.core.state.functions.mcp = Some("parrot".into());
+    sim.connect("con_o", json!([]));
+    let (r, _) = sim.call(
+        "con_o",
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" } }),
+    );
+    // session/new subscribes its caller to the session.
+    r.unwrap();
+    let functions_updates = |effects: &[Effect]| -> Vec<Value> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Notify { params, .. } if params["update"]["type"] == "functions" => {
+                    Some(params["update"].clone())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let mut pinned = spec("acme.notes.add", "write", json!(["write"]));
+    pinned["pinned"] = json!(true);
+
+    sim.connect("con_p", json!([]));
+    let (r, effects) = sim.call(
+        "con_p",
+        "function/provide",
+        json!({ "functions": [pinned.clone()] }),
+    );
+    r.unwrap();
+    let updates = functions_updates(&effects);
+    assert_eq!(
+        updates,
+        vec![json!({ "type": "functions", "pinned": ["acme.notes.add"] })]
+    );
+
+    // The same set again changes nothing; an unpinned function is not announced.
+    let (_, effects) = sim.call(
+        "con_p",
+        "function/provide",
+        json!({ "functions": [pinned, spec("acme.peek", "read", json!(["read"]))] }),
+    );
+    assert!(functions_updates(&effects).is_empty());
+
+    // The provider leaving takes the pinned function away.
+    let effects = sim.core.handle(Input::Disconnected { conn: "con_p".into() });
+    let updates = functions_updates(&effects);
+    assert_eq!(updates, vec![json!({ "type": "functions", "pinned": [] })]);
+}

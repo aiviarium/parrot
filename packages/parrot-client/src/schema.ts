@@ -1998,6 +1998,10 @@ export type Update =
       kind: DeletedKind
       id: string
     }
+  | {
+      type: "functions"
+      pinned: string[]
+    }
 
 /** Params of the `update` notification. */
 export interface UpdateParams {
