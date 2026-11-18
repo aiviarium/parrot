@@ -128,7 +128,9 @@ fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let params = if params.is_null() { json!({}) } else { params };
     let p: ActionListParams = serde_json::from_value(params).map_err(|e| invalid(e.to_string()))?;
     let actions = match &p.session {
-        Some(s) if cx.state.sessions.by_id.contains_key(s) => actions_of(cx.state, s),
+        Some(s) if cx.state.sessions.by_id.contains_key(s) && crate::principals::sees(cx.state, conn, s) => {
+            actions_of(cx.state, s)
+        }
         Some(s) => return Err(RpcError::new(-32002, format!("no session {s}"))),
         None => Vec::new(),
     };
@@ -141,7 +143,7 @@ fn invoke(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
         return Err(RpcError::new(-32001, "only session actions are supported")
             .with_data(json!({ "feature": "action.agent" })));
     };
-    if !cx.state.sessions.by_id.contains_key(&session) {
+    if !cx.state.sessions.by_id.contains_key(&session) || !crate::principals::sees(cx.state, conn, &session) {
         return Err(RpcError::new(-32002, format!("no session {session}")));
     }
     let Some(action) = actions_of(cx.state, &session)

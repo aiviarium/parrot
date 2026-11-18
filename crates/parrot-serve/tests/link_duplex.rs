@@ -125,7 +125,7 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
     let invite = s
         .ok(
             "link/invite",
-            json!({ "name": "laptop", "grant": ["read", "workspace"] }),
+            json!({ "name": "laptop", "grant": ["read", "workspace"], "offer": { "env": true, "sessions": "linked" } }),
         )
         .await;
     let code = InviteCode::parse(invite["code"].as_str().unwrap()).unwrap();
@@ -277,4 +277,129 @@ async fn a_link_without_the_workspace_scope_cannot_send_a_workspace() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(!server.root.join(&workspace).exists());
+}
+
+/// Pairs `laptop` with an invite of `server` over a duplex that the laptop takes for `kind`.
+async fn pair(laptop: &Side, server: &Side, invite: Value, kind: &str) {
+    let mut s = Client::connect(server).await;
+    let invite = s.ok("link/invite", invite).await;
+    let code = InviteCode::parse(invite["code"].as_str().unwrap()).unwrap();
+    let (near, far) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(server.hub.clone().accept(far));
+    let channel = Channel {
+        stream: Box::new(near),
+        kind: kind.into(),
+        containment: Containment::Shell,
+        max_message: 65_535,
+        stderr: None,
+    };
+    let carrier: CarrierRef = serde_json::from_value(json!({ "kind": "none", "target": {} })).unwrap();
+    laptop
+        .hub
+        .clone()
+        .pair_on(&json!({ "name": "server" }), carrier, channel, &code)
+        .await
+        .unwrap();
+}
+
+/// The laptop's containment of its one link once it is `want`, or after `wait`.
+async fn containment(laptop: &Side, want: &str, wait: Duration) -> Value {
+    let mut l = Client::connect(laptop).await;
+    let deadline = Instant::now() + wait;
+    loop {
+        let links = l.ok("link/list", json!({})).await;
+        let link = links["links"][0].clone();
+        if (link["status"] == "connected" && link["containment"] == want) || Instant::now() > deadline {
+            return link["containment"].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ssh_link_to_a_restricted_key_is_not_a_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let laptop = side(dir.path(), "laptop", 7);
+    let server = side(dir.path(), "server", 8);
+    let invite = json!({ "name": "laptop", "grant": ["read"], "authorizedKey": true });
+    pair(&laptop, &server, invite, "ssh").await;
+    assert_eq!(
+        containment(&laptop, "restricted", Duration::from_secs(20)).await,
+        "restricted"
+    );
+    // The server's record keeps the flag to itself.
+    let mut s = Client::connect(&server).await;
+    let links = s.ok("link/list", json!({})).await;
+    assert!(links["links"][0].get("restrictedKey").is_none(), "{links}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ssh_link_to_an_unrestricted_key_stays_a_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let laptop = side(dir.path(), "laptop", 9);
+    let server = side(dir.path(), "server", 10);
+    pair(
+        &laptop,
+        &server,
+        json!({ "name": "laptop", "grant": ["read"] }),
+        "ssh",
+    )
+    .await;
+    // Long enough for the server's `initialize` to have arrived.
+    assert_eq!(
+        containment(&laptop, "restricted", Duration::from_secs(2)).await,
+        "shell"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pairing_fails_over_to_a_fallback_and_says_which_one_it_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let laptop = side(dir.path(), "laptop", 11);
+    let server = side(dir.path(), "server", 12);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    tokio::spawn(parrot_serve::link_hub::serve_link_tcp(
+        server.hub.clone(),
+        listener,
+    ));
+    let mut s = Client::connect(&server).await;
+    let invite = s
+        .ok("link/invite", json!({ "name": "laptop", "grant": ["read"] }))
+        .await;
+    // The first carrier opens but never reaches the peer; the TCP fallback does.
+    let mut l = Client::connect(&laptop).await;
+    let added = l
+        .ok(
+            "link/add",
+            json!({
+                "name": "server",
+                "code": invite["code"],
+                "grant": ["read"],
+                "offer": { "env": false, "sessions": "none" },
+                "carrier": {
+                    "kind": "command",
+                    "target": { "argv": ["sh", "-c", "exit 0"] },
+                    "fallback": [{ "kind": "tcp", "target": { "address": address } }],
+                },
+            }),
+        )
+        .await;
+    assert_eq!(added["link"]["status"], "connected", "{added}");
+    assert_eq!(added["link"]["via"], "tcp (fallback 1)", "{added}");
+}
+
+#[test]
+fn backoff_doubles_from_one_second_to_five_minutes() {
+    use parrot_serve::link_hub::{MAX_BACKOFF, MIN_BACKOFF, next_backoff};
+    let mut b = MIN_BACKOFF;
+    let mut waits = vec![b];
+    for _ in 0..12 {
+        b = next_backoff(b);
+        waits.push(b);
+    }
+    assert_eq!(waits[1], Duration::from_secs(2));
+    assert_eq!(waits[8], Duration::from_secs(256));
+    assert_eq!(*waits.last().unwrap(), MAX_BACKOFF);
+    assert_eq!(MAX_BACKOFF, Duration::from_secs(300));
 }

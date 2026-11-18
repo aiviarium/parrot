@@ -350,3 +350,31 @@ async fn carrier_egg_answers_ready_then_carries_bytes() {
     let (index, _) = carriers.open_with_fallback(&with_fallback).await.unwrap();
     assert_eq!(index, 1);
 }
+
+/// A message-based carrier delivers each message whole, so both sides keep to the dialer's limit.
+#[tokio::test]
+async fn the_accepting_side_keeps_to_the_dialers_message_limit() {
+    let p = Pair::new();
+    p.b_pins.pin(p.a.public());
+    let (ca, cb) = tokio::io::duplex(1 << 16);
+    let listener = p.listener();
+    let dialer = Dialer::new(p.a.clone()).max_message(4096);
+    let b_public = p.b.public();
+    let (a, b) = tokio::join!(dialer.dial(ca, &b_public), listener.accept(cb));
+    let (mut a, mut b) = (a.unwrap(), b.unwrap());
+    let small = parrot_link::frame::part_len(4096);
+    assert_eq!(a.writer.part_len(), small);
+    assert_eq!(b.writer.part_len(), small);
+    // A message larger than one part still arrives whole.
+    let big = vec![b'x'; 20_000];
+    b.send(&big).await.unwrap();
+    assert_eq!(a.recv().await.unwrap(), Some(big));
+
+    // Without a limit from the dialer, the listener uses the full Noise message.
+    let (ca, cb) = tokio::io::duplex(1 << 16);
+    let (dialer, listener) = (Dialer::new(p.a.clone()), p.listener());
+    let (a, b) = tokio::join!(dialer.dial(ca, &b_public), listener.accept(cb));
+    let full = parrot_link::frame::part_len(parrot_link::frame::NOISE_MAX);
+    assert_eq!(b.unwrap().writer.part_len(), full);
+    assert_eq!(a.unwrap().writer.part_len(), full);
+}

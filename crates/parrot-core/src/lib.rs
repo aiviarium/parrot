@@ -36,7 +36,7 @@ pub mod restore;
 
 pub use clock::{Clock, Ids};
 pub use effect::Effect;
-pub use input::{BindingId, ConnId, Input, Peer, Restore, Stored};
+pub use input::{BindingId, ConnId, Input, LinkOffer, OfferedSessions, Peer, Restore, Stored};
 pub use state::{CallOwner, State};
 
 use parrot_proto::rpc::RpcError;

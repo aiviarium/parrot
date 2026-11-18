@@ -73,6 +73,10 @@ const METHODS: &[&str] = &[
     "link/update",
     "link/remove",
     "carrier/list",
+    "blob/put",
+    "session/offer",
+    "session/commit",
+    "workspace/receive",
 ];
 
 #[tokio::test]
