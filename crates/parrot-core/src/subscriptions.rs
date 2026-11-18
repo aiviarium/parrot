@@ -284,10 +284,12 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
                 .unwrap_or_else(|_| json!({ "sessions": [] }));
             // A link that doesn't offer the environment sees neither it nor its agents (24.1).
             let env = crate::principals::env_offered(cx.state, conn);
+            let mut envs: Vec<Value> = env.then(|| sessions::env_json(cx.state)).into_iter().collect();
+            envs.extend(crate::links::peer_envs(cx, conn));
             let mut index = json!({
                 "sessions": listed["sessions"],
                 "agents": if env { json!(sessions::agents(cx.state)) } else { json!([]) },
-                "envs": if env { json!([sessions::env_json(cx.state)]) } else { json!([]) },
+                "envs": envs,
             });
             if let Some(next) = listed.get("next") {
                 index["next"] = next.clone();

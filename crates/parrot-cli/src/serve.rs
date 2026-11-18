@@ -119,8 +119,11 @@ pub async fn run(
     notifier.url = config.notify_url.clone();
     let tui = config.tui.clone();
     let tokens = Arc::new(
-        parrot_serve::tokens::TokenStore::open(dir.join("tokens.json"))
-            .map_err(|e| format!("cannot read the tokens: {e}"))?,
+        parrot_serve::tokens::TokenStore::with_store(
+            Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?,
+            Some(dir.join("tokens.json")),
+        )
+        .map_err(|e| format!("cannot read the tokens: {e}"))?,
     );
     let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
@@ -205,6 +208,11 @@ async fn serve_link_local(
     let path = parrot_link::endpoint::link_socket_path(socket);
     let listener = parrot_link::endpoint::bind_link_socket(&path)
         .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    // Carrier eggs that listen hand their inbound channels to this endpoint.
+    match std::env::current_exe() {
+        Ok(parrot) => hub.start_listeners(socket.to_path_buf(), parrot),
+        Err(e) => eprintln!("parrot: cannot start listening carriers: {e}"),
+    }
     parrot_serve::link_hub::serve_link_socket(hub, listener)
         .await
         .map_err(|e| format!("link socket: {e}"))

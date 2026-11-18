@@ -107,7 +107,7 @@ pub(crate) fn call(
         "session" | "env" | "workspace" => sessions::call(cx, conn, id, method, params),
         "agent" => agents::call(cx, conn, id, method, params),
         "task" => tasks::call(cx, conn, id, method, params),
-        "link" | "carrier" | "blob" => links::call(cx, conn, id, method, params),
+        "link" | "carrier" | "blob" | "update" => links::call(cx, conn, id, method, params),
         "function" => functions::call(cx, conn, id, method, params),
         "queue" => queue::call(cx, conn, id, method, params),
         "subscribe" | "unsubscribe" | "item" => subscriptions::call(cx, conn, id, method, params),

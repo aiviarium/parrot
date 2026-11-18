@@ -34,6 +34,8 @@ pub struct Links {
     pub peers: BTreeMap<String, PeerInfo>,
     /// Sessions this runtime moved away, with the runtime that owns them now.
     pub moved: BTreeMap<String, String>,
+    /// The link each moved session went over.
+    pub moved_via: BTreeMap<String, String>,
     /// Sessions another runtime owns, reached through a link, by session id.
     pub remote: BTreeMap<String, String>,
     /// Calls waiting for the hub or a peer.
@@ -54,6 +56,23 @@ pub struct Links {
     pub waiting: BTreeMap<String, Waiting>,
     /// The disk cap of each link's transfers; 0 means [`LINK_DISK_MAX`].
     pub disk_max: u64,
+    /// Subscriptions of this runtime's clients to sessions a peer owns, by local subscription id.
+    pub forwarded: BTreeMap<String, Forwarded>,
+}
+
+/// A client's subscription to a session a peer owns (spec 10.2, 24.5). The peer's updates are
+/// passed on under the local id; after a drop it is made again with `replayFrom`.
+#[derive(Debug, Clone)]
+pub struct Forwarded {
+    /// The client's connection.
+    pub conn: String,
+    pub link: String,
+    /// The subscription id on the peer, for the current link connection.
+    pub remote: String,
+    /// The `subscribe` params, without `replayFrom`.
+    pub params: Value,
+    /// The peer's `seq` of the last update passed on.
+    pub last: String,
 }
 
 impl Links {
@@ -84,6 +103,8 @@ pub struct Waiting {
 pub struct PeerInfo {
     pub runtime: String,
     pub env: String,
+    /// The link's name, shown as the environment's.
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +118,21 @@ pub enum Pending {
     /// `binding/cancel` of a turn a move waited for; the move goes on once it is answered, or
     /// when the session is idle if that comes first. Stopping the old binding ends what is left.
     Cancel { session: String },
+    /// `session/new` in a peer's environment: the session is the peer's from then on.
+    NewRemote {
+        conn: String,
+        id: Option<RequestId>,
+        link: String,
+    },
+    /// A client's `subscribe` to a session a peer owns.
+    Subscribe {
+        conn: String,
+        id: Option<RequestId>,
+        link: String,
+        params: Value,
+    },
+    /// A forwarded subscription made again after the link reconnected.
+    Resubscribe { local: String, replay: bool },
     /// A chunk written to disk; a failed write spoils its transfer.
     BlobWrite { transfer: String },
     /// Reading an offer's log from disk; the offer is answered after.
@@ -242,6 +278,10 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
             cx.state.links.pending.insert(call, pending);
             Reply::Later
         }
+        "update" => {
+            peer_update(cx, conn, &params);
+            Reply::Now(Ok(json!({})))
+        }
         "blob/put" => Reply::Now(blob_put(cx, conn, params)),
         "session/offer" => offer(cx, conn, id, params),
         "workspace/receive" => receive(cx, conn, id, params),
@@ -259,6 +299,14 @@ pub fn intercept(
     method: &str,
     params: &Value,
 ) -> Option<Reply> {
+    // A peer's updates name the session they are about; they are passed on, not forwarded.
+    if method == "update" {
+        return None;
+    }
+    // A child that moved to the peer reports its task; the session itself redirects (E2).
+    if method == "task/changed" {
+        return Some(Reply::Now(task_changed(cx, conn, params)));
+    }
     // A token limited to some sessions can't make roots (E8).
     if method == "session/new"
         && params.get("parent").is_none_or(Value::is_null)
@@ -279,6 +327,34 @@ pub fn intercept(
         if let Err(e) = offered(&offer, method) {
             return Some(Reply::Now(Err(e)));
         }
+    }
+    if method == "subscribe"
+        && let Some(target) = params.get("target")
+        && let Some(s) = target
+            .get("session")
+            .or(target.get("tree"))
+            .and_then(Value::as_str)
+        && let Some(link) = cx.state.links.remote.get(s).cloned()
+    {
+        if link_of(cx, conn).is_some() {
+            return Some(Reply::Now(Err(RpcError::new(-32002, "session not found"))));
+        }
+        return Some(forward_subscribe(cx, conn, id, &link, params.clone()));
+    }
+    if method == "unsubscribe"
+        && let Some(sub) = params.get("subscription").and_then(Value::as_str)
+        && cx.state.links.forwarded.get(sub).is_some_and(|f| f.conn == conn)
+    {
+        if let Some(f) = cx.state.links.forwarded.remove(sub) {
+            unsubscribe_peer(cx, &f);
+        }
+        return Some(Reply::Now(Ok(json!({}))));
+    }
+    if method == "session/new"
+        && let Some(env) = params.get("env").and_then(Value::as_str)
+        && env != cx.state.principals.env
+    {
+        return Some(new_remote(cx, conn, id, env, params.clone()));
     }
     if method == "workspace/transfer" {
         return Some(match transfer(cx, conn, id, params) {
@@ -343,6 +419,192 @@ fn offered(offer: &LinkOffer, method: &str) -> Result<(), RpcError> {
         return refuse();
     }
     Ok(())
+}
+
+/// `session/new` in a linked environment: the peer creates the session (spec 24.5).
+fn new_remote(cx: &mut Cx, conn: &str, id: Option<&RequestId>, env: &str, params: Value) -> Reply {
+    if let Err(e) = principals::check(cx.state, conn, Scope::Manage) {
+        return Reply::Now(Err(e));
+    }
+    // No transitivity: a peer creates sessions only in this runtime's own environment.
+    let link = (link_of(cx, conn).is_none())
+        .then(|| {
+            cx.state
+                .links
+                .peers
+                .iter()
+                .find(|(_, p)| p.env == env)
+                .map(|(l, _)| l.clone())
+        })
+        .flatten();
+    let Some(link) = link else {
+        return Reply::Now(Err(RpcError::new(
+            -32002,
+            format!("environment not found: {env}"),
+        )));
+    };
+    // A child on another runtime needs a tree across runtimes, which this runtime doesn't make.
+    if params.get("parent").is_some_and(|p| !p.is_null()) {
+        return Reply::Now(Err(RpcError::new(-32001, "a child in a linked environment")
+            .with_data(json!({ "feature": "tree.remote" }))));
+    }
+    let Some(link_conn) = cx.state.links.conns.get(&link).cloned() else {
+        return Reply::Now(Err(RpcError::new(-32030, "environment offline")));
+    };
+    let call = client_call(cx, &link_conn, "session/new", params);
+    cx.state.links.pending.insert(
+        call,
+        Pending::NewRemote {
+            conn: conn.to_string(),
+            id: id.cloned(),
+            link,
+        },
+    );
+    Reply::Later
+}
+
+fn forward_subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, link: &str, params: Value) -> Reply {
+    if let Err(e) = principals::check(cx.state, conn, Scope::Read) {
+        return Reply::Now(Err(e));
+    }
+    let Some(link_conn) = cx.state.links.conns.get(link).cloned() else {
+        return Reply::Now(Err(RpcError::new(-32030, "environment offline")));
+    };
+    let call = client_call(cx, &link_conn, "subscribe", params.clone());
+    cx.state.links.pending.insert(
+        call,
+        Pending::Subscribe {
+            conn: conn.to_string(),
+            id: id.cloned(),
+            link: link.to_string(),
+            params,
+        },
+    );
+    Reply::Later
+}
+
+/// Keeps a subscription the peer made for this runtime, and gives the client a local id for it.
+fn adopt_subscription(cx: &mut Cx, conn: &str, link: &str, params: Value, result: &mut Value) {
+    let Some(remote) = result["subscription"].as_str().map(str::to_string) else {
+        return;
+    };
+    let local = cx.ids.next("sub");
+    let mut params = params;
+    if let Some(o) = params.as_object_mut() {
+        o.remove("replayFrom");
+    }
+    let last = match &result["head"] {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => "0".into(),
+    };
+    cx.state.links.forwarded.insert(
+        local.clone(),
+        Forwarded {
+            conn: conn.to_string(),
+            link: link.to_string(),
+            remote,
+            params,
+            last,
+        },
+    );
+    result["subscription"] = json!(local);
+}
+
+fn unsubscribe_peer(cx: &mut Cx, f: &Forwarded) {
+    if let Some(link_conn) = cx.state.links.conns.get(&f.link).cloned() {
+        client_call(cx, &link_conn, "unsubscribe", json!({ "subscription": f.remote }));
+    }
+}
+
+/// An `update` from a peer: pass it on to the client whose forwarded subscription it is for.
+fn peer_update(cx: &mut Cx, conn: &str, params: &Value) {
+    let Some(link) = link_of(cx, conn) else { return };
+    let Some(remote) = params["subscription"].as_str() else {
+        return;
+    };
+    let Some((local, f)) = cx
+        .state
+        .links
+        .forwarded
+        .iter_mut()
+        .find(|(_, f)| f.link == link && f.remote == remote)
+    else {
+        return;
+    };
+    let seq = match &params["seq"] {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    };
+    if !seq.is_empty() {
+        f.last = seq;
+    }
+    let mut out = params.clone();
+    out["subscription"] = json!(local);
+    let to = f.conn.clone();
+    cx.emit(Effect::Notify {
+        conn: to,
+        method: "update".into(),
+        params: out,
+    });
+}
+
+/// The link reconnected: make each forwarded subscription again from where it left off.
+fn resubscribe(cx: &mut Cx, link: &str, link_conn: &str) {
+    let again: Vec<(String, Value)> = cx
+        .state
+        .links
+        .forwarded
+        .iter()
+        .filter(|(_, f)| f.link == link)
+        .map(|(l, f)| {
+            let mut p = f.params.clone();
+            p["replayFrom"] = json!(f.last);
+            (l.clone(), p)
+        })
+        .collect();
+    for (local, params) in again {
+        let call = client_call(cx, link_conn, "subscribe", params);
+        cx.state
+            .links
+            .pending
+            .insert(call, Pending::Resubscribe { local, replay: true });
+    }
+}
+
+/// The JSON of a linked environment, online while its link is connected (spec 7, 24.5).
+fn peer_env(cx: &Cx, link: &str, p: &PeerInfo) -> Value {
+    let online = cx.state.links.conns.contains_key(link);
+    json!({
+        "id": p.env,
+        "name": if p.name.is_empty() { link } else { p.name.as_str() },
+        "runtime": p.runtime,
+        "status": if online { "online" } else { "offline" },
+    })
+}
+
+/// The linked environments a connection sees: none for a link's peer (no transitivity).
+pub fn peer_envs(cx: &Cx, conn: &str) -> Vec<Value> {
+    if link_of(cx, conn).is_some() {
+        return Vec::new();
+    }
+    cx.state
+        .links
+        .peers
+        .iter()
+        .filter(|(_, p)| !p.env.is_empty())
+        .map(|(l, p)| peer_env(cx, l, p))
+        .collect()
+}
+
+fn publish_env(cx: &mut Cx, link: &str) {
+    if let Some(p) = cx.state.links.peers.get(link).cloned()
+        && !p.env.is_empty()
+    {
+        let env = peer_env(cx, link, &p);
+        cx.publish(None, json!({ "type": "env", "env": env }));
+    }
 }
 
 fn forward(
@@ -1206,6 +1468,8 @@ pub fn connected(cx: &mut Cx, conn: &str, link: &str) {
     for id in cx.state.links.outbox_ids.remove(link).unwrap_or_default() {
         cx.persist(json!({ "op": "delete", "kind": "outbox", "id": id }));
     }
+    resubscribe(cx, link, conn);
+    publish_env(cx, link);
 }
 
 /// Puts back what links persisted, after a restart (spec 34): redirects of moved sessions and
@@ -1216,11 +1480,27 @@ pub fn restore(cx: &mut Cx, kind: &str, id: &str, value: &Value) {
             if let Some(runtime) = value["runtime"].as_str() {
                 cx.state.links.moved.insert(id.to_string(), runtime.to_string());
             }
+            if let Some(link) = value["link"].as_str() {
+                cx.state.links.moved_via.insert(id.to_string(), link.to_string());
+            }
         }
         "arrived" => {
             if let Some(link) = value["link"].as_str() {
                 cx.state.links.arrived.insert(id.to_string(), link.to_string());
             }
+        }
+        "remote" => {
+            if let Some(link) = value["link"].as_str() {
+                cx.state.links.remote.insert(id.to_string(), link.to_string());
+            }
+        }
+        "peer" => {
+            let info = PeerInfo {
+                runtime: value["runtime"].as_str().unwrap_or_default().to_string(),
+                env: value["env"].as_str().unwrap_or_default().to_string(),
+                name: value["name"].as_str().unwrap_or_default().to_string(),
+            };
+            cx.state.links.peers.insert(id.to_string(), info);
         }
         "outbox" => {
             let (Some(link), Some(method)) = (value["link"].as_str(), value["method"].as_str()) else {
@@ -1246,7 +1526,32 @@ pub fn restore(cx: &mut Cx, kind: &str, id: &str, value: &Value) {
 
 /// A link connection closed.
 pub fn disconnected(cx: &mut Cx, conn: &str) {
+    let dropped: Vec<String> = cx
+        .state
+        .links
+        .conns
+        .iter()
+        .filter(|(_, c)| *c == conn)
+        .map(|(l, _)| l.clone())
+        .collect();
     cx.state.links.conns.retain(|_, c| c != conn);
+    // The environment shows offline while its link is down; forwarded subscriptions wait for it.
+    for link in dropped {
+        publish_env(cx, &link);
+    }
+    let gone: Vec<String> = cx
+        .state
+        .links
+        .forwarded
+        .iter()
+        .filter(|(_, f)| f.conn == conn)
+        .map(|(l, _)| l.clone())
+        .collect();
+    for local in gone {
+        if let Some(f) = cx.state.links.forwarded.remove(&local) {
+            unsubscribe_peer(cx, &f);
+        }
+    }
 }
 
 /// Send a notification to a peer, or keep it in the link's outbox until it connects (E2).
@@ -1281,6 +1586,65 @@ pub fn notify_peer(cx: &mut Cx, link: &str, method: &str, mut params: Value) {
     }
 }
 
+/// A session that moved here, whose parent stayed on the runtime it came from, sends each change
+/// of its task there. While the link is down the changes wait in the link's outbox (E2).
+pub fn child_changed(cx: &mut Cx, session: &str, status: &str, task: &Value) {
+    let Some(link) = cx.state.links.arrived.get(session).cloned() else {
+        return;
+    };
+    let Some(parent) = cx
+        .state
+        .sessions
+        .by_id
+        .get(session)
+        .and_then(|r| r.parent.clone())
+    else {
+        return;
+    };
+    if cx.state.sessions.by_id.contains_key(&parent) {
+        return;
+    }
+    notify_peer(
+        cx,
+        &link,
+        "task/changed",
+        json!({ "session": session, "parent": parent, "status": status, "task": task }),
+    );
+}
+
+/// `task/changed` from a peer: a child this runtime moved to it changed its task. It counts as
+/// the child's own change here, so waits, wakes and budgets of the parent see it.
+fn task_changed(cx: &mut Cx, conn: &str, params: &Value) -> Result<Value, RpcError> {
+    let Some(link) = link_of(cx, conn) else {
+        return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "link" })));
+    };
+    let session = params["session"]
+        .as_str()
+        .ok_or_else(|| RpcError::new(-32602, "session is required"))?;
+    let status = params["status"]
+        .as_str()
+        .ok_or_else(|| RpcError::new(-32602, "status is required"))?;
+    // Only the runtime the child moved to speaks for it.
+    if cx.state.links.moved_via.get(session) != Some(&link) {
+        return Err(RpcError::new(-32002, format!("session not found: {session}")));
+    }
+    let known = [
+        "running",
+        "awaiting",
+        "done",
+        "failed",
+        "cancelled",
+        "interrupted",
+    ];
+    if !known.contains(&status) {
+        return Err(RpcError::new(-32602, "unknown task status"));
+    }
+    let output = params["task"].get("output").filter(|v| !v.is_null()).cloned();
+    let error = params["task"]["error"].as_str().map(str::to_string);
+    crate::tasks::set_status(cx, session, status, output, error);
+    Ok(json!({}))
+}
+
 fn peer_said(cx: &mut Cx, conn: &str, params: &Value) {
     let Some(link) = link_of(cx, conn) else {
         return;
@@ -1288,8 +1652,13 @@ fn peer_said(cx: &mut Cx, conn: &str, params: &Value) {
     let info = PeerInfo {
         runtime: params["runtime"].as_str().unwrap_or_default().to_string(),
         env: params["env"].as_str().unwrap_or_default().to_string(),
+        name: params["name"].as_str().unwrap_or_default().to_string(),
     };
-    cx.state.links.peers.insert(link, info);
+    // Kept, so the environment shows offline after a restart until the link is back.
+    cx.persist(json!({ "op": "put", "kind": "peer", "id": link,
+        "value": { "runtime": info.runtime, "env": info.env, "name": info.name } }));
+    cx.state.links.peers.insert(link.clone(), info);
+    publish_env(cx, &link);
 }
 
 /// A hub or peer reply to a call this module made.
@@ -1303,6 +1672,86 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                 cx.reply(&conn, id, result);
             }
         }
+        Pending::NewRemote { conn, id, link } => {
+            let result = result.map(|mut v| {
+                if let Some(sid) = v
+                    .pointer("/session/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                {
+                    cx.state.links.remote.insert(sid.clone(), link.clone());
+                    cx.persist(
+                        json!({ "op": "put", "kind": "remote", "id": sid, "value": { "link": link } }),
+                    );
+                    let session = sid.clone();
+                    adopt_subscription(
+                        cx,
+                        &conn,
+                        &link,
+                        json!({ "target": { "session": session } }),
+                        &mut v,
+                    );
+                }
+                v
+            });
+            if let Some(id) = id {
+                cx.reply(&conn, id, result);
+            }
+        }
+        Pending::Subscribe {
+            conn,
+            id,
+            link,
+            params,
+        } => {
+            let result = result.map(|mut v| {
+                adopt_subscription(cx, &conn, &link, params, &mut v);
+                v
+            });
+            if let Some(id) = id {
+                cx.reply(&conn, id, result);
+            }
+        }
+        Pending::Resubscribe { local, replay } => match result {
+            Ok(v) => {
+                let Some(f) = cx.state.links.forwarded.get_mut(&local) else {
+                    return;
+                };
+                if let Some(remote) = v["subscription"].as_str() {
+                    f.remote = remote.to_string();
+                }
+                if !replay {
+                    // The gap couldn't be replayed: the client reads the session again (E1).
+                    if let Some(head) = v["head"].as_str() {
+                        f.last = head.to_string();
+                    }
+                    let (to, session) = (f.conn.clone(), f.params["target"]["session"].clone());
+                    cx.emit(Effect::Notify {
+                        conn: to,
+                        method: "update".into(),
+                        params: json!({ "subscription": local, "session": session, "update": {
+                            "type": "notice", "level": "warning", "code": "resync",
+                            "text": "updates were lost while the link was down; read the session again",
+                        } }),
+                    });
+                }
+            }
+            Err(e) if replay && e.code == -32012 => {
+                let Some(f) = cx.state.links.forwarded.get(&local).cloned() else {
+                    return;
+                };
+                if let Some(link_conn) = cx.state.links.conns.get(&f.link).cloned() {
+                    let call = client_call(cx, &link_conn, "subscribe", f.params.clone());
+                    cx.state
+                        .links
+                        .pending
+                        .insert(call, Pending::Resubscribe { local, replay: false });
+                }
+            }
+            Err(_) => {
+                cx.state.links.forwarded.remove(&local);
+            }
+        },
         Pending::LinkUpdate { conn, id } => {
             if let Ok(v) = &result {
                 regrant(cx, &v["link"]);
@@ -1462,6 +1911,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                     .map(|p| p.runtime.clone())
                     .unwrap_or_default();
                 cx.state.links.moved.insert(m.session.clone(), runtime.clone());
+                cx.state.links.moved_via.insert(m.session.clone(), m.link.clone());
                 // The new owner has the queue and the requests; answers here would go nowhere.
                 cx.state.queue.by_session.remove(&m.session);
                 cx.persist(json!({ "op": "delete", "kind": "queue", "id": m.session }));

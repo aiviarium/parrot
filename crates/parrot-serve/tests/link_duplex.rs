@@ -351,3 +351,55 @@ async fn an_ssh_link_to_an_unrestricted_key_stays_a_shell() {
         "shell"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pairing_fails_over_to_a_fallback_and_says_which_one_it_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let laptop = side(dir.path(), "laptop", 11);
+    let server = side(dir.path(), "server", 12);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    tokio::spawn(parrot_serve::link_hub::serve_link_tcp(
+        server.hub.clone(),
+        listener,
+    ));
+    let mut s = Client::connect(&server).await;
+    let invite = s
+        .ok("link/invite", json!({ "name": "laptop", "grant": ["read"] }))
+        .await;
+    // The first carrier opens but never reaches the peer; the TCP fallback does.
+    let mut l = Client::connect(&laptop).await;
+    let added = l
+        .ok(
+            "link/add",
+            json!({
+                "name": "server",
+                "code": invite["code"],
+                "grant": ["read"],
+                "offer": { "env": false, "sessions": "none" },
+                "carrier": {
+                    "kind": "command",
+                    "target": { "argv": ["sh", "-c", "exit 0"] },
+                    "fallback": [{ "kind": "tcp", "target": { "address": address } }],
+                },
+            }),
+        )
+        .await;
+    assert_eq!(added["link"]["status"], "connected", "{added}");
+    assert_eq!(added["link"]["via"], "tcp (fallback 1)", "{added}");
+}
+
+#[test]
+fn backoff_doubles_from_one_second_to_five_minutes() {
+    use parrot_serve::link_hub::{MAX_BACKOFF, MIN_BACKOFF, next_backoff};
+    let mut b = MIN_BACKOFF;
+    let mut waits = vec![b];
+    for _ in 0..12 {
+        b = next_backoff(b);
+        waits.push(b);
+    }
+    assert_eq!(waits[1], Duration::from_secs(2));
+    assert_eq!(waits[8], Duration::from_secs(256));
+    assert_eq!(*waits.last().unwrap(), MAX_BACKOFF);
+    assert_eq!(MAX_BACKOFF, Duration::from_secs(300));
+}

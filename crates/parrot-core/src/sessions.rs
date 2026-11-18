@@ -456,10 +456,11 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         }
         "env/list" => check(cx.state, conn, Scope::Read).map(|()| {
             // A link that doesn't offer the environment sees none (spec 24.1).
-            let envs: Vec<Value> = crate::principals::env_offered(cx.state, conn)
+            let mut envs: Vec<Value> = crate::principals::env_offered(cx.state, conn)
                 .then(|| env_json(cx.state))
                 .into_iter()
                 .collect();
+            envs.extend(crate::links::peer_envs(cx, conn));
             json!({ "envs": envs })
         }),
         _ => Err(RpcError::new(-32601, format!("method not found: {method}"))),
