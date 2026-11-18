@@ -198,7 +198,9 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
     };
     let path = PathBuf::from(moved["workspace"]["path"].as_str().unwrap());
     assert_eq!(path, server.root.join(&workspace), "{moved}");
-    assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "changed\n");
+    // Git on Windows may check the file out with CRLF line endings, as its settings say.
+    let text = std::fs::read_to_string(path.join("a.txt")).unwrap();
+    assert_eq!(text.replace("\r\n", "\n"), "changed\n");
     assert_eq!(moved["workspace"]["branch"], "main", "{moved}");
     let listed = s.ok("workspace/list", json!({})).await;
     assert!(listed.to_string().contains(&workspace), "{listed}");

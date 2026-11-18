@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 pub const OFFER_TTL_MS: u64 = 60_000;
 /// The largest `blob/put` chunk (spec 24.2).
 pub const CHUNK: usize = 1024 * 1024;
+/// The most a link may have in flight across its unfinished transfers. Transfers are held in
+/// memory until they complete, so an authenticated peer must not be able to grow them unbounded.
+pub const LINK_BLOBS_MAX: usize = 256 * CHUNK;
 /// The error code of a session that moved to another runtime.
 pub const MOVED: i64 = -32050;
 
@@ -504,6 +507,21 @@ fn blob_put(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let data = params["data"].as_str().unwrap_or_default();
     if data.len() > CHUNK {
         return Err(RpcError::new(-32602, "a chunk is at most 1 MiB"));
+    }
+    // A resent chunk replaces itself, so it doesn't count twice.
+    let held: usize = cx
+        .state
+        .links
+        .blobs
+        .iter()
+        .filter(|(_, b)| b.link == link)
+        .flat_map(|(t, b)| b.parts.iter().map(move |(i, p)| (t, *i, p.len())))
+        .filter(|(t, i, _)| !(**t == transfer && *i == index))
+        .map(|(_, _, n)| n)
+        .sum();
+    if held + data.len() > LINK_BLOBS_MAX {
+        return Err(RpcError::new(-32004, "transfer too large")
+            .with_data(json!({ "reason": "size", "limit": LINK_BLOBS_MAX })));
     }
     let expires_ms = cx.now_ms + OFFER_TTL_MS;
     let blob = cx.state.links.blobs.entry(transfer).or_insert_with(|| Blob {

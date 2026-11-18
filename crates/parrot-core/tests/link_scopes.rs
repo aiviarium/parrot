@@ -172,3 +172,33 @@ fn a_session_limited_token_sees_only_its_sessions_workspaces() {
     );
     assert_eq!(r, Err(-32002));
 }
+
+#[test]
+fn a_link_cannot_hold_more_than_its_transfer_cap() {
+    let mut sim = Sim::new();
+    sim.connect("con_peer", link(&["read"]));
+    let chunk = "x".repeat(parrot_core::links::CHUNK);
+    let chunks = parrot_core::links::LINK_BLOBS_MAX / parrot_core::links::CHUNK;
+    for index in 0..chunks {
+        let (r, _) = sim.call(
+            "con_peer",
+            "blob/put",
+            json!({ "transfer": "t1", "index": index, "data": chunk }),
+        );
+        assert_eq!(r, Ok(json!({})), "chunk {index}");
+    }
+    // Resending a chunk replaces it, so it still fits.
+    let (r, _) = sim.call(
+        "con_peer",
+        "blob/put",
+        json!({ "transfer": "t1", "index": 0, "data": chunk }),
+    );
+    assert_eq!(r, Ok(json!({})));
+    // Another transfer from the same link would go over the cap.
+    let (r, _) = sim.call(
+        "con_peer",
+        "blob/put",
+        json!({ "transfer": "t2", "index": 0, "data": "y" }),
+    );
+    assert_eq!(r, Err(-32004));
+}

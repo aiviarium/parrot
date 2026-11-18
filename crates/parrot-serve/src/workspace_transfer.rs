@@ -179,7 +179,9 @@ mod tests {
         .unwrap();
         let path = PathBuf::from(got["path"].as_str().unwrap());
         assert_eq!(path, root.path().join("wsp_b"));
-        assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "two\n");
+        // Git on Windows may check the file out with CRLF line endings, as its settings say.
+        let text = std::fs::read_to_string(path.join("a.txt")).unwrap();
+        assert_eq!(text.replace("\r\n", "\n"), "two\n");
 
         for bad in ["../x", "", "a/b"] {
             let e = run(
