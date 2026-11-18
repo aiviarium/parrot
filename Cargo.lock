@@ -1310,6 +1310,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "parrot-conform"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "parrot-core"
 version = "0.1.0"
 dependencies = [
@@ -1395,6 +1404,7 @@ dependencies = [
 name = "parrot-proto"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "schemars",
  "serde",
  "serde_json",

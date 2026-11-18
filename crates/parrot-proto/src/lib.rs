@@ -18,6 +18,7 @@ pub mod principal;
 pub mod prompt;
 pub mod request;
 pub mod rpc;
+pub mod schema;
 pub mod seed;
 pub mod session;
 pub mod state;
