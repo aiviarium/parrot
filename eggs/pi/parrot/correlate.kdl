@@ -1,0 +1,18 @@
+// pi's RPC events are the only source while a binding runs; history read later comes from its
+// session file, so the native source wins while it is live.
+kind "assistant" {
+  match "ref"
+  prefer "native"
+}
+kind "reasoning" {
+  match "ref"
+  prefer "native"
+}
+kind "tool" {
+  match "ref"
+  prefer "native"
+}
+kind "user" {
+  match "ref"
+  prefer "native"
+}

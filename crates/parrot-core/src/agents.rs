@@ -11,6 +11,8 @@ pub fn builtin() -> BTreeMap<String, Value> {
     let mut agents = BTreeMap::new();
     agents.insert("claude".to_string(), builtin_agent("claude", "Claude Code"));
     agents.insert("codex".to_string(), builtin_agent("codex", "Codex"));
+    agents.insert("pi".to_string(), builtin_agent("pi", "Pi"));
+    agents.insert("opencode".to_string(), builtin_agent("opencode", "opencode"));
     agents
 }
 

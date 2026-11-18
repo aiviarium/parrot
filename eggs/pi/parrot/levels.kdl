@@ -1,0 +1,10 @@
+// pi has no permission system, so it lists one level and every tool runs there.
+level "host" {
+  tool "read"
+  tool "grep"
+  tool "list"
+  tool "bash"
+  tool "write"
+  tool "edit"
+  tool "Pi extension"
+}
