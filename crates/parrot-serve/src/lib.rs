@@ -13,6 +13,7 @@ pub mod stdio;
 pub mod tokens;
 pub mod websocket;
 pub mod workspace_ops;
+pub mod workspace_transfer;
 
 pub use backend_impl::RuntimeBackend;
 pub use dispatch::{Runtime, new_conn_id};

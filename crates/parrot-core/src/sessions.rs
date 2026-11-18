@@ -428,6 +428,10 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
     if let Some(r) = &resume {
         start["resume"] = json!(r);
     }
+    // The injected MCP server for this binding (spec 26), when functions are on.
+    if let Some(mcp) = crate::functions::mcp_for(cx, session, &id) {
+        start["mcp"] = mcp;
+    }
     cx.state.bindings.by_id.insert(
         id.clone(),
         BindingRecord {

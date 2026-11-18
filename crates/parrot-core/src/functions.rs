@@ -14,5 +14,10 @@ pub fn call(_cx: &mut Cx, _conn: &str, _id: Option<&RequestId>, method: &str, _p
 /// A driver, workspace or client reply to a call this module made.
 pub fn on_reply(_cx: &mut Cx, _call: u64, _result: Result<Value, RpcError>) {}
 
+/// The `mcp` entry of a binding's `BindingStart` (spec 26, 30.1), or `None` without functions.
+pub fn mcp_for(_cx: &mut Cx, _session: &str, _binding: &str) -> Option<Value> {
+    None
+}
+
 /// A client's answer to an `Effect::ClientCall`.
 pub fn on_client_reply(_cx: &mut Cx, _conn: &str, _call: u64, _result: Result<Value, RpcError>) {}
