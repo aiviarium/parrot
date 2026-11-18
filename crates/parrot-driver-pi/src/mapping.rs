@@ -191,6 +191,11 @@ impl MapState {
         ]
     }
 
+    /// The thinking levels the current model offers, as pi names them; `off` is not a level here.
+    pub fn set_levels(&mut self, levels: &[String]) {
+        self.thinking = levels.iter().filter(|l| *l != "off").cloned().collect();
+    }
+
     fn thinking_value(&self) -> Option<String> {
         self.current_thinking
             .as_ref()
@@ -220,7 +225,7 @@ impl MapState {
         if let Some(key) = state.model_key() {
             self.model = Some(key.clone());
         }
-        self.thinking = levels.iter().filter(|l| *l != "off").cloned().collect();
+        self.set_levels(levels);
         self.current_thinking = state.thinking_level.clone().filter(|l| l != "off");
         if let Some(id) = &state.session_id
             && self.session_id.as_ref() != Some(id)

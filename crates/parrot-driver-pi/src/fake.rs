@@ -614,11 +614,18 @@ pub async fn run() -> std::io::Result<()> {
                 {"id": "fake-1", "name": "Fake 1", "provider": "fake", "reasoning": true, "input": ["text", "image"], "contextWindow": 100000},
                 {"id": "fake-2", "name": "Fake 2", "provider": "fake", "reasoning": false, "input": ["text"], "contextWindow": 50000},
             ]}})),
-            "get_available_thinking_levels" => fake.reply(
-                &id,
-                "get_available_thinking_levels",
-                json!({"success": true, "data": {"levels": ["off", "minimal", "low", "medium", "high"]}}),
-            ),
+            "get_available_thinking_levels" => {
+                // pi lists the levels of the current model; the fake's second model has none.
+                let levels = match fake.model.lock().unwrap().as_str() {
+                    "fake/fake-2" => json!(["off"]),
+                    _ => json!(["off", "minimal", "low", "medium", "high"]),
+                };
+                fake.reply(
+                    &id,
+                    "get_available_thinking_levels",
+                    json!({"success": true, "data": {"levels": levels}}),
+                )
+            }
             "get_commands" => fake.reply(&id, "get_commands", json!({"success": true, "data": {"commands": [
                 {"name": "review", "description": "Review the changes", "source": "prompt",
                  "sourceInfo": {"path": "/work/demo/.pi/agent/prompts/review.md", "source": "local", "scope": "project", "origin": "top-level"}},
@@ -634,7 +641,13 @@ pub async fn run() -> std::io::Result<()> {
                 fake.reply(&id, "set_model", json!({"success": true, "data": {"id": name, "provider": provider, "name": name}}));
             }
             "set_thinking_level" => {
-                let level = message.get("level").and_then(Value::as_str).unwrap_or("off");
+                // pi clamps a level the current model does not offer, and reports what it kept.
+                let asked = message.get("level").and_then(Value::as_str).unwrap_or("off");
+                let level = if fake.model.lock().unwrap().as_str() == "fake/fake-2" && asked != "off" {
+                    "off"
+                } else {
+                    asked
+                };
                 *fake.thinking.lock().unwrap() = level.to_owned();
                 fake.send(json!({"type": "thinking_level_changed", "level": level}));
                 fake.reply(&id, "set_thinking_level", json!({"success": true}));

@@ -273,7 +273,20 @@ impl Driver {
                             )
                             .await
                             .map_err(|e| RpcError::new(-32603, format!("pi refused the model: {e}")))?;
-                            b.state.lock().unwrap().model = Some(model);
+                            // pi's thinking levels are the model's, so the list is read again.
+                            let levels = b
+                                .command_json::<wire::LevelList>(
+                                    Command::new("", "get_available_thinking_levels"),
+                                    None,
+                                )
+                                .await
+                                .ok()
+                                .flatten();
+                            let mut state = b.state.lock().unwrap();
+                            state.model = Some(model.clone());
+                            if let Some(levels) = levels {
+                                state.set_levels(&levels.levels);
+                            }
                         }
                         "effort" => {
                             let level = text.unwrap_or_else(|| "off".into());

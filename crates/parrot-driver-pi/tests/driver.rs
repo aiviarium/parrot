@@ -237,13 +237,13 @@ async fn options_come_from_pi_and_apply() {
     let r = c
         .call(
             "binding/options",
-            json!({"binding": "b1", "values": {"model": "fake/fake-2", "effort": "high"}}),
+            json!({"binding": "b1", "values": {"model": "fake/fake-1", "effort": "high"}}),
         )
         .await;
     let options = r["options"].as_array().unwrap();
     assert_eq!(
         options.iter().find(|o| o["id"] == "model").unwrap()["value"],
-        "fake/fake-2"
+        "fake/fake-1"
     );
     assert_eq!(
         options.iter().find(|o| o["id"] == "effort").unwrap()["value"],
@@ -252,6 +252,45 @@ async fn options_come_from_pi_and_apply() {
     assert_eq!(r["level"], "host");
     let update = c.wait(|u| u["update"]["type"] == "options").await;
     assert_eq!(update["update"]["level"], "host");
+}
+
+#[tokio::test]
+async fn the_thinking_levels_follow_the_model() {
+    let mut c = Client::temp();
+    c.bind().await;
+    // fake-2 does not reason, so pi offers no level but `off`.
+    let r = c
+        .call(
+            "binding/options",
+            json!({"binding": "b1", "values": {"model": "fake/fake-2"}}),
+        )
+        .await;
+    let effort = r["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == "effort")
+        .unwrap()
+        .clone();
+    assert!(effort["schema"].get("enum").is_none(), "no levels: {effort}");
+    assert!(effort["value"].is_null());
+    // Back on fake-1 the levels return.
+    let r = c
+        .call(
+            "binding/options",
+            json!({"binding": "b1", "values": {"model": "fake/fake-1"}}),
+        )
+        .await;
+    let effort = r["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == "effort")
+        .unwrap();
+    assert_eq!(
+        effort["schema"]["enum"],
+        json!(["minimal", "low", "medium", "high"])
+    );
 }
 
 #[tokio::test]
