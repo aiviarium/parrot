@@ -4,7 +4,9 @@ use crate::principals::{allows, check, check_session, parse, sees};
 use crate::{Cx, Effect, Reply, State, items, queue, sessions};
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
-use parrot_proto::subscribe::{ItemGetParams, SubscribeParams, Target, UnsubscribeParams};
+use parrot_proto::subscribe::{
+    ItemGetParams, ReadDirection, SessionReadParams, SubscribeParams, Target, UnsubscribeParams,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -206,6 +208,7 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "subscribe" => subscribe(cx, conn, id, params),
         "unsubscribe" => Reply::Now(unsubscribe(cx, conn, params)),
         "item/get" => Reply::Now(item_get(cx, conn, params)),
+        "session/read" => Reply::Now(read(cx, conn, params)),
         _ => Reply::Now(Err(RpcError::new(-32601, format!("method not found: {method}")))),
     }
 }
@@ -314,6 +317,23 @@ fn item_get(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     items::get(cx.state, &p.session, &p.item)
         .map(|item| json!({ "item": item }))
         .ok_or_else(|| RpcError::new(-32002, format!("item not found: {}", p.item)))
+}
+
+fn read(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
+    let p: SessionReadParams = parse(params)?;
+    check_session(cx.state, conn, Scope::Read, &p.session)?;
+    if !cx.state.sessions.by_id.contains_key(&p.session) {
+        return Err(RpcError::new(-32002, format!("session not found: {}", p.session)));
+    }
+    let forward = p.direction == Some(ReadDirection::Forward);
+    let limit = p.limit.unwrap_or(50).clamp(1, 500) as usize;
+    Ok(items::read(
+        cx.state,
+        &p.session,
+        p.cursor.as_deref(),
+        forward,
+        limit,
+    ))
 }
 
 /// A connection closed.

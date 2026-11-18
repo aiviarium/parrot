@@ -1,0 +1,11 @@
+// The orchestrator spawns two children in worktrees through the injected MCP server, waits on
+// their tasks and merges their workspaces into its own.
+{"emit":{"type":"system","subtype":"init","cwd":"/work/demo","session_id":"sess-fake-parent","tools":["Bash","mcp__parrot__parrot__sessions__spawn"],"mcp_servers":[{"name":"parrot","status":"connected"}],"model":"claude-sonnet-5-5","permissionMode":"default","slash_commands":[],"apiKeySource":"none","claude_code_version":"2.1.325","output_style":"default","agents":[],"skills":[],"plugins":[],"uuid":"5d1f0000-0000-4000-8000-0000000000a1"}}
+{"mcp_call":{"name":"parrot__sessions__spawn","arguments":{"agent":"claude","title":"alpha","brief":"Write alpha notes.","workspace":{"kind":"worktree","repo":"{{cwd}}"}}},"save":"alpha"}
+{"mcp_call":{"name":"parrot__sessions__spawn","arguments":{"agent":"claude","title":"beta","brief":"Write beta notes.","workspace":{"kind":"worktree","repo":"{{cwd}}"}}},"save":"beta"}
+{"mcp_call":{"name":"parrot__tasks__wait","arguments":{"sessions":["{{alpha/session}}","{{beta/session}}"],"timeout":2}},"until":{"changes":[{"task":{"status":"done"}},{"task":{"status":"done"}}]},"attempts":30}
+{"mcp_call":{"name":"parrot__sessions__read","arguments":{"sessions":["{{alpha/session}}","{{beta/session}}"],"limit":0}},"save":"read"}
+{"mcp_call":{"name":"parrot__workspaces__merge","arguments":{"from":"{{read/results/[alpha/session]/session/workspace}}","method":"merge"}},"save":"merged_alpha"}
+{"mcp_call":{"name":"parrot__workspaces__merge","arguments":{"from":"{{read/results/[beta/session]/session/workspace}}","method":"merge"}},"save":"merged_beta"}
+{"emit":{"type":"assistant","message":{"id":"msg_fake_p1","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"text","text":"Both children are merged."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":4}},"parent_tool_use_id":null,"session_id":"sess-fake-parent","uuid":"a-p1"}}
+{"emit":{"type":"result","subtype":"success","is_error":false,"duration_ms":10,"duration_api_ms":10,"num_turns":1,"result":"Both children are merged.","session_id":"sess-fake-parent","total_cost_usd":0.001,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4},"modelUsage":{},"permission_denials":[],"uuid":"r-p1"}}

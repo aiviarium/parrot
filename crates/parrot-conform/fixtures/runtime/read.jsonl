@@ -1,4 +1,4 @@
-{"fixture": {"scenario": "text-turn", "pending": "session/read is not served yet", "about": "session/read returns the items of a finished turn, oldest first."}}
+{"fixture": {"scenario": "text-turn", "about": "session/read returns the items of a finished turn, oldest first, and pages back and forward by item."}}
 {"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
 {"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
 {"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
@@ -12,3 +12,9 @@
 {"check": {"projection": {"items": {"kind": "assistant"}, "session": "$id:session"}, "expect": [{"id": "$id:reply", "text": "Hello there.", "streaming": false}]}}
 {"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "session/read", "params": {"session": "$id:session"}}}
 {"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {"items": [{"id": "$id:msg", "kind": "user"}, {"id": "$id:reply", "kind": "assistant", "text": "Hello there."}]}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 5, "method": "session/read", "params": {"session": "$id:session", "limit": 1}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 5, "result": {"items": [{"id": "$id:reply"}], "before": "$id:reply"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 6, "method": "session/read", "params": {"session": "$id:session", "cursor": "$id:reply", "limit": 1}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 6, "result": {"items": [{"id": "$id:msg", "text": "Say hello."}], "after": "$id:msg"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 7, "method": "session/read", "params": {"session": "$id:session", "cursor": "$id:msg", "direction": "forward"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 7, "result": {"items": [{"id": "$id:reply", "kind": "assistant"}]}}}

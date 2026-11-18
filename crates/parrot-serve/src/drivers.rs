@@ -96,6 +96,52 @@ impl Drivers {
     }
 }
 
+impl Drivers {
+    /// TUI control from the egg alone (spec 31, 32.2): an egg whose `controls` include `tui` and
+    /// that ships `profile.kdl` drives its CLI through the terminal. The command is the
+    /// `PARROT_<AGENT>_BIN` variable when set, else the egg's `cli` name. Claude Code writes its
+    /// own transcript, which supplies the content. `PARROT_TUI_SIZE` (`<rows>x<cols>`) sets the
+    /// terminal size.
+    pub fn tui_agent(&self, agent: &str) -> Option<crate::config::TuiAgent> {
+        let egg = self.eggs.get(agent)?;
+        let driver = egg.driver.as_ref().ok()?;
+        if !driver.controls.contains(&Control::Tui) {
+            return None;
+        }
+        let profile = egg.data_dir.join(PROFILE);
+        if !profile.is_file() {
+            return None;
+        }
+        let var = format!("PARROT_{}_BIN", agent.to_uppercase().replace('-', "_"));
+        let program = std::env::var(&var)
+            .ok()
+            .filter(|p| !p.is_empty())
+            .or_else(|| driver.cli.as_ref().map(|c| c.name.clone()))?;
+        Some(crate::config::TuiAgent {
+            command: vec![program],
+            profile,
+            name: Some(egg.name.clone()),
+            env: Default::default(),
+            transcript: (agent == "claude").then(|| "claude".to_string()),
+            unrecognised_after_ms: None,
+            size: std::env::var("PARROT_TUI_SIZE")
+                .ok()
+                .as_deref()
+                .and_then(parse_size),
+            no_guard: false,
+        })
+    }
+}
+
+/// `<rows>x<cols>`, such as `30x100`.
+fn parse_size(s: &str) -> Option<(u16, u16)> {
+    let (rows, cols) = s.split_once('x')?;
+    Some((rows.trim().parse().ok()?, cols.trim().parse().ok()?))
+}
+
+/// The TUI profile in an egg's `parrot` folder.
+pub const PROFILE: &str = "profile.kdl";
+
 fn agent_egg(egg: &LoadedEgg) -> AgentEgg {
     let (driver_name, kind, data, controls, cli_versions) = match &egg.driver {
         Ok(d) => {
