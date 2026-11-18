@@ -78,8 +78,79 @@ pub fn parse_scenario(text: &str) -> Result<Vec<Step>, ScenarioError> {
     Ok(steps)
 }
 
+/// Reads a scenario, or a recorded trace (`{"dir", "at", "msg"}` lines, see [`parse_trace`]).
 pub fn load_scenario(path: &Path) -> Result<Vec<Step>, ScenarioError> {
-    parse_scenario(&std::fs::read_to_string(path)?)
+    let text = std::fs::read_to_string(path)?;
+    if is_trace(&text) {
+        parse_trace(&text)
+    } else {
+        parse_scenario(&text)
+    }
+}
+
+/// Whether the text is a recorded trace rather than a scenario.
+pub fn is_trace(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("//"))
+        .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        .is_some_and(|v| v.get("dir").is_some() && v.get("msg").is_some())
+}
+
+/// Turns a recorded trace into scenario steps, so the fake replays a real CLI's lines.
+///
+/// An input line becomes an `expect` on its type and subtype, and an answer to a permission
+/// request becomes an `await_control_response` on its behaviour. Output lines are emitted as
+/// recorded, except that a control response to the host's own request carries the id the host
+/// sent this time.
+pub fn parse_trace(text: &str) -> Result<Vec<Step>, ScenarioError> {
+    let mut steps = Vec::new();
+    let mut host_ids: Vec<String> = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let bad = |message: String| ScenarioError::Bad { line: i + 1, message };
+        let v: Value = serde_json::from_str(line).map_err(|e| bad(e.to_string()))?;
+        let msg = v.get("msg").cloned().ok_or_else(|| bad("a trace line has msg".into()))?;
+        match v.get("dir").and_then(Value::as_str) {
+            Some("in") => match msg["type"].as_str() {
+                Some("user") => steps.push(Step::Expect(json!({"type": "user"}))),
+                Some("control_request") => {
+                    if let Some(id) = msg["request_id"].as_str() {
+                        host_ids.push(id.to_owned());
+                    }
+                    steps.push(Step::Expect(json!({
+                        "type": "control_request",
+                        "request": {"subtype": msg["request"]["subtype"]},
+                    })));
+                }
+                Some("control_response") => {
+                    let r = &msg["response"];
+                    steps.push(Step::AwaitControlResponse {
+                        request_id: r["request_id"].as_str().unwrap_or_default().to_owned(),
+                        pattern: r["response"]
+                            .get("behavior")
+                            .map(|b| json!({"behavior": b})),
+                    });
+                }
+                _ => {}
+            },
+            Some("out") => {
+                let mut msg = msg;
+                if msg["type"] == "control_response"
+                    && let Some(id) = msg["response"]["request_id"].as_str()
+                    && host_ids.iter().any(|h| h == id)
+                {
+                    msg["response"]["request_id"] = json!("{{request_id}}");
+                }
+                steps.push(Step::Emit(msg));
+            }
+            _ => return Err(bad("dir is in or out".into())),
+        }
+    }
+    Ok(steps)
 }
 
 /// Whether `value` has everything `pattern` names.

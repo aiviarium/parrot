@@ -77,6 +77,8 @@ pub struct MapState {
     /// Tool keys by `tool_use_id`, for results and subagent parents.
     tools: HashMap<String, String>,
     unnamed: u64,
+    /// Context tokens of the latest top-level API request, from its assistant message.
+    context_used: Option<u64>,
 }
 
 impl MapState {
@@ -396,6 +398,11 @@ impl MapState {
             ClaudeOutMsg::Assistant(a) => {
                 let mut out = self.ensure_turn(now);
                 let parent = self.parent_of(a.parent_tool_use_id.as_ref());
+                if parent.is_none()
+                    && let Some(u) = &a.message.usage
+                {
+                    self.context_used = Some(context_tokens(u));
+                }
                 out.extend(self.assistant(&a.message, parent));
                 out
             }
@@ -611,7 +618,8 @@ impl MapState {
             }
         }
         let text = u.message.content.text();
-        if text.is_empty() {
+        // The CLI marks an interrupt with a user message of its own; the turn already says it.
+        if text.is_empty() || text.starts_with("[Request interrupted by user") {
             return out;
         }
         // An echo of a prompt this driver wrote is already reported under the runtime's id.
@@ -663,7 +671,7 @@ impl MapState {
                 .unwrap_or_else(|| "the turn failed".into()),
             retryable: true,
         });
-        let usage = usage_of(r);
+        let usage = usage_of(r, self.context_used.take());
         // Blocks cut off by an interrupt never get their final message.
         let mut open_blocks: Vec<_> = self.blocks.iter().filter(|(_, b)| !b.finalized).collect();
         open_blocks.sort_by_key(|(i, _)| **i);
@@ -938,7 +946,17 @@ fn permission_result(p: &PendingRequest, a: &Answer) -> PermissionResult {
     }
 }
 
-fn usage_of(r: &ResultMsg) -> Usage {
+fn context_tokens(u: &wire::Usage) -> u64 {
+    u.input_tokens.unwrap_or(0)
+        + u.cache_read_input_tokens.unwrap_or(0)
+        + u.cache_creation_input_tokens.unwrap_or(0)
+        + u.output_tokens.unwrap_or(0)
+}
+
+/// The turn's usage. `used` is the context of the last API request: the result's last
+/// iteration, else the last assistant message's usage. The result's totals add up every request
+/// of the turn, which overstates the context.
+fn usage_of(r: &ResultMsg, last: Option<u64>) -> Usage {
     let tokens = r.usage.as_ref().map(|u| TokenUsage {
         input: u.input_tokens.unwrap_or(0),
         output: u.output_tokens.unwrap_or(0),
@@ -951,11 +969,21 @@ fn usage_of(r: &ResultMsg) -> Usage {
             .filter_map(|v| v.get("contextWindow").and_then(Value::as_u64))
             .max()
     });
-    let context = match (window, &tokens) {
-        (Some(window), Some(t)) => Some(ContextUsage {
-            used: t.input + t.cache_read.unwrap_or(0) + t.cache_write.unwrap_or(0) + t.output,
-            window,
-        }),
+    let iteration = r
+        .usage
+        .as_ref()
+        .and_then(|u| u.extra.get("iterations"))
+        .and_then(Value::as_array)
+        .and_then(|i| i.last())
+        .and_then(|i| serde_json::from_value::<wire::Usage>(i.clone()).ok())
+        .map(|u| context_tokens(&u));
+    let used = iteration.or(last).or_else(|| {
+        tokens
+            .as_ref()
+            .map(|t| t.input + t.cache_read.unwrap_or(0) + t.cache_write.unwrap_or(0) + t.output)
+    });
+    let context = match (window, used) {
+        (Some(window), Some(used)) => Some(ContextUsage { used, window }),
         _ => None,
     };
     Usage {
