@@ -326,7 +326,10 @@ fn a_linked_offer_shows_only_sessions_made_over_the_link() {
     assert!(!listed.contains(&own.id));
     sim.ok("con_linked", "session/get", json!({ "session": made.id }));
     let requests = sim.ok("con_linked", "request/list", json!({}));
-    assert_eq!(ids(&requests["requests"], "id"), std::slice::from_ref(&made.request));
+    assert_eq!(
+        ids(&requests["requests"], "id"),
+        std::slice::from_ref(&made.request)
+    );
     let workspaces = sim.ok("con_linked", "workspace/list", json!({}));
     let ws = ids(&workspaces["workspaces"], "id");
     assert!(
