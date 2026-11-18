@@ -17,9 +17,12 @@ struct Client {
 
 impl Client {
     fn start(scenario: &str) -> Client {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/scenarios")
-            .join(format!("{scenario}.jsonl"));
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = if scenario.contains('/') {
+            root.join(scenario)
+        } else {
+            root.join("fixtures/scenarios").join(format!("{scenario}.jsonl"))
+        };
         let config = Config {
             codex_bin: env!("CARGO_BIN_EXE_fake-codex").into(),
             args: vec!["app-server".into()],
@@ -423,4 +426,65 @@ async fn frames_rebuild_the_same_items() {
             .collect();
         assert_eq!(rebuilt, live, "{scenario}");
     }
+}
+
+#[tokio::test]
+async fn recorded_trace_plays_end_to_end() {
+    let mut c = Client::start("../parrot-conform/fixtures/traces/codex-0.167.1.jsonl");
+    let start = c.bind(json!({})).await;
+    assert!(start["ref"]["id"].is_string());
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "message": "m1", "text": "Name the color", "steer": false,
+                "attachments": [{"name": "red.png", "type": "image/png", "data": "iVBORw0KGgo="}]}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    for _ in 0..2 {
+        let req = c
+            .wait(|u| u["update"]["type"] == "request" && u["update"]["request"]["status"] == "open")
+            .await;
+        let id = req["update"]["request"]["id"].as_str().unwrap().to_owned();
+        c.call(
+            "binding/answer",
+            json!({"binding": "b1", "request": id, "answer": {"choice": "accept"}}),
+        )
+        .await;
+    }
+    let done = c.wait(turn_ended).await;
+    assert_eq!(done["update"]["turn"]["status"], "completed");
+    let usage = c.updates.iter().filter(|u| u["update"]["type"] == "usage").count();
+    assert!(usage > 0, "token usage arrives");
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "message": "m2", "text": "Count", "steer": false}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    c.wait(|u| u["update"]["item"]["append"].is_object()).await;
+    c.call("binding/cancel", json!({"binding": "b1"})).await;
+    let done = c.wait(turn_ended).await;
+    assert_eq!(done["update"]["turn"]["status"], "interrupted");
+    c.wait(is_state("idle")).await;
+    let users: Vec<_> = c
+        .updates
+        .iter()
+        .filter(|u| u["update"]["item"]["kind"] == "user")
+        .map(|u| u["update"]["item"]["id"].clone())
+        .collect();
+    assert_eq!(users, [json!("m1"), json!("m2")], "Codex's echoes fold into the prompts");
+    let commands: Vec<_> = c
+        .updates
+        .iter()
+        .filter(|u| u["update"]["item"]["set"]["exit"] == 0)
+        .collect();
+    assert_eq!(commands.len(), 2, "both approved commands ran");
+    assert!(
+        c.updates
+            .iter()
+            .any(|u| u["update"]["usage"]["rateLimits"].is_array()),
+        "rate limits arrive"
+    );
 }

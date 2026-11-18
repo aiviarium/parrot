@@ -1061,7 +1061,10 @@ impl MapState {
             .echoes
             .iter()
             .position(|(_, m)| u.client_id.as_deref() == Some(m.as_str()))
-            .or_else(|| self.echoes.iter().position(|(t, _)| *t == text))?;
+            .or_else(|| self.echoes.iter().position(|(t, _)| *t == text))
+            // Codex 0.167 reports `clientId: null` and the text with context and attachments
+            // folded in, so otherwise the oldest prompt not yet echoed is the one.
+            .or_else(|| (!self.echoes.is_empty()).then_some(0))?;
         let (_, message) = self.echoes.remove(pos);
         self.echoed.insert(u.id.clone());
         Some(message)
