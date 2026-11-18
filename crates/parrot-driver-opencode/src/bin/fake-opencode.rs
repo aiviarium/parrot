@@ -1,6 +1,8 @@
-//! A fake opencode harness for tests.
+//! A fake `opencode serve` for tests: the driver starts it exactly as it starts the real CLI.
 
-fn main() {
-    eprintln!("fake-opencode: not written yet");
-    std::process::exit(2);
+fn main() -> std::io::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(parrot_driver_opencode::fake::run())
 }

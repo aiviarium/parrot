@@ -13,13 +13,30 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 #[derive(Debug, Clone)]
 pub struct Client {
     pub authority: String,
+    /// The server password, sent as HTTP basic auth. `opencode serve` refuses everything else.
+    pub password: Option<String>,
 }
 
 impl Client {
     pub fn new(authority: impl Into<String>) -> Self {
         Client {
             authority: authority.into(),
+            password: None,
         }
+    }
+
+    pub fn with_password(mut self, password: impl Into<String>) -> Self {
+        self.password = Some(password.into());
+        self
+    }
+
+    /// The `Authorization` header for the server, if it has a password.
+    fn authorization(&self) -> Option<String> {
+        let password = self.password.as_deref()?;
+        Some(format!(
+            "Basic {}",
+            base64(format!("opencode:{password}").as_bytes())
+        ))
     }
 
     async fn connect(&self) -> Result<TcpStream, String> {
@@ -65,6 +82,9 @@ impl Client {
         if body.is_some() {
             request.push_str("Content-Type: application/json\r\n");
             request.push_str(&format!("Content-Length: {}\r\n", payload.len()));
+        }
+        if let Some(auth) = self.authorization() {
+            request.push_str(&format!("Authorization: {auth}\r\n"));
         }
         for (k, v) in extra {
             request.push_str(&format!("{k}: {v}\r\n"));
@@ -130,8 +150,12 @@ impl Client {
     /// Opens the event stream.
     pub async fn events(&self) -> Result<EventStream, String> {
         let socket = self.connect().await?;
+        let auth = self
+            .authorization()
+            .map(|a| format!("Authorization: {a}\r\n"))
+            .unwrap_or_default();
         let request = format!(
-            "GET /api/event HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n",
+            "GET /api/event HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n{auth}\r\n",
             self.authority
         );
         let (read, mut write): (OwnedReadHalf, OwnedWriteHalf) = socket.into_split();
@@ -257,9 +281,39 @@ impl EventStream {
     }
 }
 
+/// Standard base64 with padding, enough for one basic-auth header.
+fn base64(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_pads() {
+        assert_eq!(base64(b"opencode:secret"), "b3BlbmNvZGU6c2VjcmV0");
+        assert_eq!(base64(b"a"), "YQ==");
+        assert_eq!(base64(b"ab"), "YWI=");
+    }
 
     #[tokio::test]
     async fn requests_and_events_round_trip() {
@@ -267,8 +321,9 @@ mod tests {
         let authority = listener.local_addr().unwrap().to_string();
         tokio::spawn(async move {
             for _ in 0..2 {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut reader = BufReader::new(socket.clone());
+                let (socket, _) = listener.accept().await.unwrap();
+                let (read, mut socket) = socket.into_split();
+                let mut reader = BufReader::new(read);
                 let mut request = String::new();
                 loop {
                     let mut line = String::new();
