@@ -1,0 +1,4 @@
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {"text": "hello"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"text": "hello"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "nope"}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601}}}

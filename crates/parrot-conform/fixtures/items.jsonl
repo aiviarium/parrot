@@ -1,0 +1,9 @@
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "item/new", "params": {"text": "first"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"id": "$id:one"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"seq": "$seq", "at": "$time", "update": {"type": "item", "item": {"id": "$id:one", "kind": "assistant", "set": {"text": "first"}}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "item/new", "params": {"text": "second"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"id": "$id:two"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"seq": "$seq", "at": "$time", "update": {"type": "item", "item": {"id": "$id:two", "kind": "assistant", "set": {"text": "second"}}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "echo", "params": {"of": "$id:one"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"of": "$id:one"}}}
+{"check": {"projection": {"items": true}, "expect": [{"id": "$id:one", "text": "first"}, {"id": "$id:two", "text": "second"}]}}

@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Parrot protocol, version 1",
+  "$defs": {
+    "DetailData": {
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "description": "`data` of `-32020` and `-32040`."
+    },
+    "ForbiddenData": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "description": "`data` of `-32003`."
+    },
+    "IsolationData": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "string"
+        },
+        "available": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "required"
+      ],
+      "description": "`data` of `-32051`."
+    },
+    "Message": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Request"
+        },
+        {
+          "$ref": "#/$defs/Response"
+        },
+        {
+          "$ref": "#/$defs/Notification"
+        }
+      ]
+    },
+    "MovedData": {
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtime"
+      ],
+      "description": "`data` of `-32050`: the runtime that owns the session now."
+    },
+    "NoSharedVersionData": {
+      "type": "object",
+      "properties": {
+        "supported": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "supported"
+      ],
+      "description": "`data` of `-32011`."
+    },
+    "Notification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "default": null
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "id": true,
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "default": null
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ]
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "id": true,
+        "result": {
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "RpcError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "default": null
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "UnsupportedData": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "feature"
+      ],
+      "description": "`data` of `-32001`."
+    },
+    "WrongStateData": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "description": "`data` of `-32004`."
+    }
+  }
+}
