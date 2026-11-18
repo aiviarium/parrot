@@ -1,0 +1,39 @@
+{
+  "features": [
+    {
+      "id": "cli",
+      "group": "Coding Agents",
+      "label": "opencode",
+      "description": "The opencode coding agent, from npm. The version is `rookery_opencode_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
+      "summary": "opencode (`opencode`). `opencode auth list` shows configured provider credentials.",
+      "commands": [
+        "opencode"
+      ],
+      "tasks": "tasks/install.yml",
+      "actions": [
+        {
+          "name": "status",
+          "label": "opencode sign-in",
+          "help": "Whether opencode has provider credentials for the agent account. Part of \"Show who is signed in\".",
+          "extends": "sign-in:status",
+          "run": "echo '── opencode'; opencode auth list 2>&1; echo"
+        },
+        {
+          "name": "login",
+          "label": "Sign in to opencode",
+          "group": "Sign-In",
+          "terminal": true,
+          "help": "Runs opencode auth login on the host as the agent and shows its link here. Open the link in your own browser and sign in.",
+          "run": "env -u DISPLAY -u WAYLAND_DISPLAY BROWSER=echo opencode auth login; echo; opencode auth list"
+        },
+        {
+          "name": "update",
+          "label": "Update opencode",
+          "help": "Bring opencode to its latest version from npm. Part of Update. The version in the profile is the least one; a newer one stays when the configuration is applied again.",
+          "extends": "update",
+          "run": "echo; echo '── opencode'; npm install --global --prefix \"$HOME/.local\" --no-audit --no-fund --loglevel error opencode-ai@latest && opencode --version"
+        }
+      ]
+    }
+  ]
+}

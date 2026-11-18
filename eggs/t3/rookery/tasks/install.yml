@@ -1,0 +1,75 @@
+---
+# The selected version is the least one: a newer one from `t3 update` stays.
+- name: Read the T3 version in use
+  ansible.builtin.command:
+    argv: [readlink, "{{ rookery_home }}/.local/bin/t3"]
+  register: rookery_t3_link
+  changed_when: false
+  failed_when: false
+- name: Note the T3 version in use
+  ansible.builtin.set_fact:
+    rookery_t3_current: "{{ rookery_t3_link.stdout | default('') | regex_search('/versions/([^/]+)/t3$', '\\1') | default(['0'], true) | first }}"
+- name: Ensure tools directory exists
+  ansible.builtin.file:
+    path: /opt/rookery-tools
+    state: directory
+    mode: '0755'
+- name: Create T3 directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+    mode: '0755'
+  loop:
+    - "{{ rookery_home }}/.local"
+    - "{{ rookery_home }}/.local/bin"
+    - "{{ rookery_home }}/.t3"
+    - "{{ rookery_home }}/.t3/runtime"
+    - "{{ rookery_home }}/.t3/runtime/versions"
+    - "{{ rookery_home }}/.t3/runtime/versions/{{ rookery_t3_version | default('0.1.10') }}"
+- name: Download verified T3 archive
+  ansible.builtin.get_url:
+    url: "https://github.com/pingdotgg/t3code/releases/download/v{{ rookery_t3_version | default('0.1.10') }}/t3-{{ rookery_t3_version | default('0.1.10') }}-linux-x64.tar.gz"
+    checksum: >-
+      {{ 'sha256:9bea9d36a217299a0af880e8c347b536ed6a9a2f5bf328a695d174d63628c5e8'
+         if (rookery_t3_version | default('0.1.10')) == '0.1.10'
+            and (rookery_t3_sha256 is not defined or rookery_t3_sha256 == 'b9c49dc00c23fbbc5961bdaff2d88e556d96c8dbd638c4501e2937c70650a9e5')
+         else ('sha256:' ~ rookery_t3_sha256
+               if rookery_t3_sha256 is defined
+                  and ((rookery_t3_version | default('0.1.10')) == '0.1.8' or rookery_t3_sha256 != 'b9c49dc00c23fbbc5961bdaff2d88e556d96c8dbd638c4501e2937c70650a9e5')
+               else omit) }}
+    dest: "/opt/rookery-tools/t3-{{ rookery_t3_version | default('0.1.10') }}.tar.gz"
+    mode: '0644'
+- name: Extract T3 runtime
+  ansible.builtin.unarchive:
+    src: "/opt/rookery-tools/t3-{{ rookery_t3_version | default('0.1.10') }}.tar.gz"
+    dest: "{{ rookery_home }}/.t3/runtime/versions/{{ rookery_t3_version | default('0.1.10') }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: "{{ rookery_home }}/.t3/runtime/versions/{{ rookery_t3_version | default('0.1.10') }}/t3"
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+- name: Mark completed T3 installation
+  ansible.builtin.copy:
+    dest: "{{ rookery_home }}/.t3/runtime/versions/{{ rookery_t3_version | default('0.1.10') }}/.install-complete"
+    content: "{{ rookery_t3_version | default('0.1.10') }}\n"
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+    mode: '0644'
+- name: Link selected T3 runtime
+  ansible.builtin.file:
+    src: "{{ rookery_home }}/.t3/runtime/versions/{{ rookery_t3_version | default('0.1.10') }}/t3"
+    dest: "{{ rookery_home }}/.local/bin/t3"
+    state: link
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+  when: rookery_t3_current is version(rookery_t3_version | default('0.1.10'), '<')
+- name: Register T3 launcher for runtime retention
+  ansible.builtin.lineinfile:
+    path: "{{ rookery_home }}/.t3/runtime/launchers"
+    line: "{{ rookery_home }}/.local/bin/t3"
+    create: true
+    owner: "{{ rookery_user }}"
+    group: "{{ rookery_user }}"
+    mode: '0600'

@@ -1,0 +1,50 @@
+---
+- name: Ensure tools directory exists
+  ansible.builtin.file:
+    path: /opt/rookery-tools
+    state: directory
+    mode: '0755'
+- name: Download Claude's official installer
+  ansible.builtin.get_url:
+    url: https://claude.ai/install.sh
+    dest: /opt/rookery-tools/claude-install.sh
+    mode: '0644'
+# The selected version is the least one: a newer one from Update stays, even
+# after claude update has cleaned up the older version's files.
+- name: Read the Claude Code version in use
+  ansible.builtin.command:
+    argv: ["{{ rookery_home }}/.local/bin/claude", --version]
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    DISABLE_AUTOUPDATER: '1'
+  register: rookery_claude_current
+  changed_when: false
+  failed_when: false
+- name: Install selected Claude version without a root-owned profile
+  ansible.builtin.command:
+    argv: [/bin/bash, /opt/rookery-tools/claude-install.sh, "{{ rookery_claude_version | default('2.1.327') }}"]
+    creates: "{{ rookery_home }}/.local/share/claude/versions/{{ rookery_claude_version | default('2.1.327') }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    DISABLE_AUTOUPDATER: '1'
+  when: rookery_claude_current.rc != 0 or (rookery_claude_current.stdout | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('0', true)) is version(rookery_claude_version | default('2.1.327'), '<')
+# The desktop tools, for every project of the agent. Recorded in ~/.claude.json;
+# the command is only started when Claude Code uses it.
+- name: See whether Claude Code knows the desktop tools
+  ansible.builtin.command:
+    argv: [grep, -qs, /usr/local/bin/box, "{{ rookery_home }}/.claude.json"]
+  register: rookery_claude_mcp
+  changed_when: false
+  failed_when: false
+- name: Register the desktop tools with Claude Code
+  ansible.builtin.command:
+    argv: ["{{ rookery_home }}/.local/bin/claude", mcp, add, --transport, stdio, --scope, user, desktop, --, /usr/local/bin/agent-env, /usr/local/bin/box, mcp]
+    chdir: "{{ rookery_home }}"
+  become_user: "{{ rookery_user }}"
+  environment:
+    HOME: "{{ rookery_home }}"
+    DISABLE_AUTOUPDATER: '1'
+  when: rookery_claude_mcp.rc != 0

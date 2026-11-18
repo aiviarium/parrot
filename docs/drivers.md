@@ -160,3 +160,29 @@ The TUI core reads items from the CLI's own transcript when `transcript` names o
 | `transcript "jsonl" dir=…` | Reads the newest `.jsonl` in the folder, in Claude Code's message format |
 | `mcp "mcp-config"` | Passes the `parrot` MCP server as `--mcp-config` JSON |
 | `mcp "config-override"` | Passes it as `-c mcp_servers.parrot.*` overrides |
+
+## Rookery target
+
+An egg whose CLI or server runs on a Rookery host can also declare a `rookery` target in
+`package.kdl` alongside `parrot`:
+
+```kdl
+targets {
+  parrot {
+    requires {
+      parrot "^0.1"
+    }
+  }
+  rookery {
+    requires {
+      rookery ">=0.6"
+    }
+  }
+}
+```
+
+Its `rookery/` folder holds `rookery.json` and Ansible tasks under `tasks/` that install the CLI or
+server on the host and define its status, sign-in and update actions. Keep the default in
+`rookery_*_version | default('…')` inside `parrot/driver.kdl`'s `cli` `versions` range so a
+freshly provisioned host matches the driver data. Run `parrot eggs check <dir>` and
+`rookery plugin check <dir>` to verify both targets locally.
