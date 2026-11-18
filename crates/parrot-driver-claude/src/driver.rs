@@ -180,16 +180,28 @@ impl Driver {
                 let p: BindingForkParams = params(p)?;
                 let b = self.binding(&p.binding)?;
                 let state = b.state.lock().unwrap();
-                if p.at.is_some()
-                    && p.at != state.turn.as_ref().map(|t| t.key.clone())
-                    && p.at != state.last_turn_key()
-                {
-                    return Err(RpcError::new(-32001, "Claude Code forks only at the latest turn"));
-                }
                 let id = state
                     .session_id
                     .clone()
                     .ok_or_else(|| RpcError::new(-32004, "the session has no harness id yet"))?;
+                let latest = p.at.is_none()
+                    || p.at == state.turn.as_ref().map(|t| t.key.clone())
+                    || p.at == state.last_turn_key();
+                if !latest {
+                    // An earlier turn: the fork resumes at that turn's last message
+                    // (`--resume-session-at`), so the later turns are left out.
+                    let at = p.at.as_deref().unwrap_or_default();
+                    let uuid = state
+                        .turn_ends
+                        .get(at)
+                        .ok_or_else(|| RpcError::new(-32602, format!("no ended turn {at} to fork at")))?;
+                    return Ok(to_value(&BindingForkResult {
+                        reference: Ref {
+                            id: format!("{FORK_PREFIX}{id}{FORK_AT}{uuid}"),
+                            strength: RefStrength::Strong,
+                        },
+                    }));
+                }
                 self.forks.lock().unwrap().insert(id.clone());
                 // The runtime may start the fork in another driver process, so the ref itself
                 // says it is a fork.
@@ -250,6 +262,19 @@ impl Driver {
             "binding/cancel" => {
                 let p: BindingCancelParams = params(p)?;
                 let b = self.binding(&p.binding)?;
+                if let Some(sub) = &p.subagent {
+                    // A subagent stops through its task, which the CLI named in `task_started`.
+                    let task = b.state.lock().unwrap().tasks.get(sub).cloned();
+                    let Some(task_id) = task else {
+                        return Ok(to_value(&BindingCancelResult { interrupted: false }));
+                    };
+                    let body = ControlRequestBody::StopTask {
+                        task_id,
+                        extra: Extra::new(),
+                    };
+                    let interrupted = b.control("stop", body).await.is_ok();
+                    return Ok(to_value(&BindingCancelResult { interrupted }));
+                }
                 let running = {
                     let mut state = b.state.lock().unwrap();
                     state.cancel();
@@ -362,9 +387,16 @@ impl Driver {
                 Some(id) => (id.to_owned(), true),
                 None => (r.id.clone(), false),
             };
+            let (id, at) = match id.split_once(FORK_AT) {
+                Some((id, at)) => (id.to_owned(), Some(at.to_owned())),
+                None => (id, None),
+            };
             args.extend(["--resume".into(), id.clone().into()]);
             if fork || self.forks.lock().unwrap().remove(&id) {
                 args.push("--fork-session".into());
+            }
+            if let Some(at) = at {
+                args.extend(["--resume-session-at".into(), at.into()]);
             }
         }
         let model = start
@@ -416,7 +448,8 @@ impl Driver {
         state.model = model;
         state.permission_mode = mode;
         if let Some(r) = &start.resume {
-            state.session_id = Some(r.id.clone());
+            let id = r.id.strip_prefix(FORK_PREFIX).unwrap_or(&r.id);
+            state.session_id = Some(id.split_once(FORK_AT).map_or(id, |(id, _)| id).to_owned());
         }
         let b = Arc::new(Binding {
             id: start.binding.clone(),
@@ -441,6 +474,10 @@ impl Driver {
                 return Err(RpcError::new(-32603, format!("claude did not initialize: {e}")));
             }
         };
+        // The CLI's version picks the egg's version shim; the next start uses it.
+        if let Some(v) = init.get("claude_code_version").and_then(Value::as_str) {
+            crate::data::observe_version(v);
+        }
         let mut notices = vec![frame::frame(&start.binding, &now(), json!({"init": init}))];
         if let Some(e) = load_error() {
             notices.push(notice(
@@ -627,6 +664,8 @@ fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUp
 
 /// Marks a ref from `binding/fork`: resuming it forks the harness session (`--fork-session`).
 pub const FORK_PREFIX: &str = "fork:";
+/// Separates a fork ref's session id from the message it resumes at.
+pub const FORK_AT: &str = "@";
 
 /// The `claude` agent as `agent/list` reports it.
 pub fn agent() -> Agent {
@@ -641,7 +680,7 @@ pub fn agent() -> Agent {
     features.insert("session.fork".into(), json!({"at": ["turn"]}));
     features.insert(
         "session.subagents".into(),
-        json!({"prompt": false, "cancel": false}),
+        json!({"prompt": false, "cancel": true}),
     );
     Agent {
         id: parrot_proto::driver_data::agent_id("claude"),
@@ -687,6 +726,7 @@ pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
         .or_else(|| home.as_ref().map(|h| h.join(".claude")));
     match probe::version(bin).await {
         Some(v) => {
+            crate::data::observe_version(&v);
             a.harness = Some(parrot_proto::agent::HarnessInfo {
                 verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
                 version: v,
@@ -701,9 +741,19 @@ pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
     let credentials = config
         .as_ref()
         .is_some_and(|c| c.join(".credentials.json").is_file());
-    if credentials || std::env::var_os("ANTHROPIC_API_KEY").is_some() {
-        a.auth = AuthStatus::SignedIn;
-    }
+    // `claude auth status` also sees a sign-in kept in the OS keychain, where no credentials
+    // file exists. Only `loggedIn` is read, so the account's details stay out of the driver.
+    let status = probe::run(bin, &["auth", "status", "--json"])
+        .await
+        .and_then(|o| serde_json::from_str::<Value>(o.stdout.trim()).ok())
+        .and_then(|v| v.get("loggedIn").and_then(Value::as_bool));
+    a.auth = match status {
+        _ if std::env::var_os("ANTHROPIC_API_KEY").is_some() => AuthStatus::SignedIn,
+        Some(true) => AuthStatus::SignedIn,
+        Some(false) => AuthStatus::SignedOut,
+        None if credentials => AuthStatus::SignedIn,
+        None => a.auth,
+    };
     let mut meta = Map::new();
     if let Some(c) = &config {
         let skills = probe::folders_with(&c.join("skills"), "SKILL.md");

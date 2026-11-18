@@ -11,6 +11,18 @@ fn main() {
         println!("2.1.327 (Claude Code)");
         return;
     }
+    // `claude auth status --json`, with made-up account details.
+    if args.first().map(String::as_str) == Some("auth") && args.get(1).map(String::as_str) == Some("status") {
+        let signed_in = std::env::var("PARROT_FAKE_CLAUDE_LOGIN").map_or(true, |v| v != "out");
+        let status = if signed_in {
+            serde_json::json!({"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty",
+                "email": "someone@example.test", "subscriptionType": "pro"})
+        } else {
+            serde_json::json!({"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty"})
+        };
+        println!("{status}");
+        std::process::exit(if signed_in { 0 } else { 1 });
+    }
     // Tests read back how the driver started the CLI.
     if let Some(record) = std::env::var_os("PARROT_FAKE_CLAUDE_RECORD") {
         let seen = serde_json::json!({"args": args, "mcpToken": std::env::var("PARROT_MCP_TOKEN").ok()});

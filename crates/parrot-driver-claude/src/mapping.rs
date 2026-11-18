@@ -81,6 +81,12 @@ pub struct MapState {
     context_used: Option<u64>,
     /// Subagent keys (the `tool_use` id of the Task call that runs each).
     subagents: Vec<String>,
+    /// Task ids from `task_started`, by the subagent's key, for `stop_task`.
+    pub tasks: HashMap<String, String>,
+    /// The uuid of the latest main-chain message, which a fork can resume at.
+    chain: Option<String>,
+    /// The last main-chain uuid of each ended turn, by turn key.
+    pub turn_ends: BTreeMap<String, String>,
 }
 
 impl MapState {
@@ -355,6 +361,28 @@ impl MapState {
                 }
                 out
             }
+            ClaudeOutMsg::System(Open::Known(System::TaskStarted(t))) => {
+                let Some(key) = self.parent_of(Some(&t.tool_use_id)) else {
+                    return vec![];
+                };
+                self.tasks.insert(key, t.task_id.clone());
+                vec![]
+            }
+            ClaudeOutMsg::System(Open::Known(System::TaskNotification(t))) => {
+                let Some(key) = self.parent_of(Some(&t.tool_use_id)) else {
+                    return vec![];
+                };
+                self.tasks.remove(&key);
+                if !self.subagents.contains(&key) {
+                    return vec![];
+                }
+                let status = match t.status.as_str() {
+                    "completed" => "ok",
+                    "stopped" => "cancelled",
+                    _ => "error",
+                };
+                vec![self.subagent_item(&key, None, status)]
+            }
             ClaudeOutMsg::System(Open::Known(System::CompactBoundary(c))) => {
                 let trigger = c
                     .compact_metadata
@@ -401,6 +429,9 @@ impl MapState {
             ClaudeOutMsg::Assistant(a) => {
                 let mut out = self.ensure_turn(now);
                 let parent = self.parent_of(a.parent_tool_use_id.as_ref());
+                if parent.is_none() && a.uuid.is_some() {
+                    self.chain = a.uuid.clone();
+                }
                 if parent.is_none()
                     && let Some(u) = &a.message.usage
                 {
@@ -412,10 +443,18 @@ impl MapState {
             }
             ClaudeOutMsg::User(u) => {
                 let parent = self.parent_of(u.parent_tool_use_id.as_ref());
+                if parent.is_none() && u.uuid.is_some() {
+                    self.chain = u.uuid.clone();
+                }
                 let updates = self.user(u, parent.clone());
                 self.sidechain(parent, updates)
             }
-            ClaudeOutMsg::Result(r) => self.result(r, now),
+            ClaudeOutMsg::Result(r) => {
+                if let (Some(t), Some(c)) = (self.turn_key(), self.chain.clone()) {
+                    self.turn_ends.insert(t, c);
+                }
+                self.result(r, now)
+            }
             ClaudeOutMsg::ControlRequest(req) => match &req.request {
                 Open::Known(wire::ControlRequestBody::CanUseTool(c)) => {
                     let mut out = self.ensure_turn(now);
