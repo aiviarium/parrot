@@ -89,10 +89,10 @@ impl Client {
         tokio::spawn(async move {
             let mut lines = BufReader::new(read).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(msg) = serde_json::from_str::<Value>(&line) {
-                    if msgs.send(msg).is_err() {
-                        break;
-                    }
+                if let Ok(msg) = serde_json::from_str::<Value>(&line)
+                    && msgs.send(msg).is_err()
+                {
+                    break;
                 }
             }
         });
