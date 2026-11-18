@@ -91,10 +91,8 @@ pub async fn run(args: Args) -> Result<(), String> {
             state_dir,
         } => {
             let eggs = state(state_dir)?;
-            for spec in specs {
-                for line in eggs.install(&spec, &registries)? {
-                    println!("installed {line}");
-                }
+            for line in eggs.install(&specs, &registries)? {
+                println!("installed {line}");
             }
             Ok(())
         }

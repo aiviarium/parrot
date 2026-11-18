@@ -95,27 +95,36 @@ impl Eggs {
         Ok((client, held))
     }
 
-    /// Installs a package, such as `aiviarium/claude`, `claude@^0.1` or `./eggs/claude`.
+    /// Installs packages, such as `aiviarium/claude`, `claude@^0.1` or `./eggs/claude`.
     /// Without `registries`, and with none in `hatchery.kdl`, the default registry is searched:
     /// `PARROT_EGGS_REGISTRY`, else [`crate::DEFAULT_REGISTRY`]. Returns `group/id version` for
     /// each package installed.
-    pub fn install(&self, spec: &str, registries: &[String]) -> Result<Vec<String>, String> {
-        let spec = Spec::parse(spec).map_err(|e| e.to_string())?;
+    pub fn install(&self, specs: &[String], registries: &[String]) -> Result<Vec<String>, String> {
+        let specs = specs
+            .iter()
+            .map(|s| Spec::parse(s).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
         let configured = self.state_dir.join("hatchery.kdl").is_file();
         let registries = if registries.is_empty() && !configured {
             vec![default_registry()]
         } else {
             registries.to_vec()
         };
+        // One client for every spec, so a folder registry is packed once and not once per spec.
         let (client, _held) = self.client(&registries)?;
         let dir = self.dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        let report = block_on(client.add(&spec, &dir)).map_err(|e| e.to_string())?;
-        Ok(report
-            .packages
-            .iter()
-            .map(|c| format!("{} {}", c.name, c.version))
-            .collect())
+        let mut out = Vec::new();
+        for spec in &specs {
+            let report = block_on(client.add(spec, &dir)).map_err(|e| e.to_string())?;
+            out.extend(
+                report
+                    .packages
+                    .iter()
+                    .map(|c| format!("{} {}", c.name, c.version)),
+            );
+        }
+        Ok(out)
     }
 
     /// Removes an installed package.
