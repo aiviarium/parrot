@@ -1,0 +1,21 @@
+// Options Claude Code doesn't report itself. `initialize` reports the models; the choices here
+// are the fallback before it answers.
+option "model" role="model" label="Model" applies="now" dynamic=#true harness="--model" {
+  choice "default" label="Default"
+  choice "opus" label="Opus"
+  choice "sonnet" label="Sonnet"
+  choice "haiku" label="Haiku"
+}
+option "permissionMode" role="mode" label="Permission mode" applies="now" default="default" harness="--permission-mode" {
+  choice "default" label="Default" tags="ask" description="Ask before edits and commands"
+  choice "acceptEdits" label="Accept edits" tags="edit" description="Edit files without asking"
+  choice "plan" label="Plan" tags="plan read-only" description="Plan without changing anything"
+  choice "bypassPermissions" label="Bypass permissions" tags="bypass" description="Never ask"
+  choice "dontAsk" label="Don't ask" tags="deny" description="Deny whatever would need asking"
+}
+option "effort" role="effort" label="Effort" applies="next-turn" harness="--effort" {
+  depends-on "model" {
+    when "haiku" default="low" { choice "low"; }
+    when "*" default="medium" { choice "low"; choice "medium"; choice "high"; choice "max"; }
+  }
+}

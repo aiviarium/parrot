@@ -28,7 +28,9 @@ pub use segment::segment;
 pub use surface::{Surface, SurfaceInput, SurfaceKind, SurfaceOption, choose_keys, surfaces};
 
 /// What a node is, as far as interaction goes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Screen,

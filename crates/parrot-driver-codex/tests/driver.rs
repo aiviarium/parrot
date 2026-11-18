@@ -345,3 +345,82 @@ async fn start_returns_on_a_start_time_request() {
     // The token goes to Codex in its environment, so no update carries it.
     assert!(!c.updates.iter().any(|u| u.to_string().contains("tok-made-up")));
 }
+
+#[tokio::test]
+async fn attachments_and_context_reach_codex() {
+    let mut c = Client::start("attachments");
+    c.bind(json!({})).await;
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(
+        agents["agents"][0]["features"]["attachments"]["kinds"],
+        json!(["image", "audio", "file"])
+    );
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "message": "m1", "text": "List the files", "steer": true,
+            "context": [{"uri": "file:///work/notes.md", "text": "Notes"}],
+            "attachments": [
+                {"name": "dot.png", "type": "image/png", "data": "iVBORw0KGgo="},
+                {"name": "shot.png", "type": "image/png", "uri": "file:///work/shot.png"},
+                {"name": "far.pdf", "type": "application/pdf", "uri": "https://example.test/far.pdf"}
+            ]}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    let n = c.wait(|u| u["update"]["type"] == "notice").await;
+    assert!(n["update"]["text"].as_str().unwrap().contains("far.pdf"), "{n}");
+    let t = c.wait(turn_ended).await;
+    assert_eq!(t["update"]["turn"]["status"], "completed");
+    let user = c
+        .updates
+        .iter()
+        .find(|u| u["update"]["item"]["id"] == "m1")
+        .unwrap();
+    assert_eq!(
+        user["update"]["item"]["set"]["attachments"][1]["uri"],
+        "file:///work/shot.png"
+    );
+}
+
+#[tokio::test]
+async fn frames_rebuild_the_same_items() {
+    for scenario in ["text-command", "command-approval"] {
+        let mut c = Client::start(scenario);
+        c.bind(json!({})).await;
+        let text = if scenario == "text-command" {
+            "List the files"
+        } else {
+            "Write live.txt"
+        };
+        c.prompt("m1", text).await;
+        if scenario == "command-approval" {
+            c.wait(|u| u["update"]["type"] == "request").await;
+            c.call(
+                "binding/answer",
+                json!({"binding": "b1", "request": "req-0", "answer": {"choice": "accept"}}),
+            )
+            .await;
+        }
+        c.wait(turn_ended).await;
+        c.wait(is_state("idle")).await;
+        let frames: Vec<Value> = c
+            .updates
+            .iter()
+            .filter(|u| u["update"]["type"] == "frame")
+            .map(|u| u["update"]["data"].clone())
+            .collect();
+        assert!(frames.iter().all(|f| f["v"] == "1"));
+        let rebuilt: Vec<Value> = parrot_driver_codex::frame::rebuild("b1", &frames)
+            .iter()
+            .map(|u| serde_json::to_value(u).unwrap())
+            .collect();
+        let live: Vec<Value> = c
+            .updates
+            .iter()
+            .filter(|u| ["item", "turn", "request"].contains(&u["update"]["type"].as_str().unwrap_or("")))
+            .cloned()
+            .collect();
+        assert_eq!(rebuilt, live, "{scenario}");
+    }
+}

@@ -80,7 +80,7 @@ dependencies = [
  "rustix-openpty",
  "serde",
  "signal-hook",
- "unicode-width",
+ "unicode-width 0.2.3",
  "vte",
  "windows-sys 0.59.0",
 ]
@@ -1072,6 +1072,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kdl"
+version = "6.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "082ddf81b2acd76fe04412655d17befedfff1837db772f8e74c38050d25ed670"
+dependencies = [
+ "miette",
+ "num-traits",
+ "winnow 0.7.15",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1132,6 +1143,16 @@ name = "micromap"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
+
+[[package]]
+name = "miette"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f98efec8807c63c752b5bd61f862c165c115b0a35685bdcfd9238c7aeb592b7"
+dependencies = [
+ "cfg-if",
+ "unicode-width 0.1.14",
+]
 
 [[package]]
 name = "mio"
@@ -1371,6 +1392,7 @@ dependencies = [
 name = "parrot-driver-claude"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1384,6 +1406,7 @@ dependencies = [
 name = "parrot-driver-codex"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1440,6 +1463,7 @@ dependencies = [
 name = "parrot-driver-tui"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1522,6 +1546,7 @@ dependencies = [
 name = "parrot-proto"
 version = "0.1.0"
 dependencies = [
+ "kdl",
  "proptest",
  "schemars",
  "serde",
@@ -1539,6 +1564,7 @@ dependencies = [
  "parrot-link",
  "parrot-proto",
  "parrot-store",
+ "parrot-workspace",
  "rustix",
  "serde",
  "serde_json",
@@ -1575,22 +1601,24 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.3",
 ]
 
 [[package]]
 name = "parrot-tui"
 version = "0.1.0"
 dependencies = [
+ "parrot-proto",
  "parrot-term",
  "regex",
  "rustix",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "toml",
- "unicode-width",
+ "unicode-width 0.2.3",
 ]
 
 [[package]]
@@ -2495,6 +2523,12 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-width"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
+
+[[package]]
+name = "unicode-width"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
@@ -2800,6 +2834,9 @@ name = "winnow"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winnow"

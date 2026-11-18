@@ -26,8 +26,10 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Notify, mpsc, oneshot};
 
-use crate::mapping::{self, APPROVAL_POLICIES, MapState, SANDBOX_MODES};
+use crate::data::load_error;
+use crate::mapping::{self, MapState};
 use crate::wire::{self, Message, RequestId, ServerNotification};
+use crate::{frame, input};
 
 /// The variable that names the `codex` binary.
 pub const CODEX_BIN_ENV: &str = "PARROT_CODEX_BIN";
@@ -196,6 +198,7 @@ impl Driver {
                 let target = {
                     let mut state = b.state.lock().unwrap();
                     state.cancel();
+                    self.emit(vec![frame::frame(&b.id, &now(), json!({"cancel": {}}))]);
                     state
                         .turn
                         .as_ref()
@@ -224,8 +227,13 @@ impl Driver {
                     .unwrap()
                     .answer(&p.request, &p.answer)
                     .map_err(|e| RpcError::new(-32602, e))?;
+                // The updates go out before the answer reaches Codex, so a fast turn can't end
+                // before `running` is sent.
+                let record = json!({"answer": {"request": p.request, "answer": p.answer}});
+                let mut out = vec![frame::frame(&b.id, &now(), record)];
+                out.extend(updates);
+                self.emit(out);
                 b.write(&msg).await?;
-                self.emit(updates);
                 Ok(json!({}))
             }
             "binding/options" => {
@@ -240,13 +248,14 @@ impl Driver {
                             "model" => next.model = s,
                             "effort" => next.effort = s,
                             "approvalPolicy" => {
-                                next.approval = known(s, &APPROVAL_POLICIES, key)?;
+                                next.approval = known(s, key)?;
                             }
-                            "sandbox" => next.sandbox = known(s, &SANDBOX_MODES, key)?,
+                            "sandbox" => next.sandbox = known(s, key)?,
                             other => return Err(RpcError::new(-32602, format!("unknown option {other}"))),
                         }
                     }
                     *state = next;
+                    self.emit(vec![frame::frame(&b.id, &now(), json!({"options": p.values}))]);
                     let result = BindingOptionsResult {
                         options: state.options(),
                         level: state.level(),
@@ -306,11 +315,32 @@ impl Driver {
 
     async fn prompt(self: &Arc<Self>, p: BindingPromptParams) -> Result<Value, RpcError> {
         let b = self.binding(&p.binding)?;
+        let skipped = input::input(&p).skipped;
+        self.emit(
+            skipped
+                .into_iter()
+                .map(|(name, why)| {
+                    notice(
+                        &b.id,
+                        format!("attachment {name} was left out: {why}"),
+                        "x.parrot/attachment",
+                    )
+                })
+                .collect(),
+        );
         let steer = b.state.lock().unwrap().turn_steer_params(&p);
         if let Some(params) = steer {
             let prompt = p.clone();
             let on_ok: OnOk = Box::new(move |state, _| {
-                state.prompt_accepted(&prompt, None, BindingDisposition::Steered, &now())
+                let at = now();
+                let d = BindingDisposition::Steered;
+                let mut out = vec![frame::frame(
+                    &state.binding,
+                    &at,
+                    frame::accepted_record(&prompt, None, d),
+                )];
+                out.extend(state.prompt_accepted(&prompt, None, d, &at));
+                out
             });
             b.request("turn/steer", params, Some(on_ok))
                 .await
@@ -323,7 +353,15 @@ impl Driver {
         let prompt = p.clone();
         let on_ok: OnOk = Box::new(move |state, result| {
             let turn = result.pointer("/turn/id").and_then(Value::as_str);
-            state.prompt_accepted(&prompt, turn, BindingDisposition::Started, &now())
+            let at = now();
+            let d = BindingDisposition::Started;
+            let mut out = vec![frame::frame(
+                &state.binding,
+                &at,
+                frame::accepted_record(&prompt, turn, d),
+            )];
+            out.extend(state.prompt_accepted(&prompt, turn, d, &at));
+            out
         });
         b.request("turn/start", params, Some(on_ok))
             .await
@@ -340,10 +378,10 @@ impl Driver {
         state.model = opt("model").filter(|m| m != "default");
         state.effort = opt("effort");
         if let Some(a) = opt("approvalPolicy") {
-            state.approval = known(Some(a), &APPROVAL_POLICIES, "approvalPolicy")?;
+            state.approval = known(Some(a), "approvalPolicy")?;
         }
         if let Some(s) = opt("sandbox") {
-            state.sandbox = known(Some(s), &SANDBOX_MODES, "sandbox")?;
+            state.sandbox = known(Some(s), "sandbox")?;
         }
         if let Some(pin) = &start.pin {
             state.apply_pin(pin);
@@ -475,6 +513,7 @@ async fn open_thread(
         }
     }
     let params = {
+        driver.emit(vec![frame::frame(&b.id, &now(), json!({"models": list}))]);
         let mut state = b.state.lock().unwrap();
         state.models_listed(&list);
         let mut p = json!({
@@ -505,7 +544,11 @@ async fn open_thread(
         .request(method, params, None)
         .await
         .map_err(|e| RpcError::new(-32603, format!("codex {method}: {}", e.message)))?;
-    let updates = b.state.lock().unwrap().thread_ready(&result);
+    let mut updates = vec![frame::frame(&b.id, &now(), json!({"ready": result}))];
+    if let Some(e) = load_error() {
+        updates.push(notice(&b.id, e.to_owned(), "x.parrot/driver-data"));
+    }
+    updates.extend(b.state.lock().unwrap().thread_ready(&result));
     let reference = updates.iter().find_map(|u| match &u.update {
         Open::Known(DriverUpdateKind::Ref { reference }) => Some(reference.clone()),
         _ => None,
@@ -516,9 +559,9 @@ async fn open_thread(
     Ok(reference)
 }
 
-fn known(value: Option<String>, values: &[(&str, &str, &str)], key: &str) -> Result<String, RpcError> {
+fn known(value: Option<String>, key: &str) -> Result<String, RpcError> {
     match value {
-        Some(v) if values.iter().any(|(id, _, _)| *id == v) => Ok(v),
+        Some(v) if mapping::is_choice(key, &v) => Ok(v),
         other => Err(RpcError::new(-32602, format!("{key} cannot be {other:?}"))),
     }
 }
@@ -599,6 +642,10 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
         let Ok(msg) = Message::parse(&line) else {
             continue;
         };
+        let at = now();
+        if let Ok(raw) = serde_json::from_str::<Value>(&line) {
+            driver.emit(vec![frame::frame(&b.id, &at, json!({"out": raw}))]);
+        }
         match msg {
             Message::Response { id, result } => {
                 let Some(w) = b.waiting.lock().unwrap().remove(&id) else {
@@ -628,7 +675,7 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             }
             Message::Notification { method, params } => {
                 let n = ServerNotification::parse(&method, &params);
-                let updates = b.state.lock().unwrap().step(&n, &now());
+                let updates = b.state.lock().unwrap().step(&n, &at);
                 driver.emit(updates);
             }
         }
@@ -643,6 +690,19 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             Some("codex exited".into()),
         )]);
         driver.bindings.lock().unwrap().remove(&b.id);
+    }
+}
+
+fn notice(binding: &str, text: String, code: &str) -> DriverUpdate {
+    DriverUpdate {
+        binding: binding.to_owned(),
+        subagent: None,
+        update: Open::Known(DriverUpdateKind::Notice {
+            level: parrot_proto::subscribe::NoticeLevel::Warning,
+            text,
+            code: Some(code.to_owned()),
+        }),
+        extra: Map::new(),
     }
 }
 
@@ -665,6 +725,7 @@ pub fn agent() -> Agent {
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
     features.insert("session.steer".into(), json!({"when": "next_step"}));
+    features.insert("attachments".into(), input::feature());
     features.insert(
         "usage".into(),
         json!({"cost": false, "context": true, "rateLimits": true}),

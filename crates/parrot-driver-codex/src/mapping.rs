@@ -24,56 +24,27 @@ use parrot_proto::subscribe::NoticeLevel;
 use parrot_proto::usage::{ContextUsage, RateLimit, TokenUsage, Usage};
 use serde_json::{Map, Value, json};
 
+use crate::data::data;
 use crate::wire::{
     self, Message, RequestId, ServerNotification, ThreadItem, ThreadTokenUsage, server_request as sr,
 };
 
-/// Approval policies offered as the `approvalPolicy` option: id, title, description.
-pub const APPROVAL_POLICIES: [(&str, &str, &str); 3] = [
-    (
-        "untrusted",
-        "Untrusted",
-        "Ask before any command that is not known to be safe",
-    ),
-    (
-        "on-request",
-        "On request",
-        "The model asks when it needs to leave the sandbox",
-    ),
-    ("never", "Never", "Never ask; failures go back to the model"),
-];
-
-/// Sandbox modes offered as the `sandbox` option: id, title, description.
-pub const SANDBOX_MODES: [(&str, &str, &str); 3] = [
-    (
-        "read-only",
-        "Read only",
-        "Commands can read files but not change them",
-    ),
-    (
-        "workspace-write",
-        "Workspace write",
-        "Commands can change files in the workspace, without network",
-    ),
-    (
-        "danger-full-access",
-        "Full access",
-        "No sandbox: commands run on the host with network",
-    ),
-];
-
 /// Longest command or tool output kept on an item.
 pub const OUTPUT_MAX: usize = 20_000;
 
-/// The level and network access an approval policy and sandbox give (spec 15.2). Unknown values
-/// count as `host` with network.
+/// The level and network access an approval policy and sandbox give (spec 15.2, `levels.kdl`).
+/// Unmapped values count as `host` with network.
 pub fn level_of(approval: &str, sandbox: &str) -> (PermissionLevel, bool) {
-    match (sandbox, approval) {
-        ("read-only", "untrusted" | "on-request" | "never") => (PermissionLevel::Read, false),
-        ("workspace-write", "untrusted") => (PermissionLevel::Write, false),
-        ("workspace-write", "on-request" | "never") => (PermissionLevel::Sandboxed, false),
-        _ => (PermissionLevel::Host, true),
-    }
+    let values = BTreeMap::from([
+        ("approvalPolicy".to_owned(), json!(approval)),
+        ("sandbox".to_owned(), json!(sandbox)),
+    ]);
+    data().levels.level_of(&values)
+}
+
+/// Whether `value` is a choice of the data option `id`.
+pub fn is_choice(id: &str, value: &str) -> bool {
+    data().options.get(id).is_some_and(|o| o.choice(value).is_some())
 }
 
 /// The isolation a sandbox mode gives.
@@ -339,24 +310,11 @@ impl MapState {
             });
         }
 
-        let mut approval = option(
-            "approvalPolicy",
-            OptionRole::Mode,
-            "Approval policy",
-            enum_schema(&APPROVAL_POLICIES),
-            json!(self.approval),
-        );
-        approval.description = Some("When Codex asks before acting".into());
-        approval.default = Some(json!("on-request"));
-        let mut sandbox = option(
-            "sandbox",
-            OptionRole::Sandbox,
-            "Sandbox",
-            enum_schema(&SANDBOX_MODES),
-            json!(self.sandbox),
-        );
-        sandbox.description = Some("What commands can reach without asking".into());
-        sandbox.default = Some(json!("workspace-write"));
+        let options = &data().options;
+        let from_data =
+            |id: &str, value: &str| options.get(id).map(|o| o.to_option(Some(json!(value)), None));
+        let approval = from_data("approvalPolicy", &self.approval).expect("options.kdl has approvalPolicy");
+        let sandbox = from_data("sandbox", &self.sandbox).expect("options.kdl has sandbox");
         vec![model, effort, approval, sandbox]
     }
 
@@ -440,6 +398,23 @@ impl MapState {
         set.insert("text".into(), json!(p.text));
         set.insert("status".into(), json!("sent"));
         set.insert("message".into(), json!(p.message));
+        if let Some(c) = p.context.as_ref().filter(|c| !c.is_empty()) {
+            set.insert("context".into(), json!(c));
+        }
+        if let Some(a) = p.attachments.as_ref().filter(|a| !a.is_empty()) {
+            // The item names the attachments; their bytes stay with the harness.
+            let named: Vec<Value> = a
+                .iter()
+                .map(|a| {
+                    let mut v = json!({"name": a.name, "type": a.media_type});
+                    if let Some(u) = &a.uri {
+                        v["uri"] = json!(u);
+                    }
+                    v
+                })
+                .collect();
+            set.insert("attachments".into(), Value::Array(named));
+        }
         out.push(self.item(ItemPatch {
             id: p.message.clone(),
             kind: Some(Open::Known(ItemKind::User)),
@@ -1308,30 +1283,9 @@ pub fn review_target(input: Option<&Value>, args: Option<&str>) -> Result<Value,
     }
 }
 
-/// The input array of a turn: context entries first, then the text.
+/// The input array of a turn (see [`crate::input`]).
 fn input_of(p: &BindingPromptParams) -> Value {
-    let mut texts = Vec::new();
-    for c in p.context.iter().flatten() {
-        let v = serde_json::to_value(c).unwrap_or_default();
-        let uri = v["uri"].as_str().unwrap_or_default();
-        let body = v["text"].as_str().unwrap_or_default();
-        texts.push(format!("<context uri=\"{uri}\">\n{body}\n</context>"));
-    }
-    texts.push(p.text.clone());
-    let mut input = vec![json!({"type": "text", "text": texts.join("\n\n"), "text_elements": []})];
-    for a in p.attachments.iter().flatten() {
-        let v = serde_json::to_value(a).unwrap_or_default();
-        let ty = v["type"].as_str().unwrap_or_default();
-        if !ty.starts_with("image/") {
-            continue;
-        }
-        if let Some(data) = v["data"].as_str() {
-            input.push(json!({"type": "image", "url": format!("data:{ty};base64,{data}")}));
-        } else if let Some(uri) = v["uri"].as_str() {
-            input.push(json!({"type": "image", "url": uri}));
-        }
-    }
-    Value::Array(input)
+    Value::Array(crate::input::input(p).items)
 }
 
 fn status_of(status: Option<&str>, done: bool) -> &'static str {
@@ -1814,14 +1768,6 @@ fn effort_entry(id: &str, description: Option<&str>) -> Value {
         e["description"] = json!(d);
     }
     e
-}
-
-fn enum_schema(values: &[(&str, &str, &str)]) -> Value {
-    let one_of: Vec<Value> = values
-        .iter()
-        .map(|(id, title, d)| json!({"const": id, "title": title, "description": d}))
-        .collect();
-    json!({"type": "string", "oneOf": one_of})
 }
 
 fn option(id: &str, role: OptionRole, label: &str, schema: Value, value: Value) -> ConfigOption {

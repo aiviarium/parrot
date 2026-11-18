@@ -1,0 +1,34 @@
+// The tools each permission level allows without asking. A tool in no level is `host`.
+level "read" {
+  tool "Read"
+  tool "Glob"
+  tool "Grep"
+  tool "LS"
+  tool "AskUserQuestion"
+  tool "ExitPlanMode"
+  tool "TodoWrite"
+}
+level "write" {
+  tool "Write"
+  tool "Edit"
+  tool "MultiEdit"
+  tool "NotebookEdit"
+}
+level "host" {
+  tool "Bash"
+  tool "WebFetch"
+  tool "WebSearch"
+  tool "Task"
+}
+
+// The level each permission mode gives, first match wins.
+map level="write" network=#false { when permissionMode="acceptEdits"; }
+map level="host" network=#true { when permissionMode="bypassPermissions"; }
+map level="read" network=#false {
+  when permissionMode="default"
+  when permissionMode="plan"
+  when permissionMode="dontAsk"
+}
+
+// Under a ceiling, only the settings Parrot passes apply: no user or project allow-rules.
+pin { arg "--setting-sources" ""; }

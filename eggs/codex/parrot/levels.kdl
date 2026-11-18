@@ -1,0 +1,28 @@
+// Codex runs commands itself, so the level follows the sandbox and approval policy.
+level "read" {
+  tool "read"
+  tool "search"
+  tool "list"
+}
+level "write" {
+  tool "fileChange"
+}
+level "sandboxed" {
+  tool "commandExecution"
+}
+level "host" {
+  tool "mcpToolCall"
+  tool "webSearch"
+}
+
+map level="read" network=#false {
+  when sandbox="read-only" approvalPolicy="untrusted"
+  when sandbox="read-only" approvalPolicy="on-request"
+  when sandbox="read-only" approvalPolicy="never"
+}
+map level="write" network=#false { when sandbox="workspace-write" approvalPolicy="untrusted"; }
+map level="sandboxed" network=#false {
+  when sandbox="workspace-write" approvalPolicy="on-request"
+  when sandbox="workspace-write" approvalPolicy="never"
+}
+

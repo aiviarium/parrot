@@ -103,7 +103,10 @@ fn new_prompt_and_watch_until_idle() {
     );
 
     let watched = serve.parrot(&["watch", session, "--until", "idle"]);
-    assert!(watched.contains("assistant: Hello there."), "{watched}");
+    assert!(
+        watched.contains("assistant: Hello there."),
+        "{prompted}\n{watched}"
+    );
 
     let raw = serve.parrot(&["sessions", "--json"]);
     let list: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
