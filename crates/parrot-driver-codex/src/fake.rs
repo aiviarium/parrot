@@ -112,7 +112,10 @@ pub fn parse_trace(text: &str) -> Result<Vec<Step>, ScenarioError> {
         }
         let bad = |message: String| ScenarioError::Bad { line: i + 1, message };
         let v: Value = serde_json::from_str(line).map_err(|e| bad(e.to_string()))?;
-        let mut msg = v.get("msg").cloned().ok_or_else(|| bad("a trace line has msg".into()))?;
+        let mut msg = v
+            .get("msg")
+            .cloned()
+            .ok_or_else(|| bad("a trace line has msg".into()))?;
         match v.get("dir").and_then(Value::as_str) {
             Some("in") => match (msg.get("method"), msg.get("id")) {
                 (Some(m), Some(id)) => {
@@ -121,9 +124,7 @@ pub fn parse_trace(text: &str) -> Result<Vec<Step>, ScenarioError> {
                 }
                 (None, Some(id)) => steps.push(Step::AwaitResponse {
                     id: id.clone(),
-                    pattern: msg
-                        .pointer("/result/decision")
-                        .map(|d| json!({"decision": d})),
+                    pattern: msg.pointer("/result/decision").map(|d| json!({"decision": d})),
                 }),
                 _ => {}
             },

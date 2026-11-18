@@ -17,6 +17,10 @@ struct Client {
 
 impl Client {
     fn start(scenario: &str) -> Client {
+        Client::start_shadow(scenario, None)
+    }
+
+    fn start_shadow(scenario: &str, sessions: Option<PathBuf>) -> Client {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = if scenario.contains('/') {
             root.join(scenario)
@@ -28,6 +32,8 @@ impl Client {
             args: vec!["app-server".into()],
             env: vec![("PARROT_FAKE_CODEX_SCENARIO".into(), path.into())],
             guard: false,
+            shadow: sessions.is_some(),
+            sessions,
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
@@ -454,7 +460,11 @@ async fn recorded_trace_plays_end_to_end() {
     }
     let done = c.wait(turn_ended).await;
     assert_eq!(done["update"]["turn"]["status"], "completed");
-    let usage = c.updates.iter().filter(|u| u["update"]["type"] == "usage").count();
+    let usage = c
+        .updates
+        .iter()
+        .filter(|u| u["update"]["type"] == "usage")
+        .count();
     assert!(usage > 0, "token usage arrives");
     let r = c
         .call(
@@ -474,7 +484,11 @@ async fn recorded_trace_plays_end_to_end() {
         .filter(|u| u["update"]["item"]["kind"] == "user")
         .map(|u| u["update"]["item"]["id"].clone())
         .collect();
-    assert_eq!(users, [json!("m1"), json!("m2")], "Codex's echoes fold into the prompts");
+    assert_eq!(
+        users,
+        [json!("m1"), json!("m2")],
+        "Codex's echoes fold into the prompts"
+    );
     let commands: Vec<_> = c
         .updates
         .iter()
@@ -487,4 +501,109 @@ async fn recorded_trace_plays_end_to_end() {
             .any(|u| u["update"]["usage"]["rateLimits"].is_array()),
         "rate limits arrive"
     );
+}
+
+#[tokio::test]
+async fn shadow_mode_reports_where_the_rollout_differs() {
+    let root = tempfile::tempdir().unwrap();
+    let day = root.path().join("2026/11/18");
+    std::fs::create_dir_all(&day).unwrap();
+    let name = "rollout-2026-11-18T08-23-03-01a1edab-5a86-75f0-b42a-57127da3693a.jsonl";
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/rollouts")
+            .join(name),
+    )
+    .unwrap();
+    // A deliberate difference: the rollout says `ls -la` exited 2.
+    let changed: Vec<String> = text
+        .lines()
+        .map(|l| {
+            if l.contains("ls -la") && l.contains("CommandExecution") {
+                l.replace(r#""exit_code":0"#, r#""exit_code":2"#)
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect();
+    std::fs::write(day.join(name), changed.join("\n")).unwrap();
+    let mut c = Client::start_shadow(
+        "../parrot-conform/fixtures/traces/codex-0.167.1.jsonl",
+        Some(root.path().to_owned()),
+    );
+    c.bind(json!({})).await;
+    c.call(
+        "binding/prompt",
+        json!({"binding": "b1", "message": "m1", "text": "Name the color of this image in one word. Then run the shell command `ls -la` and report how many entries it printed.", "steer": false}),
+    )
+    .await;
+    for _ in 0..2 {
+        let req = c
+            .wait(|u| u["update"]["type"] == "request" && u["update"]["request"]["status"] == "open")
+            .await;
+        let id = req["update"]["request"]["id"].as_str().unwrap().to_owned();
+        c.call(
+            "binding/answer",
+            json!({"binding": "b1", "request": id, "answer": {"choice": "accept"}}),
+        )
+        .await;
+    }
+    c.wait(turn_ended).await;
+    let n = c
+        .wait(|u| u["update"]["type"] == "notice" && u["update"]["code"] == "x.parrot/shadow")
+        .await;
+    let text = n["update"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("exit is 0 in the native and 2 in the transcript"),
+        "{text}"
+    );
+    let more: Vec<_> = c
+        .updates
+        .iter()
+        .filter(|u| u["update"]["code"] == "x.parrot/shadow")
+        .map(|u| u["update"]["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        more.iter().all(|t| t.contains("exec-b6b0d1dd")),
+        "only the changed command differs: {more:?}"
+    );
+}
+
+#[tokio::test]
+async fn history_reads_rollouts_and_fork_asks_codex() {
+    let root = tempfile::tempdir().unwrap();
+    let day = root.path().join("2026/11/18");
+    std::fs::create_dir_all(&day).unwrap();
+    let name = "rollout-2026-11-18T08-23-03-01a1edab-5a86-75f0-b42a-57127da3693a.jsonl";
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/rollouts")
+            .join(name),
+        day.join(name),
+    )
+    .unwrap();
+    let mut c = Client::start_shadow("fork", Some(root.path().to_owned()));
+    let agents = c.call("agent/list", json!({})).await;
+    assert!(agents["agents"][0]["features"]["session.history"].is_object());
+    let found = c.call("history/discover", json!({"agent": "codex"})).await;
+    assert_eq!(
+        found["found"][0]["ref"]["id"],
+        "01a1edab-5a86-75f0-b42a-57127da3693a"
+    );
+    let read = c
+        .call(
+            "history/read",
+            json!({"agent": "codex", "ref": found["found"][0]["ref"]}),
+        )
+        .await;
+    assert!(
+        read["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["update"]["item"]["kind"] == "command")
+    );
+    c.bind(json!({})).await;
+    let fork = c.call("binding/fork", json!({"binding": "b1"})).await;
+    assert_eq!(fork["ref"]["id"], "thr-fake-fork");
 }

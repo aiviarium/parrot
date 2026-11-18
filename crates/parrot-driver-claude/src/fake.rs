@@ -113,7 +113,10 @@ pub fn parse_trace(text: &str) -> Result<Vec<Step>, ScenarioError> {
         }
         let bad = |message: String| ScenarioError::Bad { line: i + 1, message };
         let v: Value = serde_json::from_str(line).map_err(|e| bad(e.to_string()))?;
-        let msg = v.get("msg").cloned().ok_or_else(|| bad("a trace line has msg".into()))?;
+        let msg = v
+            .get("msg")
+            .cloned()
+            .ok_or_else(|| bad("a trace line has msg".into()))?;
         match v.get("dir").and_then(Value::as_str) {
             Some("in") => match msg["type"].as_str() {
                 Some("user") => steps.push(Step::Expect(json!({"type": "user"}))),
@@ -130,9 +133,7 @@ pub fn parse_trace(text: &str) -> Result<Vec<Step>, ScenarioError> {
                     let r = &msg["response"];
                     steps.push(Step::AwaitControlResponse {
                         request_id: r["request_id"].as_str().unwrap_or_default().to_owned(),
-                        pattern: r["response"]
-                            .get("behavior")
-                            .map(|b| json!({"behavior": b})),
+                        pattern: r["response"].get("behavior").map(|b| json!({"behavior": b})),
                     });
                 }
                 _ => {}

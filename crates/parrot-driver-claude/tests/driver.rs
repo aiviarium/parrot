@@ -356,7 +356,9 @@ async fn recorded_trace_plays_end_to_end() {
         json!({"binding": "b1", "request": id, "answer": {"choice": "allow"}}),
     )
     .await;
-    let done = c.wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running").await;
+    let done = c
+        .wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running")
+        .await;
     assert_eq!(done["update"]["turn"]["status"], "completed");
     let r = c
         .call(
@@ -367,7 +369,9 @@ async fn recorded_trace_plays_end_to_end() {
     assert_eq!(r["disposition"], "started");
     c.wait(|u| u["update"]["item"]["append"].is_object()).await;
     c.call("binding/cancel", json!({"binding": "b1"})).await;
-    let done = c.wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running").await;
+    let done = c
+        .wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running")
+        .await;
     assert_eq!(done["update"]["turn"]["status"], "interrupted");
     c.wait(is_state("idle")).await;
 }

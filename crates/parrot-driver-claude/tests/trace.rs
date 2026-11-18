@@ -63,7 +63,11 @@ fn play() -> Vec<Value> {
 }
 
 fn of_type<'a>(updates: &'a [Value], t: &str) -> Vec<&'a Value> {
-    updates.iter().filter(|u| u["update"]["type"] == t).map(|u| &u["update"]).collect()
+    updates
+        .iter()
+        .filter(|u| u["update"]["type"] == t)
+        .map(|u| &u["update"])
+        .collect()
 }
 
 #[test]
@@ -77,7 +81,10 @@ fn every_line_parses_as_a_known_message() {
         let msg = wire::parse_line(&v["msg"].to_string()).unwrap();
         let t = v["msg"]["type"].as_str().unwrap();
         // Status, rate-limit and thinking-token lines carry nothing an item needs.
-        if matches!(t, "rate_limit_event") || v["msg"]["subtype"] == "status" || v["msg"]["subtype"] == "thinking_tokens" {
+        if matches!(t, "rate_limit_event")
+            || v["msg"]["subtype"] == "status"
+            || v["msg"]["subtype"] == "thinking_tokens"
+        {
             continue;
         }
         assert!(
@@ -100,7 +107,10 @@ fn trace_maps_to_items_tools_requests_and_turns() {
     assert_eq!(turns[1]["turn"]["status"], "interrupted");
 
     let requests = of_type(&updates, "request");
-    let opened: Vec<_> = requests.iter().filter(|r| r["request"]["status"] == "open").collect();
+    let opened: Vec<_> = requests
+        .iter()
+        .filter(|r| r["request"]["status"] == "open")
+        .collect();
     assert_eq!(opened.len(), 1, "one permission request (Read outside the cwd)");
     assert_eq!(opened[0]["request"]["subject"]["tool"], "Read");
     assert_eq!(opened[0]["request"]["item"], "toolu_01Hk9hZZXtjdaoDcb2Gc4rgp");
