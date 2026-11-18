@@ -1,0 +1,22 @@
+// A mode this file does not name counts as host with network, so a mode an agent update adds
+// cannot slip under a ceiling (spec 15.2).
+mode "default" level="read" network=false
+mode "plan" level="read" network=false
+mode "acceptEdits" level="write" network=false
+mode "bypassPermissions" level="host" network=true
+level "read" {
+  tool "read"
+  tool "search"
+  tool "think"
+}
+level "write" {
+  tool "edit"
+  tool "write"
+  tool "delete"
+  tool "move"
+}
+level "host" {
+  tool "execute"
+  tool "fetch"
+  tool "other"
+}

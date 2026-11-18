@@ -1,0 +1,2 @@
+// A tool call asks to run `ls`. Denied, it fails and says it did not run.
+[[perm:ls]]

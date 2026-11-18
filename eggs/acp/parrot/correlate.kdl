@@ -1,0 +1,12 @@
+kind "tool" {
+  match "ref"
+  prefer "native"
+}
+kind "assistant" {
+  match "turn-position"
+  prefer "native"
+}
+kind "reasoning" {
+  match "turn-position"
+  prefer "native"
+}
