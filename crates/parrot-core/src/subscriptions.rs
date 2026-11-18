@@ -123,11 +123,18 @@ pub fn flush(cx: &mut Cx) {
         let seq = cx.next_seq();
         if is_item && let (Some(s), Some(patch), Some(i)) = (&session, update.get("item"), &item_id) {
             let key = format!("{s}/{i}");
+            let appends_only = patch.as_object().is_some_and(|p| {
+                p.keys()
+                    .all(|k| matches!(k.as_str(), "id" | "binding" | "append" | "streaming"))
+            });
             match items::apply(cx.state, s, patch, seq) {
+                // The text of a stream in flight is in the log; the projection is written when
+                // the stream ends or a field is set, and a restart replays the appends after it.
+                Some(item) if appends_only && item.get("streaming") == Some(&Value::Bool(true)) => {}
                 Some(item) => {
                     let created = items::created(cx.state, s, i);
                     cx.persist(json!({ "op": "put", "kind": "item", "id": key,
-                        "value": { "session": s, "created": created, "item": item } }));
+                        "value": { "session": s, "created": created, "at": seq, "item": item } }));
                 }
                 None => cx.persist(json!({ "op": "delete", "kind": "item", "id": key })),
             }
@@ -206,7 +213,7 @@ pub fn session_snapshot(state: &State, session: &str, n: usize) -> Value {
         .collect();
     let mut v = json!({
         "session": sessions::session_json(state, session),
-        "items": items::newest(state, session, n),
+        "items": items::newest(state, session, n).into_iter().map(items::shown).collect::<Vec<_>>(),
         "requests": crate::requests::open_in(state, session),
         "queue": queue::queue_state(state, session),
         "options": crate::options::options_of(state, session),
@@ -274,7 +281,7 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
                 .collect();
             let mut snap = json!({ "sessions": page });
             if all.len() > 100 {
-                snap["next"] = json!("100");
+                snap["next"] = json!(all[99]);
             }
             result["snapshot"] = snap;
         }

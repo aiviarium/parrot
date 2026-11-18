@@ -1,6 +1,8 @@
 //! A link's offer (spec 24.1) is enforced on every path: a peer sees only the sessions, items,
 //! trees, workspaces, requests and tokens the offer covers, and only an offered environment.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, LinkOffer, OfferedSessions, Peer};
 use serde_json::{Value, json};
@@ -27,7 +29,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         let mut sim = Sim {
-            core: Core::new(Box::new(clock), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock), Box::new(SeqIds::default())),
             next: 0,
         };
         sim.connect("con_owner", Peer::Owner);

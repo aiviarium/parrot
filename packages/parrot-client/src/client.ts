@@ -10,7 +10,7 @@ import type {
   Target,
 } from "./protocol"
 import { Connection } from "./rpc"
-import type { Methods, Notifications } from "./schema"
+import type { ClientMethods, Methods, Notifications } from "./schema"
 import { type StdioOptions, stdioTransport } from "./stdio"
 import type { Transport } from "./transport"
 import { type WebSocketOptions, webSocketTransport } from "./websocket"
@@ -79,9 +79,17 @@ export class Client {
     return this.connection.on(method, (params) => handler(params as Notifications[M]))
   }
 
-  /** Answers a request the runtime sends, for a function this client provides (spec 25.2). */
-  provide(method: string, handler: (params: unknown) => unknown | Promise<unknown>): () => void {
-    return this.connection.expose(method, handler)
+  /**
+   * Answers a request the runtime sends, for a function this client provides (spec 25.2). Params
+   * and result are typed from the schema's `x-client-methods`.
+   */
+  provide<M extends keyof ClientMethods>(
+    method: M,
+    handler: (
+      params: ClientMethods[M]["params"],
+    ) => ClientMethods[M]["result"] | Promise<ClientMethods[M]["result"]>,
+  ): () => void {
+    return this.connection.expose(method, (params) => handler(params as ClientMethods[M]["params"]))
   }
 
   /** Sends `initialize` first, as the protocol requires (spec 4). */

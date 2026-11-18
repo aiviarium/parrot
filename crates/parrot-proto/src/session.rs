@@ -232,7 +232,9 @@ pub struct SessionNewParams {
     pub agent: AgentId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<EnvId>,
-    pub workspace: WorkspaceRequest,
+    /// Required, unless a `seed` that carries the workspace gives one (23.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -474,4 +476,21 @@ pub struct SessionAdoptParams {
     pub start: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+}
+
+/// `session/configure` (Appendix E8): `delegate` on a subtree, `manage` on a root.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfigureParams {
+    pub session: SessionId,
+    /// A `Ceiling` (22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::usage::Budget>,
+    /// A `Wake` (20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_parent_end: Option<OnParentEnd>,
 }

@@ -1,6 +1,8 @@
 //! A move waits for the running turn to end: up to 30 seconds, then it interrupts the turn, and
 //! the old binding stops only after that (E9).
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, LinkOffer, Peer};
 use serde_json::{Value, json};
@@ -21,7 +23,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(T0);
         let mut sim = Sim {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::default())),
             clock,
             next: 0,
             session: String::new(),

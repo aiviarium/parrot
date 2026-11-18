@@ -2,6 +2,8 @@
 //! grant and for sessions it created here (spec 5, 24.4, E8), and a token limited to sessions
 //! sees only their workspaces.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer};
 use serde_json::{Value, json};
@@ -16,7 +18,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         let mut sim = Sim {
-            core: Core::new(Box::new(clock), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock), Box::new(SeqIds::default())),
             next: 0,
         };
         sim.connect("con_owner", Peer::Owner);

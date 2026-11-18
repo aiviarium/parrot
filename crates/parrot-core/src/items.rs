@@ -60,6 +60,33 @@ pub fn restore(state: &mut State, session: &str, item: Map<String, Value>, seq: 
     items.by_id.insert(id, item);
 }
 
+/// The longest `output` shown in reads and snapshots, in bytes. `item/get` returns all of it.
+pub const OUTPUT_LIMIT: usize = 64 * 1024;
+
+/// An item as reads and snapshots show it: a long `output` is cut at a character boundary, and
+/// `_meta["x.parrot/truncated"]` gives its full size in bytes (spec 12.2).
+pub fn shown(mut item: Value) -> Value {
+    let Some(full) = item.get("output").and_then(Value::as_str).map(str::len) else {
+        return item;
+    };
+    if full <= OUTPUT_LIMIT {
+        return item;
+    }
+    let text = item["output"].as_str().unwrap_or_default();
+    let mut cut = OUTPUT_LIMIT;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    item["output"] = Value::String(text[..cut].to_string());
+    match item.get_mut("_meta").and_then(Value::as_object_mut) {
+        Some(meta) => {
+            meta.insert("x.parrot/truncated".into(), full.into());
+        }
+        None => item["_meta"] = serde_json::json!({ "x.parrot/truncated": full }),
+    }
+    item
+}
+
 /// When an item was created, as the `seq` of its first patch.
 pub fn created(state: &State, session: &str, item: &str) -> u64 {
     state
@@ -132,7 +159,10 @@ pub fn read(state: &State, session: &str, cursor: Option<&str>, forward: bool, l
     let s = state.items.by_session.get(session);
     let items: Vec<Value> = page
         .iter()
-        .filter_map(|id| s.and_then(|s| s.by_id.get(id)).map(|m| Value::Object(m.clone())))
+        .filter_map(|id| {
+            s.and_then(|s| s.by_id.get(id))
+                .map(|m| shown(Value::Object(m.clone())))
+        })
         .collect();
     let mut out = serde_json::json!({ "items": items });
     if start > 0

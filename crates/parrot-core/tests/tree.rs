@@ -1,6 +1,8 @@
 //! Deterministic simulations of the `tree` and `seed` profiles: children, tasks, waking,
 //! ceilings, budgets, workspaces, rebinds, rewinds and bundles.
 
+mod common;
+
 use parrot_core::ceilings::{Ceiling, intersect, narrows};
 use parrot_core::clock::{Clock, ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer, Restore, Stored};
@@ -73,7 +75,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         let mut sim = Self {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::starting_at(ids))),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::starting_at(ids))),
             clock,
             store: Store::default(),
             next_id: 0,
@@ -296,7 +298,72 @@ fn a_parent_agent_creates_a_child_in_its_subtree() {
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes[1]["depth"], 1);
     let page = sim.ok(OWNER, "session/tree", json!({ "session": p, "limit": 1 }));
-    assert_eq!(page["next"], "1");
+    assert_eq!(
+        page["next"],
+        p.as_str(),
+        "the cursor is the last session of the page"
+    );
+    // A child that joins between pages doesn't repeat what the first page had.
+    let (late, b2) = sim.new_session("con_agent", child_params(&p, json!({ "title": "Late" })));
+    sim.bring_up(&b2);
+    let rest = sim.ok(
+        OWNER,
+        "session/tree",
+        json!({ "session": p, "cursor": page["next"] }),
+    );
+    let ids: Vec<&str> = rest["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["session"]["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [c.as_str(), late.as_str()]);
+    assert!(rest.get("next").is_none());
+}
+
+#[test]
+fn session_list_pages_by_cursor_without_shifting_when_sessions_change() {
+    let mut sim = Sim::new();
+    let ids: Vec<String> = (0..5).map(|_| sim.root(json!({})).0).collect();
+    let first = sim.ok(OWNER, "session/list", json!({ "limit": 2 }));
+    let seen: Vec<String> = first["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(seen.len(), 2);
+    // A session on a later page changes and moves to the front; the rest stay in order.
+    let moved = ids.iter().find(|i| !seen.contains(i)).unwrap().clone();
+    sim.ok(
+        OWNER,
+        "session/rename",
+        json!({ "session": moved, "title": "Renamed" }),
+    );
+    let mut rest = Vec::new();
+    let mut cursor = first["next"].clone();
+    while let Some(c) = cursor.as_str().map(str::to_string) {
+        let page = sim.ok(OWNER, "session/list", json!({ "limit": 2, "cursor": c }));
+        rest.extend(
+            page["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap().to_string()),
+        );
+        cursor = page.get("next").cloned().unwrap_or(Value::Null);
+    }
+    assert!(
+        rest.iter().all(|r| !seen.contains(r)),
+        "no repeats: {seen:?} then {rest:?}"
+    );
+    assert_eq!(
+        seen.len() + rest.len() + 1,
+        5,
+        "only the renamed one moved ahead: {rest:?}"
+    );
+    let (r, _) = sim.call(OWNER, "session/list", json!({ "cursor": "nonsense" }));
+    assert_eq!(r, Err(-32602));
 }
 
 #[test]
@@ -1243,4 +1310,104 @@ fn a_source_summary_is_asked_of_the_source_harness() {
         !text.contains("Summarize this session"),
         "the summary turn is cut: {text}"
     );
+}
+
+/// Stop a session and let its driver exit.
+fn stop_and_exit(sim: &mut Sim, session: &str, binding: &str) {
+    sim.ok(OWNER, "session/stop", json!({ "session": session }));
+    sim.handle(Input::DriverExited {
+        binding: binding.into(),
+        detail: "stopped".into(),
+    });
+    assert_eq!(sim.get(session)["state"], "stopped");
+}
+
+#[test]
+fn a_native_fork_of_a_stopped_source_resumes_it_to_fork_then_stops_it() {
+    let mut sim = Sim::new();
+    let (s, b) = sim.root(json!({}));
+    sim.driver(
+        &b,
+        json!({ "type": "ref", "ref": { "id": "h1", "strength": "strong" } }),
+    );
+    sim.turn(&b, "t1", "first");
+    sim.turn(&b, "t2", "second");
+    let t1 = sim.ok(OWNER, "session/bundle", json!({ "session": s }))["bundle"]["items"][0]["turn"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    stop_and_exit(&mut sim, &s, &b);
+    sim.core.state.sessions.agents.get_mut("claude").unwrap()["features"] = json!({ "session.fork": {} });
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" },
+            "seed": { "session": s, "at": t1, "require": "exact" } }),
+    );
+    let f = r.unwrap()["session"]["id"].as_str().unwrap().to_string();
+    // The source is resumed first.
+    let woken = start_params(&e).expect("the source starts");
+    assert_eq!(woken["session"], s.as_str());
+    assert_eq!(woken["resume"]["id"], "h1");
+    let b2 = woken["binding"].as_str().unwrap().to_string();
+    let e = sim.bring_up(&b2);
+    let (call, fp) = driver_calls(&e, "binding/fork").remove(0);
+    assert_eq!(fp["binding"], b2.as_str());
+    assert_eq!(fp["at"], "t1", "the turn's key from the binding that ran it");
+    let e = sim.handle(Input::DriverReply {
+        binding: b2.clone(),
+        call,
+        result: Ok(json!({ "ref": { "id": "fork:h1", "strength": "strong" } })),
+    });
+    let start = start_params(&e).unwrap();
+    assert_eq!(start["session"], f.as_str());
+    assert_eq!(start["resume"]["id"], "fork:h1");
+    assert_eq!(
+        driver_calls(&e, "binding/stop")[0].1["binding"],
+        b2.as_str(),
+        "the source stops again"
+    );
+    assert_eq!(sim.get(&f)["seed"]["via"], "fork");
+}
+
+#[test]
+fn a_stopped_source_with_a_paused_queue_summarizes_itself_and_stops_again() {
+    let mut sim = Sim::new();
+    let (s, b) = sim.root(json!({}));
+    sim.driver(
+        &b,
+        json!({ "type": "ref", "ref": { "id": "h1", "strength": "strong" } }),
+    );
+    sim.turn(&b, "t1", "wrote the parser");
+    stop_and_exit(&mut sim, &s, &b);
+    sim.ok(OWNER, "queue/pause", json!({ "session": s }));
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "codex", "workspace": { "kind": "dir", "path": "/work/demo" },
+            "seed": { "session": s, "summary": "source" } }),
+    );
+    assert_eq!(r, Err(0), "the call waits for the summary");
+    let id = json!(sim.next_id);
+    let woken = start_params(&e).expect("the source starts");
+    assert_eq!(woken["resume"]["id"], "h1");
+    let b2 = woken["binding"].as_str().unwrap().to_string();
+    let e = sim.bring_up(&b2);
+    let prompt = driver_calls(&e, "binding/prompt").remove(0).1;
+    assert!(
+        prompt["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Summarize this session")
+    );
+    let e = sim.turn(&b2, "t2", "The parser is done.");
+    let created = reply(&e, &id).unwrap().unwrap();
+    assert!(created["session"]["id"].is_string());
+    assert_eq!(
+        driver_calls(&e, "binding/stop")[0].1["binding"],
+        b2.as_str(),
+        "the source stops again"
+    );
+    let q = sim.ok(OWNER, "queue/list", json!({ "session": s }))["queue"].clone();
+    assert_eq!(q["paused"], true, "{q}");
 }

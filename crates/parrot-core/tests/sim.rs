@@ -1,5 +1,7 @@
 //! Deterministic simulations of the core: scripted inputs in, effects and projections checked.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer};
 use proptest::prelude::*;
@@ -16,7 +18,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         Self {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::default())),
             clock,
             next_id: 0,
         }

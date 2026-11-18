@@ -5,6 +5,7 @@
 //! | `tui` | `{ <agent>: TuiAgent }` | Agents driven through their terminal (spec 32.2) |
 //! | `notify` | `string[]` | Push targets: `webhook:<url>` or `ntfy:<server>/<topic>` (spec 36) |
 //! | `notifyUrl` | `string` | A link put in push bodies, with the session appended |
+//! | `notifyCa` | `string` | A PEM file of the only roots HTTPS push targets are checked against |
 //!
 //! A missing file is the empty configuration. Configuration holds no secrets.
 
@@ -24,6 +25,8 @@ pub struct Config {
     pub notify: Vec<String>,
     #[serde(default)]
     pub notify_url: Option<String>,
+    #[serde(default)]
+    pub notify_ca: Option<PathBuf>,
 }
 
 /// One agent under TUI control.

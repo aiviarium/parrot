@@ -12,6 +12,7 @@ Each folder here is a Hatchery package for one agent. The runtime installs the `
 | `<agent>/parrot/driver.kdl` | How the driver runs, which CLI versions it covers, and its data version |
 | `<agent>/parrot/options.kdl` | Option maps: roles, choices with semantic tags, `dependsOn` rules |
 | `<agent>/parrot/levels.kdl` | Permission levels and the tools each level allows (E4) |
+| `<agent>/parrot/limits.kdl` | Numbers the CLI imposes: `tool-timeout` is how many seconds it waits for one tool call. Calls into Parrot and approvals return before it |
 | `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source wins |
 | `<agent>/parrot/profile.kdl` | The TUI profile, for agents with TUI control. This is the live copy |
 | `<agent>/parrot/shims/<dir>/` | Files that replace the ones above for a range of CLI versions |

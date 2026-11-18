@@ -9,7 +9,7 @@ use crate::{CallOwner, Cx, Effect, Reply, principals};
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default)]
 pub struct Functions {
@@ -53,6 +53,9 @@ pub struct Approval {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ApprovalStatus {
     Open,
+    /// Approved while its caller was gone, such as after a restart; a repeat of the keyed call
+    /// runs it (27.2).
+    Approved,
     /// Approved and running.
     Running,
     Denied,
@@ -84,6 +87,40 @@ pub const SESSION_FUNCTIONS: [(&str, &str, &str); 16] = [
     ("parrot.agents.list", "agent/list", "read"),
     ("parrot.envs.list", "env/list", "read"),
 ];
+
+/// The function a harness's tool call reached, when the tool is one the injected `parrot` server
+/// lists (spec 25.1, 26). Harnesses name such tools by the MCP name (dots as `__`), with or
+/// without a prefix of their own, so a tool matches when its name ends with an MCP name. A call of
+/// `parrot.functions.call` is reported as the function it called.
+pub fn function_of_tool(state: &crate::State, tool: &str, input: Option<&Value>) -> Option<String> {
+    let session = SESSION_FUNCTIONS.iter().map(|(n, _, _)| n.to_string());
+    // The search tools, and `parrot.workspaces.merge`, which `parrot mcp` maps to its method.
+    let meta = [
+        "parrot.functions.search",
+        "parrot.functions.describe",
+        "parrot.functions.call",
+        "parrot.workspaces.merge",
+    ]
+    .into_iter()
+    .map(String::from);
+    let provided = state.functions.provided.keys().map(|(n, _)| n.clone());
+    let runtime = state.functions.runtime.keys().cloned();
+    let found = session
+        .chain(meta)
+        .chain(provided)
+        .chain(runtime)
+        .filter(|name| {
+            let mcp = name.replace('.', "__");
+            tool == mcp || tool.ends_with(&format!("__{mcp}"))
+        })
+        .max_by_key(String::len)?;
+    if found == "parrot.functions.call"
+        && let Some(called) = input.and_then(|i| i.get("function")).and_then(Value::as_str)
+    {
+        return Some(called.to_string());
+    }
+    Some(found)
+}
 
 /// Checks a name against spec 27.1: dot-separated `[a-z][a-z0-9_]*` segments, none with `__`,
 /// at most four, and an MCP name of at most 64 characters.
@@ -122,6 +159,40 @@ fn check_spec(spec: &Value) -> Result<(String, String), RpcError> {
     ))
 }
 
+/// The pinned provided functions, by name, with their specs as text to compare.
+fn pinned(state: &crate::State) -> BTreeMap<String, String> {
+    state
+        .functions
+        .provided
+        .iter()
+        .filter(|(_, (_, spec))| spec["pinned"] == true)
+        .map(|((name, env), (_, spec))| (format!("{name}@{env}"), spec.to_string()))
+        .collect()
+}
+
+/// Tells each session with an MCP server that the pinned functions changed (spec 26), so the
+/// server lists them again.
+fn pinned_changed(cx: &mut Cx, before: &BTreeMap<String, String>) {
+    let after = pinned(cx.state);
+    if &after == before {
+        return;
+    }
+    let names: BTreeSet<String> = after
+        .keys()
+        .filter_map(|k| k.split('@').next().map(str::to_string))
+        .collect();
+    let sessions: BTreeSet<String> = cx
+        .state
+        .functions
+        .tokens
+        .values()
+        .filter_map(|b| crate::directory::session_of(cx.state, b))
+        .collect();
+    for session in sessions {
+        cx.publish(Some(session), json!({ "type": "functions", "pinned": names }));
+    }
+}
+
 /// Replace a connection's provided functions (spec 25.2).
 pub fn provide(cx: &mut Cx, conn: &str, specs: &[Value]) -> Result<(), RpcError> {
     let mut keys = Vec::new();
@@ -143,10 +214,12 @@ pub fn provide(cx: &mut Cx, conn: &str, specs: &[Value]) -> Result<(), RpcError>
         }
         keys.push((key, spec.clone()));
     }
+    let before = pinned(cx.state);
     cx.state.functions.provided.retain(|_, (owner, _)| owner != conn);
     for (key, spec) in keys {
         cx.state.functions.provided.insert(key, (conn.to_string(), spec));
     }
+    pinned_changed(cx, &before);
     Ok(())
 }
 
@@ -343,9 +416,35 @@ fn function_call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value)
     }
     let is_session_function = SESSION_FUNCTIONS.iter().any(|(n, _, _)| *n == name);
     if let (Some(session), false) = (&acting, is_session_function) {
-        if let Some(rid) = key.as_ref().and_then(|k| cx.state.functions.approval_keys.get(k)) {
-            // Asked again while the approval is open or the approved call runs (27.2).
-            return Reply::Now(Ok(pending(rid)));
+        if let Some(rid) = key
+            .as_ref()
+            .and_then(|k| cx.state.functions.approval_keys.get(k))
+            .cloned()
+        {
+            let approved = cx
+                .state
+                .functions
+                .approvals
+                .get(&rid)
+                .is_some_and(|a| a.status == ApprovalStatus::Approved);
+            if !approved {
+                // Asked again while the approval is open or the approved call runs (27.2).
+                return Reply::Now(Ok(pending(&rid)));
+            }
+            // Approved while nobody waited: this repeat runs the call.
+            if let Some(a) = cx.state.functions.approvals.get_mut(&rid) {
+                a.status = ApprovalStatus::Running;
+            }
+            persist_approval(cx, &rid);
+            let stored = cx.state.functions.approvals.get(&rid).map(|a| a.params.clone());
+            let params = stored.unwrap_or(params);
+            return match run_call(cx, conn, id, params, key.clone(), session) {
+                Reply::Now(result) => {
+                    finish_approved(cx, &rid, key, conn.to_string(), id.cloned(), result);
+                    Reply::Later
+                }
+                later => later,
+            };
         }
         let env = params["env"].as_str().unwrap_or_default().to_string();
         let spec = cx.state.functions.runtime.get(&name).cloned().or_else(|| {
@@ -392,6 +491,16 @@ fn function_call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value)
 fn pending(request: &str) -> Value {
     json!({ "error": { "code": "pending_approval", "message": "the call waits for an approval",
         "request": request } })
+}
+
+/// How long a session's call waits for its approval: within its harness's tool-call timeout
+/// from `limits.kdl`, less a margin, and never over [`MAX_WAIT_MS`] (27.2).
+pub fn approval_wait_ms(state: &crate::State, session: &str) -> u64 {
+    let timeout = crate::directory::binding_of(state, session)
+        .and_then(|b| state.bindings.by_id.get(&b).map(|r| r.agent.clone()))
+        .and_then(|agent| crate::agents::tool_timeout(state, &agent));
+    let limit = parrot_proto::driver_data::call_limit_ms(timeout, MAX_WAIT_MS);
+    state.functions.wait_ms.map_or(limit, |w| w.min(limit))
 }
 
 /// Opens a request for a call that needs one, and waits within the time limit (E5, 27.2).
@@ -456,7 +565,7 @@ fn open_approval(
         .as_u64()
         .map(|s| s.saturating_mul(1000))
         .unwrap_or(u64::MAX)
-        .min(cx.state.functions.wait_ms.unwrap_or(MAX_WAIT_MS));
+        .min(approval_wait_ms(cx.state, session));
     let deadline_ms = cx.now_ms + wait;
     cx.emit(Effect::TimerAt { at_ms: deadline_ms });
     if let Some(k) = &key {
@@ -474,6 +583,7 @@ fn open_approval(
             status: ApprovalStatus::Open,
         },
     );
+    persist_approval(cx, &rid);
     if id.is_some() {
         Reply::Later
     } else {
@@ -518,8 +628,18 @@ pub fn intercept(
         rec.request.answered_by = Some(by);
     }
     crate::requests::publish_request(cx, &rid);
+    let caller_gone = !cx.state.principals.conns.contains_key(&approval.conn);
     let a = cx.state.functions.approvals.get_mut(&rid)?;
-    if allow {
+    if allow && a.waiting.is_none() && caller_gone {
+        // Nobody can take the result now; the caller's repeat with its key runs the call.
+        a.status = ApprovalStatus::Approved;
+        if a.key.is_none() {
+            cx.state.functions.approvals.remove(&rid);
+            cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
+        } else {
+            persist_approval(cx, &rid);
+        }
+    } else if allow {
         a.status = ApprovalStatus::Running;
         let (waiting, key, params, caller) =
             (a.waiting.take(), a.key.clone(), a.params.clone(), a.conn.clone());
@@ -542,6 +662,8 @@ pub fn intercept(
         if let Some((c, i)) = a.waiting.take() {
             cx.reply(&c, i, Ok(denied));
         }
+        cx.state.functions.approvals.remove(&rid);
+        cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
     }
     Some(Reply::Now(Ok(json!({}))))
 }
@@ -561,9 +683,63 @@ fn finish_approved(
         cx.state.functions.approval_keys.remove(&k);
     }
     cx.state.functions.approvals.remove(rid);
+    cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
     if let Some(id) = id {
         cx.reply(&conn, id, Ok(result));
     }
+}
+
+/// Keep an approval in the store, so it can still be answered after a restart.
+fn persist_approval(cx: &mut Cx, rid: &str) {
+    let Some(a) = cx.state.functions.approvals.get(rid) else {
+        return;
+    };
+    let status = match a.status {
+        ApprovalStatus::Open => "open",
+        ApprovalStatus::Approved | ApprovalStatus::Running => "approved",
+        ApprovalStatus::Denied => "denied",
+    };
+    let value = json!({
+        "session": a.session,
+        "key": a.key.as_ref().map(|(p, k)| json!([p, k])),
+        "params": a.params,
+        "status": status,
+    });
+    cx.persist(json!({ "op": "put", "kind": "approval", "id": rid, "value": value }));
+}
+
+/// Put back an approval read from the store. Its caller is gone; an approved one waits for the
+/// caller's repeat with its key.
+pub fn restore_approval(cx: &mut Cx, rid: &str, value: &Value) {
+    let Some(session) = value["session"].as_str() else {
+        return;
+    };
+    let key = value["key"]
+        .as_array()
+        .and_then(|k| Some((k.first()?.as_str()?.to_string(), k.get(1)?.as_str()?.to_string())));
+    let status = match value["status"].as_str() {
+        Some("approved") => ApprovalStatus::Approved,
+        Some("denied") => return,
+        _ => ApprovalStatus::Open,
+    };
+    if let Some(k) = &key {
+        cx.state
+            .functions
+            .approval_keys
+            .insert(k.clone(), rid.to_string());
+    }
+    cx.state.functions.approvals.insert(
+        rid.to_string(),
+        Approval {
+            session: session.to_string(),
+            waiting: None,
+            conn: String::new(),
+            key,
+            params: value["params"].clone(),
+            deadline_ms: cx.now_ms,
+            status,
+        },
+    );
 }
 
 /// Time passed: callers whose approval is still open get `pending_approval` (27.2).
@@ -681,6 +857,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
         cx.state.functions.keys.insert(k.clone(), result.clone());
         if let Some(rid) = cx.state.functions.approval_keys.remove(&k) {
             cx.state.functions.approvals.remove(&rid);
+            cx.persist(json!({ "op": "delete", "kind": "approval", "id": rid }));
         }
     }
     if let Some(id) = p.id {
@@ -690,15 +867,21 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
 
 /// The `mcp` entry of a binding's `BindingStart` (spec 26, 30.1), or `None` without functions.
 /// The token is for this binding only; drivers pass it to `parrot mcp` in `PARROT_MCP_TOKEN`.
-pub fn mcp_for(cx: &mut Cx, _session: &str, binding: &str) -> Option<Value> {
+pub fn mcp_for(cx: &mut Cx, session: &str, binding: &str) -> Option<Value> {
     let program = cx.state.functions.mcp.clone()?;
+    let agent = cx.state.sessions.by_id.get(session).map(|s| s.agent.clone());
+    let timeout = agent.and_then(|a| crate::agents::tool_timeout(cx.state, &a));
     let token = format!("{}{}", cx.ids.next("mcp"), cx.ids.next("k"));
     cx.state.functions.tokens.retain(|_, b| b != binding);
     cx.state
         .functions
         .tokens
         .insert(token.clone(), binding.to_string());
-    Some(json!({ "command": [program, "mcp", "--binding", binding], "token": token }))
+    let mut command = vec![program, "mcp".into(), "--binding".into(), binding.to_string()];
+    if let Some(t) = timeout {
+        command.extend(["--tool-timeout".to_string(), t.to_string()]);
+    }
+    Some(json!({ "command": command, "token": token }))
 }
 
 /// The session a binding's MCP credential stands for, if `token` is that binding's.
@@ -722,7 +905,9 @@ pub fn on_client_reply(cx: &mut Cx, _conn: &str, call: u64, result: Result<Value
 
 /// A connection closed: its functions go away, and calls waiting on it fail.
 pub fn disconnected(cx: &mut Cx, conn: &str) {
+    let before = pinned(cx.state);
     cx.state.functions.provided.retain(|_, (owner, _)| owner != conn);
+    pinned_changed(cx, &before);
 }
 
 #[cfg(test)]
@@ -738,5 +923,37 @@ mod tests {
         assert!(matches("acme.*", "acme.files.read"));
         assert!(!matches("acme.*", "other.files"));
         assert!(matches("*.read", "acme.files.read"));
+    }
+
+    #[test]
+    fn tool_names_map_to_the_functions_they_reach() {
+        let mut state = crate::State::default();
+        state
+            .functions
+            .provided
+            .insert(("acme.deploy".into(), String::new()), ("con_p".into(), json!({})));
+        let f = |tool: &str, input: Value| function_of_tool(&state, tool, Some(&input));
+        assert_eq!(
+            f("mcp__parrot__parrot__sessions__spawn", json!({})).as_deref(),
+            Some("parrot.sessions.spawn")
+        );
+        assert_eq!(
+            f("parrot__tasks__wait", json!({})).as_deref(),
+            Some("parrot.tasks.wait")
+        );
+        assert_eq!(
+            f("mcp__parrot__acme__deploy", json!({})).as_deref(),
+            Some("acme.deploy")
+        );
+        assert_eq!(
+            f(
+                "mcp__parrot__parrot__functions__call",
+                json!({ "function": "acme.deploy" })
+            )
+            .as_deref(),
+            Some("acme.deploy")
+        );
+        assert_eq!(f("Bash", json!({})), None);
+        assert_eq!(f("mcp__other__sessions__spawn", json!({})), None);
     }
 }

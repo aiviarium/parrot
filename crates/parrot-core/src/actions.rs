@@ -50,6 +50,26 @@ pub fn note_turn(state: &mut State, session: &str, running: bool, failed: Option
     };
 }
 
+/// Keep a session's failed inputs in the store, so `retry` works after a restart. A running
+/// turn leaves them as they are; it clears them only when it ends without failing.
+pub fn persist_failed(cx: &mut Cx, session: &str, keep: bool) {
+    match cx.state.actions.failed_inputs.get(session) {
+        Some(inputs) => {
+            let value = json!(inputs);
+            cx.persist(json!({ "op": "put", "kind": "failed", "id": session, "value": value }));
+        }
+        None if !keep => cx.persist(json!({ "op": "delete", "kind": "failed", "id": session })),
+        None => {}
+    }
+}
+
+/// Put back a session's failed inputs read from the store.
+pub fn restore_failed(state: &mut State, session: &str, value: &Value) {
+    if let Ok(inputs) = serde_json::from_value::<Vec<String>>(value.clone()) {
+        state.actions.failed_inputs.insert(session.to_string(), inputs);
+    }
+}
+
 fn runtime_action(id: &str, label: &str, description: &str, input: Option<Value>) -> Action {
     Action {
         id: id.into(),
