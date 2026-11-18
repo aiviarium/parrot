@@ -1409,14 +1409,19 @@ dependencies = [
 name = "parrot-serve"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "parrot-core",
  "parrot-proto",
  "parrot-store",
+ "rustix",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
