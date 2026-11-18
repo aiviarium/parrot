@@ -1,3 +1,3 @@
 # parrot-link
 
-Links between Parrot runtimes: carriers, Noise sessions, framing and pairing.
+Links between Parrot runtimes. It holds the carriers, the Noise sessions, the framing and pairing.

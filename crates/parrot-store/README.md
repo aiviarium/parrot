@@ -1,3 +1,3 @@
 # parrot-store
 
-SQLite storage for the Parrot runtime: update log, projections, intent log and migrations.
+SQLite storage for the Parrot runtime. It keeps the update log, the projections and the intent log, with numbered migrations.

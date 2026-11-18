@@ -1,3 +1,3 @@
 # parrot-proto
 
-Wire types of the Parrot protocol, with the generated JSON Schema.
+The wire types of the Parrot protocol, and the JSON Schema generated from them. The protocol is specified in `spec/protocol.md`.

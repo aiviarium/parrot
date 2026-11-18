@@ -21,6 +21,17 @@ exceptions:
   - Vale
   - AGENTS.md
   - parrot-term
+  - parrot-proto
+  - parrot-core
+  - parrot-store
+  - parrot-serve
+  - parrot-guard
+  - parrot-driver
+  - parrot-driver-claude
+  - parrot-workspace
+  - parrot-mcp
+  - parrot-link
+  - parrot-cli
   - parrot-tui
   - parrot-models
   - parrot-term-tool

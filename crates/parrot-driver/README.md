@@ -1,3 +1,3 @@
 # parrot-driver
 
-The driver protocol: a host for process drivers and the trait for built-in drivers.
+The driver protocol. It holds the trait for built-in drivers, and a host that runs drivers in other processes over stdio.
