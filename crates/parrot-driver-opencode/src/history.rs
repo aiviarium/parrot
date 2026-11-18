@@ -8,7 +8,6 @@
 
 use std::path::{Path, PathBuf};
 
-
 use parrot_proto::driver::{DriverUpdate, DriverUpdateKind, HistoryDiscoverResult, HistoryReadResult};
 use parrot_proto::item::{ItemKind, ItemPatch, ItemSource};
 use parrot_proto::open::Open;
@@ -91,7 +90,9 @@ pub fn discover(root: &Path, p: &SessionDiscoverParams) -> HistoryDiscoverResult
             .get("projectID")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let cwd = worktree(root, project).or_else(|| p.cwd.clone()).unwrap_or_default();
+        let cwd = worktree(root, project)
+            .or_else(|| p.cwd.clone())
+            .unwrap_or_default();
         if let Some(want) = &p.cwd
             && !want.is_empty()
             && &cwd != want
@@ -103,10 +104,7 @@ pub fn discover(root: &Path, p: &SessionDiscoverParams) -> HistoryDiscoverResult
                 id: id.to_owned(),
                 strength: RefStrength::Strong,
             },
-            title: session
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            title: session.get("title").and_then(Value::as_str).map(str::to_owned),
             cwd,
             updated: rfc3339(*updated),
         });
@@ -136,21 +134,16 @@ pub fn read(root: &Path, id: &str, cursor: Option<&str>) -> HistoryReadResult {
         .into_iter()
         .filter_map(|f| read_json(&f))
         .collect();
-    messages.sort_by_key(|m| {
-        m.pointer("/time/created")
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-    });
+    messages.sort_by_key(|m| m.pointer("/time/created").and_then(Value::as_i64).unwrap_or(0));
     let start: usize = cursor.and_then(|c| c.parse().ok()).unwrap_or(0);
     let end = (start + PAGE).min(messages.len());
     let mut replay = Replay::default();
     for (i, message) in messages.iter().enumerate().take(end) {
-        let mut parts: Vec<Value> = json_files(&root.join("part").join(
-            message
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ))
+        let mut parts: Vec<Value> = json_files(
+            &root
+                .join("part")
+                .join(message.get("id").and_then(Value::as_str).unwrap_or_default()),
+        )
         .into_iter()
         .filter_map(|f| read_json(&f))
         .collect();
@@ -277,12 +270,12 @@ impl Replay {
                     let mut set = map_of("tool", json!(tool));
                     set.insert(
                         "title".into(),
-                        json!(state
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .unwrap_or(tool)),
+                        json!(state.get("title").and_then(Value::as_str).unwrap_or(tool)),
                     );
-                    set.insert("input".into(), state.get("input").cloned().unwrap_or_else(|| json!({})));
+                    set.insert(
+                        "input".into(),
+                        state.get("input").cloned().unwrap_or_else(|| json!({})),
+                    );
                     set.insert(
                         "status".into(),
                         json!(match state.get("status").and_then(Value::as_str) {
@@ -295,19 +288,21 @@ impl Replay {
                     if let Some(output) = state.get("output").and_then(Value::as_str) {
                         set.insert("output".into(), json!(output));
                     }
-                    self.updates.push(self.item(ItemPatch {
-                        id: part
-                            .get("callID")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                            .unwrap_or(id),
-                        kind: Some(Open::Known(ItemKind::Tool)),
-                        turn: self.turn.clone(),
-                        source: Some(ItemSource::Transcript),
-                        set: Some(set),
-                        streaming: Some(false),
-                        ..Default::default()
-                    }));
+                    self.updates.push(
+                        self.item(ItemPatch {
+                            id: part
+                                .get("callID")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .unwrap_or(id),
+                            kind: Some(Open::Known(ItemKind::Tool)),
+                            turn: self.turn.clone(),
+                            source: Some(ItemSource::Transcript),
+                            set: Some(set),
+                            streaming: Some(false),
+                            ..Default::default()
+                        }),
+                    );
                 }
                 "compaction" => {
                     self.updates.push(self.item(ItemPatch {
@@ -424,8 +419,9 @@ mod tests {
             })
             .collect();
         assert!(items.iter().any(|i| i.kind == Some(Open::Known(ItemKind::User))));
-        assert!(items.iter().any(|i| i.id == "call-1"
-            && i.set.as_ref().and_then(|s| s.get("output")) == Some(&json!("hello"))));
+        assert!(items.iter().any(
+            |i| i.id == "call-1" && i.set.as_ref().and_then(|s| s.get("output")) == Some(&json!("hello"))
+        ));
         assert!(result.updates.iter().all(|u| u.binding.is_empty()));
         std::fs::remove_dir_all(&root).unwrap();
     }

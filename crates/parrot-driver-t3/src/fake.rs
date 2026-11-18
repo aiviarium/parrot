@@ -59,9 +59,7 @@ pub fn call(fake: &Fake, name: &str, arguments: &Value) -> Value {
             return failure("modelSelection needs instanceId and model");
         }
     }
-    if name == "t3_thread_send"
-        && arguments.get("mode").and_then(Value::as_str).is_none()
-    {
+    if name == "t3_thread_send" && arguments.get("mode").and_then(Value::as_str).is_none() {
         return failure("t3_thread_send names its mode");
     }
     let structured = match name {
@@ -315,9 +313,8 @@ fn serve_http(fake: &Fake, stream: &mut std::net::TcpStream) -> std::io::Result<
             stream.write_all(text.as_bytes())?;
         }
         None => {
-            let head = format!(
-                "HTTP/1.1 202 Accepted\r\n{session}Content-Length: 0\r\nConnection: close\r\n\r\n"
-            );
+            let head =
+                format!("HTTP/1.1 202 Accepted\r\n{session}Content-Length: 0\r\nConnection: close\r\n\r\n");
             stream.write_all(head.as_bytes())?;
         }
     }

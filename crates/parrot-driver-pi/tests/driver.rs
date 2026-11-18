@@ -272,9 +272,7 @@ async fn compact_is_an_action_and_becomes_a_compaction_item() {
         .await;
     assert_eq!(r["status"], "done");
     assert_eq!(r["result"]["summary"], "The context was compacted.");
-    let item = c
-        .wait(|u| u["update"]["item"]["kind"] == "compaction")
-        .await;
+    let item = c.wait(|u| u["update"]["item"]["kind"] == "compaction").await;
     assert_eq!(item["update"]["item"]["set"]["trigger"], "manual");
     assert_eq!(
         item["update"]["item"]["set"]["summary"],
@@ -288,20 +286,14 @@ async fn nested_tool_calls_hang_under_the_tool_that_made_them() {
     let mut c = Client::temp();
     c.bind().await;
     c.prompt("[[nested]]").await;
-    let outer = c
-        .wait(|u| u["update"]["item"]["set"]["tool"] == "task")
-        .await;
+    let outer = c.wait(|u| u["update"]["item"]["set"]["tool"] == "task").await;
     let outer_id = outer["update"]["item"]["id"].as_str().unwrap().to_owned();
     c.wait(|u| u["update"]["item"]["id"] == outer_id && u["update"]["item"]["set"]["status"] == "ok")
         .await;
-    let inner = c
-        .wait(|u| u["update"]["item"]["set"]["tool"] == "grep")
-        .await;
+    let inner = c.wait(|u| u["update"]["item"]["set"]["tool"] == "grep").await;
     assert_eq!(inner["update"]["item"]["parent"], outer_id);
     assert_eq!(inner["update"]["item"]["set"]["status"], "ok");
-    let failed = c
-        .wait(|u| u["update"]["item"]["set"]["status"] == "error")
-        .await;
+    let failed = c.wait(|u| u["update"]["item"]["set"]["status"] == "error").await;
     assert_eq!(failed["update"]["item"]["set"]["tool"], "read");
     assert_eq!(failed["update"]["item"]["parent"], outer_id);
     assert_eq!(failed["update"]["item"]["set"]["output"], "no such file");
@@ -375,9 +367,22 @@ async fn history_reads_a_session_file() {
     let found = c
         .call("history/discover", json!({"agent": "pi", "cwd": "/work/demo"}))
         .await;
-    unsafe { std::env::remove_var("PI_CODING_AGENT_SESSION_DIR") };
     assert_eq!(found["found"][0]["ref"]["id"], "sess-made-up");
     assert_eq!(found["found"][0]["title"], "List the notes");
+    let read = c
+        .call(
+            "history/read",
+            json!({"agent": "pi", "ref": {"id": "sess-made-up", "strength": "strong"}}),
+        )
+        .await;
+    unsafe { std::env::remove_var("PI_CODING_AGENT_SESSION_DIR") };
+    let items = read["updates"].as_array().unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|u| u["update"]["item"]["set"]["text"] == "One note.")
+    );
+    assert!(items.iter().all(|u| u["binding"] == ""));
 }
 
 #[tokio::test]

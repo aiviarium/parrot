@@ -406,9 +406,9 @@ impl Driver {
                         .session_id
                         .clone()
                         .ok_or_else(|| RpcError::new(-32004, "the session has no opencode id yet"))?;
-                    let message = state.fork_message(p.at.as_deref()).ok_or_else(|| {
-                        RpcError::new(-32004, "the session has no turn to fork at")
-                    })?;
+                    let message = state
+                        .fork_message(p.at.as_deref())
+                        .ok_or_else(|| RpcError::new(-32004, "the session has no turn to fork at"))?;
                     (session, message)
                 };
                 let answer = b
@@ -435,14 +435,12 @@ impl Driver {
             }
             "history/discover" => {
                 let p: HistoryDiscoverParams = params(p)?;
-                let root = history::storage_root()
-                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let root = history::storage_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
                 Ok(to_value(&history::discover(&root, &p)))
             }
             "history/read" => {
                 let p: HistoryReadParams = params(p)?;
-                let root = history::storage_root()
-                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let root = history::storage_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
                 if history::find(&root, &p.reference.id).is_none() {
                     return Err(RpcError::new(
                         -32602,

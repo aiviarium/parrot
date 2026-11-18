@@ -116,7 +116,9 @@ impl HttpFake {
         let stdout = child.stdout.take().expect("stdout is piped");
         let mut reader = std::io::BufReader::new(stdout);
         let mut line = String::new();
-        reader.read_line(&mut line).expect("the server prints its address");
+        reader
+            .read_line(&mut line)
+            .expect("the server prints its address");
         HttpFake {
             child,
             url: line.trim().to_owned(),

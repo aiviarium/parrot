@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
@@ -53,12 +54,8 @@ impl Config {
     /// `PARROT_T3_URL` and `PARROT_T3_TOKEN` for a T3 server; otherwise the stdio command.
     pub fn from_env() -> Self {
         Config {
-            url: std::env::var("PARROT_T3_URL")
-                .ok()
-                .filter(|u| !u.is_empty()),
-            token: std::env::var("PARROT_T3_TOKEN")
-                .ok()
-                .filter(|t| !t.is_empty()),
+            url: std::env::var("PARROT_T3_URL").ok().filter(|u| !u.is_empty()),
+            token: std::env::var("PARROT_T3_TOKEN").ok().filter(|t| !t.is_empty()),
             ..Default::default()
         }
     }
@@ -251,7 +248,9 @@ impl Driver {
                             &b.id,
                             vec![DriverUpdateKind::Notice {
                                 level: NoticeLevel::Warning,
-                                text: "T3 cannot attach files to a running turn; the attachments were left out.".into(),
+                                text:
+                                    "T3 cannot attach files to a running turn; the attachments were left out."
+                                        .into(),
                                 code: Some("attachment_unsupported".into()),
                             }],
                         );
@@ -496,7 +495,12 @@ impl Driver {
 
     /// Sends a prompt, with its context and attachments. T3 takes an attachment only after an
     /// upload: prepare, post the bytes, then send the message that names it.
-    async fn send_prompt(&self, b: &Binding, mcp: &Arc<Mcp>, p: &BindingPromptParams) -> Result<(), RpcError> {
+    async fn send_prompt(
+        &self,
+        b: &Binding,
+        mcp: &Arc<Mcp>,
+        p: &BindingPromptParams,
+    ) -> Result<(), RpcError> {
         let mut text = String::new();
         for entry in p.context.iter().flatten() {
             text.push_str(&format!(
@@ -617,11 +621,7 @@ impl Driver {
 }
 
 /// A server from the options' `t3.url`, else the environment's, else a command over stdio.
-async fn connect(
-    config: &Config,
-    cwd: &str,
-    options: &Map<String, Value>,
-) -> Result<Arc<Mcp>, RpcError> {
+async fn connect(config: &Config, cwd: &str, options: &Map<String, Value>) -> Result<Arc<Mcp>, RpcError> {
     let url = options
         .get("t3.url")
         .and_then(Value::as_str)
@@ -1053,7 +1053,8 @@ pub async fn probed(config: &Config) -> Agent {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
     let options = Map::new();
-    if let Ok(mcp) = connect(config, &cwd, &options).await {
+    let connected = tokio::time::timeout(Duration::from_secs(10), connect(config, &cwd, &options)).await;
+    if let Ok(Ok(mcp)) = connected {
         a.harness = mcp
             .server_info()
             .and_then(|info| {

@@ -283,7 +283,10 @@ impl<W: Write + Send + 'static> Shared<W> {
                     }));
                 }
                 "resource-link" => {
-                    let (name, uri) = directive.arg.split_once('|').unwrap_or(("notes", "file:///notes.md"));
+                    let (name, uri) = directive
+                        .arg
+                        .split_once('|')
+                        .unwrap_or(("notes", "file:///notes.md"));
                     let message_id = format!("msg_{}", self.messages.fetch_add(1, Ordering::Relaxed) + 1);
                     self.update(json!({
                         "sessionUpdate": "agent_message_chunk",
@@ -432,7 +435,11 @@ pub fn run<R: BufRead, W: Write + Send + 'static>(script: Option<String>, input:
                     .unwrap_or(1);
                 // A resume-capable agent gets `session/resume`; without it, `session/load`.
                 let resume = std::env::var("PARROT_FAKE_ACP_RESUME").ok().as_deref() != Some("0");
-                let session_capabilities = if resume { json!({ "resume": {} }) } else { json!({}) };
+                let session_capabilities = if resume {
+                    json!({ "resume": {} })
+                } else {
+                    json!({})
+                };
                 if version >= 2 {
                     let asked = params.get("protocolVersion").and_then(Value::as_u64);
                     if asked != Some(2) || params.get("capabilities").is_none() {

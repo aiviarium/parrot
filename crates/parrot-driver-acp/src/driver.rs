@@ -180,7 +180,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![probed(&self.config.data).await],
+                agents: vec![probed(&self.config).await],
                 hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
@@ -453,10 +453,7 @@ impl Driver {
 
     /// The ACP handshake: version 2 first, version 1 for an agent that refuses it. Returns the
     /// agent's answer and the version it will speak.
-    async fn initialize(
-        &self,
-        b: &Arc<Binding>,
-    ) -> Result<(wire::InitializeResult, u32), RpcError> {
+    async fn initialize(&self, b: &Arc<Binding>) -> Result<(wire::InitializeResult, u32), RpcError> {
         let asked = wire::PROTOCOL_VERSION;
         let first = b
             .request(
@@ -467,15 +464,14 @@ impl Driver {
             .await;
         let value = match first {
             Ok(value) => value,
-            Err(e) if asked > wire::PROTOCOL_V1 && e.to_ascii_lowercase().contains("version") => {
-                b.request(
+            Err(e) if asked > wire::PROTOCOL_V1 && e.to_ascii_lowercase().contains("version") => b
+                .request(
                     "initialize",
                     wire::initialize_params(wire::PROTOCOL_V1),
                     Some(REQUEST_TIMEOUT),
                 )
                 .await
-                .map_err(|e| RpcError::new(-32020, format!("the agent did not initialize: {e}")))?
-            }
+                .map_err(|e| RpcError::new(-32020, format!("the agent did not initialize: {e}")))?,
             Err(e) => {
                 return Err(RpcError::new(
                     -32020,
@@ -517,8 +513,7 @@ impl Driver {
             let mut lines = BufReader::new(stdout).lines();
             let answer = lines.next_line().await.ok()??;
             let msg: Value = serde_json::from_str(&answer).ok()?;
-            let init: wire::InitializeResult =
-                serde_json::from_value(msg.get("result")?.clone()).ok()?;
+            let init: wire::InitializeResult = serde_json::from_value(msg.get("result")?.clone()).ok()?;
             init.agent_version()
         };
         tokio::time::timeout(Duration::from_secs(5), probe)
@@ -939,9 +934,9 @@ fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUp
 }
 
 /// [`agent`] with the version the agent reports in its `initialize` handshake, when it answers.
-pub async fn probed(data: &Data) -> Agent {
-    let mut a = agent(data);
-    if let Some(version) = probe_version(data).await {
+pub async fn probed(config: &Config) -> Agent {
+    let mut a = agent(&config.data);
+    if let Some(version) = probe_version(config).await {
         a.harness = Some(parrot_proto::agent::HarnessInfo {
             version,
             verified: true,
@@ -952,13 +947,9 @@ pub async fn probed(data: &Data) -> Agent {
 
 /// The agent's version from one `initialize` exchange, with the command from the egg or the
 /// environment.
-async fn probe_version(data: &Data) -> Option<String> {
+async fn probe_version(config: &Config) -> Option<String> {
     let driver = Driver {
-        config: Config {
-            env: vec![],
-            guard: false,
-            data: data.clone(),
-        },
+        config: config.clone(),
         out: mpsc::unbounded_channel().0,
         bindings: Mutex::default(),
     };
@@ -970,6 +961,7 @@ pub fn agent(data: &Data) -> Agent {
     let mut features = Map::new();
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
+    features.insert("attachments".into(), json!({"kinds": ["image", "file"]}));
     features.insert("usage".into(), json!({"context": true, "cost": true}));
     let mut levels = data.mode_levels();
     if levels.is_empty() {

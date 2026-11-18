@@ -426,14 +426,13 @@ impl MapState {
                         .unwrap_or("Subagent")
                         .to_owned();
                     self.subagents.insert(id.to_owned(), title.clone());
-                    self.children
-                        .insert(id.to_owned(), Box::new(MapState::new(self.binding.clone(), self.data.clone())));
+                    self.children.insert(
+                        id.to_owned(),
+                        Box::new(MapState::new(self.binding.clone(), self.data.clone())),
+                    );
                     let mut set = map_of("key", json!(id));
                     set.insert("title".into(), json!(title));
-                    set.insert(
-                        "ref".into(),
-                        json!({"id": id, "strength": "strong"}),
-                    );
+                    set.insert("ref".into(), json!({"id": id, "strength": "strong"}));
                     set.insert("status".into(), json!("running"));
                     out.push(self.item(ItemPatch {
                         id: format!("subagent-{id}"),
@@ -466,7 +465,8 @@ impl MapState {
                         .and_then(Value::as_str)
                         .unwrap_or("tool")
                         .to_owned();
-                    self.tool_inputs.insert(id.to_owned(), (name.clone(), String::new()));
+                    self.tool_inputs
+                        .insert(id.to_owned(), (name.clone(), String::new()));
                     out.extend(self.ensure_turn(now));
                     let mut set = map_of("tool", json!(name));
                     set.insert("title".into(), json!(name));

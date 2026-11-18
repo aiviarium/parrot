@@ -1,3 +1,6 @@
+// The generic ACP egg has no command of its own: each agent egg sets `command` and the range of
+// its CLI. The range here is the Agent Client Protocol schema this driver was checked against.
 driver "builtin" name="acp"
+cli "acp" versions=">=0.4.0, <0.5.0"
 data-version "1"
 controls "native"

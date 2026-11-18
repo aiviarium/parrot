@@ -388,8 +388,8 @@ impl MapState {
         if self.capabilities.embedded_context {
             if let Some(data) = &attachment.data {
                 // Text goes in as text; bytes go in as the base64 blob the agent expects.
-                let textual = attachment.media_type.starts_with("text/")
-                    || attachment.media_type == "application/json";
+                let textual =
+                    attachment.media_type.starts_with("text/") || attachment.media_type == "application/json";
                 let mut resource = json!({
                     "uri": attachment.uri.clone().unwrap_or_else(|| format!("file:///{}", attachment.name)),
                     "mimeType": attachment.media_type,
@@ -488,9 +488,7 @@ impl MapState {
             return vec![];
         };
         match update {
-            SessionUpdateBody::UserMessageChunk(chunk) => {
-                self.replay_chunk("user", ItemKind::User, chunk)
-            }
+            SessionUpdateBody::UserMessageChunk(chunk) => self.replay_chunk("user", ItemKind::User, chunk),
             SessionUpdateBody::AgentMessageChunk(chunk) => {
                 self.replay_chunk("assistant", ItemKind::Assistant, chunk)
             }

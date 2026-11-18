@@ -66,7 +66,10 @@ impl InitializeResult {
     /// The protocol version the agent will speak: its answer, else version 1.
     pub fn version(&self) -> u32 {
         match &self.protocol_version {
-            Some(Value::Number(n)) => n.as_u64().and_then(|v| u32::try_from(v).ok()).unwrap_or(PROTOCOL_V1),
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(PROTOCOL_V1),
             Some(Value::String(s)) => s.parse().unwrap_or(PROTOCOL_V1),
             _ => PROTOCOL_V1,
         }

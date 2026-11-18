@@ -76,7 +76,8 @@ impl Fake {
         let _ = std::fs::create_dir_all(&self.files);
         let said = self.said.lock().unwrap().clone();
         let _ = std::fs::write(
-            self.files.join(format!("{}.json", self.session_id.lock().unwrap())),
+            self.files
+                .join(format!("{}.json", self.session_id.lock().unwrap())),
             serde_json::to_string(&said).unwrap_or_default(),
         );
     }
@@ -338,8 +339,10 @@ impl Fake {
                 }
                 "nested" => {
                     let id = self.next_id("call");
-                    self.send(json!({"type": "tool_execution_start", "toolCallId": id, "toolName": "task",
-                        "args": {"description": "Review the notes"}}));
+                    self.send(
+                        json!({"type": "tool_execution_start", "toolCallId": id, "toolName": "task",
+                        "args": {"description": "Review the notes"}}),
+                    );
                     self.send(json!({
                         "type": "tool_execution_end", "toolCallId": id, "toolName": "task",
                         "result": {

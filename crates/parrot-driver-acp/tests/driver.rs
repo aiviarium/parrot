@@ -29,12 +29,15 @@ impl Client {
                 .join(format!("{name}.jsonl"))
         });
         let config = Config {
-            env: env
-                .into_iter()
-                .map(|(k, v)| (k.into(), v.into()))
-                .collect(),
+            env: env.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
             guard: false,
-            data: data::load_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp/parrot")),
+            data: {
+                let mut data =
+                    data::load_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp/parrot"));
+                // The probe in `agent/list` starts the fake once for its version.
+                data.command = Some(vec![env!("CARGO_BIN_EXE_fake-acp").into()]);
+                data
+            },
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
@@ -296,15 +299,21 @@ async fn a_version_two_agent_negotiates_and_the_turn_runs() {
         Some("text-turn"),
         vec![("PARROT_FAKE_ACP_PROTOCOL".into(), "2".into())],
     );
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["version"], "0.4.5");
     let start = c.bind().await;
     assert_eq!(start["level"], "read");
-    assert!(start["options"].as_array().unwrap().iter().any(|o| o["id"] == "model"));
+    assert!(
+        start["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["id"] == "model")
+    );
     let r = c.wait(|u| u["update"]["type"] == "ref").await;
     assert_eq!(r["update"]["ref"]["id"], "fake-session-1");
     c.prompt("Say hello").await;
-    let a = c
-        .wait(|u| u["update"]["item"]["set"]["text"] == "Hello ")
-        .await;
+    let a = c.wait(|u| u["update"]["item"]["set"]["text"] == "Hello ").await;
     assert_eq!(a["update"]["item"]["kind"], "assistant");
     c.wait(is_state("idle")).await;
     c.call("binding/stop", json!({"binding": "b1"})).await;
@@ -345,8 +354,7 @@ async fn a_load_replays_the_stored_conversation_as_items() {
     // The tool's embedded resource is decoded from its base64 blob.
     assert_eq!(tool["update"]["item"]["set"]["output"], "hello");
     c.wait(|u| {
-        u["update"]["item"]["id"] == "replay-assistant:assistant"
-            && u["update"]["item"]["streaming"] == false
+        u["update"]["item"]["id"] == "replay-assistant:assistant" && u["update"]["item"]["streaming"] == false
     })
     .await;
 }

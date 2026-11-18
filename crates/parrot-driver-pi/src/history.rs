@@ -9,9 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use parrot_proto::driver::{
-    DriverUpdate, DriverUpdateKind, HistoryDiscoverResult, HistoryReadResult,
-};
+use parrot_proto::driver::{DriverUpdate, DriverUpdateKind, HistoryDiscoverResult, HistoryReadResult};
 use parrot_proto::item::{ItemKind, ItemPatch};
 use parrot_proto::open::Open;
 use parrot_proto::session::{DiscoveredSession, Ref, RefStrength, SessionDiscoverParams};
@@ -135,10 +133,7 @@ pub fn discover(root: &Path, p: &SessionDiscoverParams) -> HistoryDiscoverResult
         .map(|(_, s)| s.clone())
         .collect();
     let next = (start + limit < found.len()).then(|| (start + limit).to_string());
-    HistoryDiscoverResult {
-        found: list,
-        next,
-    }
+    HistoryDiscoverResult { found: list, next }
 }
 
 /// The session file for `id` under `root`.
@@ -146,9 +141,12 @@ pub fn find(root: &Path, id: &str) -> Option<PathBuf> {
     if id.is_empty() || id.contains('/') || id.contains("..") {
         return None;
     }
-    files(root)
-        .into_iter()
-        .find(|path| header(&std::fs::read_to_string(path).unwrap_or_default()).0.as_deref() == Some(id))
+    files(root).into_iter().find(|path| {
+        header(&std::fs::read_to_string(path).unwrap_or_default())
+            .0
+            .as_deref()
+            == Some(id)
+    })
 }
 
 /// `history/read` of a session file's text, from line `cursor`.
@@ -212,10 +210,7 @@ impl Replay {
                 if let Some(summary) = entry.get("summary") {
                     set.insert("summary".into(), summary.clone());
                 }
-                let id = format!(
-                    "compaction-{}",
-                    entry["id"].as_str().unwrap_or("entry")
-                );
+                let id = format!("compaction-{}", entry["id"].as_str().unwrap_or("entry"));
                 self.updates.push(self.item(ItemPatch {
                     id,
                     kind: Some(Open::Known(ItemKind::Compaction)),
@@ -341,17 +336,10 @@ impl Replay {
                 }
             }
             Some("toolResult") => {
-                let id = message["toolCallId"]
-                    .as_str()
-                    .unwrap_or(entry_id)
-                    .to_owned();
+                let id = message["toolCallId"].as_str().unwrap_or(entry_id).to_owned();
                 let mut set = map_of(
                     "status",
-                    json!(if message["isError"] == true {
-                        "error"
-                    } else {
-                        "ok"
-                    }),
+                    json!(if message["isError"] == true { "error" } else { "ok" }),
                 );
                 if let Some(text) = text_of(&message["content"]) {
                     set.insert("output".into(), json!(text));
@@ -371,8 +359,14 @@ impl Replay {
                         let name = call["name"].as_str().unwrap_or("tool");
                         let mut set = map_of("tool", json!(name));
                         set.insert("title".into(), json!(name));
-                        set.insert("input".into(), call.get("arguments").cloned().unwrap_or_else(|| json!({})));
-                        set.insert("status".into(), json!(call["status"].as_str().unwrap_or("running")));
+                        set.insert(
+                            "input".into(),
+                            call.get("arguments").cloned().unwrap_or_else(|| json!({})),
+                        );
+                        set.insert(
+                            "status".into(),
+                            json!(call["status"].as_str().unwrap_or("running")),
+                        );
                         set.insert("caller".into(), json!("model"));
                         self.updates.push(self.item(ItemPatch {
                             id: key,
@@ -482,11 +476,9 @@ mod tests {
                 .any(|i| i.kind == Some(Open::Known(ItemKind::Assistant))
                     && i.set.as_ref().and_then(|s| s.get("text")) == Some(&json!("One note.")))
         );
-        assert!(
-            items
-                .iter()
-                .any(|i| i.id == "call-1" && i.set.as_ref().and_then(|s| s.get("output")) == Some(&json!("hello")))
-        );
+        assert!(items.iter().any(
+            |i| i.id == "call-1" && i.set.as_ref().and_then(|s| s.get("output")) == Some(&json!("hello"))
+        ));
         let inner = items.iter().find(|i| i.id == "inner-1").expect("the nested call");
         assert_eq!(inner.parent.as_deref(), Some("call-1"));
         assert!(

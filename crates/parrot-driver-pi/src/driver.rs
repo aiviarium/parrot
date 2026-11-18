@@ -328,9 +328,10 @@ impl Driver {
                     if let Some(instructions) = instructions {
                         command = command.with("customInstructions", json!(instructions));
                     }
-                    let answer = b.command(command, Some(COMPACT_TIMEOUT)).await.map_err(|e| {
-                        RpcError::new(-32020, format!("pi refused the compaction: {e}"))
-                    })?;
+                    let answer = b
+                        .command(command, Some(COMPACT_TIMEOUT))
+                        .await
+                        .map_err(|e| RpcError::new(-32020, format!("pi refused the compaction: {e}")))?;
                     let updates = b.state.lock().unwrap().compacted(&answer, "manual");
                     self.emit(updates);
                     return Ok(to_value(&BindingActionResult {
@@ -389,9 +390,7 @@ impl Driver {
                         Some(turn) => Some(
                             state
                                 .turn_input_text(turn)
-                                .ok_or_else(|| {
-                                    RpcError::new(-32001, "pi forks only at a turn it has seen")
-                                })?
+                                .ok_or_else(|| RpcError::new(-32001, "pi forks only at a turn it has seen"))?
                                 .to_owned(),
                         ),
                         None => None,
@@ -409,12 +408,12 @@ impl Driver {
                         .rev()
                         .find(|m| m.text == text)
                         .cloned()
-                        .ok_or_else(|| {
-                            RpcError::new(-32002, "pi has no message for that turn any more")
-                        })?,
-                    None => messages.messages.last().cloned().ok_or_else(|| {
-                        RpcError::new(-32004, "pi has no message to fork from")
-                    })?,
+                        .ok_or_else(|| RpcError::new(-32002, "pi has no message for that turn any more"))?,
+                    None => messages
+                        .messages
+                        .last()
+                        .cloned()
+                        .ok_or_else(|| RpcError::new(-32004, "pi has no message to fork from"))?,
                 };
                 b.command(
                     Command::new("", "fork").with("entryId", json!(entry.entry_id)),
