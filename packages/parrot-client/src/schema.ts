@@ -87,6 +87,8 @@ export interface AgentListParams {
 
 export interface AgentListResult {
   agents: Agent[]
+  /** How to install a driver egg, when the runtime has none. */
+  hint?: string | null
 }
 
 export interface AgentRefreshParams {
