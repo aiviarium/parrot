@@ -1516,6 +1516,7 @@ dependencies = [
 name = "parrot-workspace"
 version = "0.1.0"
 dependencies = [
+ "parrot-proto",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
