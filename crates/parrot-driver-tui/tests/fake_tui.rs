@@ -18,9 +18,24 @@ fn fake(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The scripted TUI of this crate.
+/// The scripted TUI of this crate, which every OS can run.
+#[cfg(not(unix))]
 fn fake_tui() -> &'static str {
     env!("CARGO_BIN_EXE_fake-tui")
+}
+
+/// The command that starts the fake TUI. On Unix the shell script is used, since its slow
+/// prompt reads raw input and takes Ctrl+C; on Windows the Rust binary draws the same screens
+/// without those scenarios.
+fn fake_command() -> Vec<String> {
+    #[cfg(unix)]
+    {
+        vec!["sh".into(), fake("fake-tui.sh").to_string_lossy().into_owned()]
+    }
+    #[cfg(not(unix))]
+    {
+        vec![fake_tui().into()]
+    }
 }
 
 struct Harness {
@@ -33,9 +48,13 @@ struct Harness {
 
 impl Harness {
     async fn start(trust: bool) -> (Harness, Result<Value, String>) {
+        Harness::start_with(trust, |_| {}).await
+    }
+
+    async fn start_with(trust: bool, adjust: impl FnOnce(&mut Config)) -> (Harness, Result<Value, String>) {
         let dir = tempfile::tempdir().unwrap();
         let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
-        let mut config = Config::new("fake-tui", vec![fake_tui().into()], profile);
+        let mut config = Config::new("fake-tui", fake_command(), profile);
         config.guard = None;
         config.size = Size::new(12, 60);
         config.unrecognised_after = Duration::from_millis(800);
@@ -48,6 +67,7 @@ impl Harness {
         if trust {
             config.env.push(("FAKE_TUI_TRUST".into(), "1".into()));
         }
+        adjust(&mut config);
         let (tx, rx) = mpsc::unbounded_channel();
         let mut driver = TuiDriver::new(config, DriverContext { updates: tx });
         let cwd = dir.path().to_string_lossy().into_owned();
@@ -343,7 +363,7 @@ async fn agent_list_reports_tui_control() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let profile = Profile::load(fake("fake-tui.kdl")).unwrap();
     let mut d = TuiDriver::new(
-        Config::new("fake-tui", vec![fake_tui().into()], profile),
+        Config::new("fake-tui", fake_command(), profile),
         DriverContext { updates: tx },
     );
     let r = d.call("agent/list", json!({})).await.unwrap();
@@ -427,4 +447,148 @@ fn mcp_is_injected_without_the_token_in_argv() {
         "mcp_servers.parrot.bearer_token_env_var=\"PARROT_MCP_TOKEN\""
     );
     assert!(!claude.iter().chain(&codex).any(|a| a.contains("tok-made-up")));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+// The shell fake reads raw input and takes Ctrl+C; the Windows fake does not.
+async fn a_prompt_while_working_steers_the_turn() {
+    let (mut h, started) = Harness::start(false).await;
+    started.unwrap();
+    h.state("idle").await;
+    h.prompt("msg_1", "slow count").await;
+    h.state("running").await;
+    let r = h
+        .call(
+            "binding/prompt",
+            json!({ "binding": "b1", "message": "msg_2", "text": "also tens", "steer": true }),
+        )
+        .await;
+    assert_eq!(r["disposition"], "steered");
+    let steered = h
+        .until("steer item", |u| u["update"]["item"]["id"] == "msg_2")
+        .await;
+    assert_eq!(steered["update"]["item"]["turn"], "turn-1");
+    let mut seen = false;
+    for _ in 0..30 {
+        let screen = h.screen().await;
+        if screen["text"].as_str().unwrap().contains("Steered: also tens") {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen, "the steer did not reach the harness");
+    // The transcript ends the turn; its echo of the steer is not reported again.
+    let turn = h.turn_done("turn-1").await;
+    assert_eq!(turn["status"], "completed");
+    assert!(
+        !h.seen
+            .iter()
+            .any(|u| u["update"]["item"]["source"] == "transcript" && u["update"]["item"]["kind"] == "user"),
+        "an echo was reported again"
+    );
+    h.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+// The shell fake reads raw input and takes Ctrl+C; the Windows fake does not.
+async fn cancel_runs_the_interrupt_action() {
+    let (mut h, started) = Harness::start(false).await;
+    started.unwrap();
+    h.state("idle").await;
+    h.prompt("msg_1", "slow count").await;
+    h.state("running").await;
+    // The interrupt action waits for the working screen to hold.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let r = h.call("binding/cancel", json!({ "binding": "b1" })).await;
+    assert_eq!(r["interrupted"], true);
+    let turn = h.turn_done("turn-1").await;
+    assert_eq!(turn["status"], "interrupted");
+    assert!(
+        h.screen().await["text"]
+            .as_str()
+            .unwrap()
+            .contains("Interrupted.")
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn profile_actions_are_offered_and_run() {
+    let (mut h, started) = Harness::start(false).await;
+    let started = started.unwrap();
+    let ids: Vec<&str> = started["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    // The actions the driver runs itself stay out of the list.
+    assert_eq!(ids, ["clear-prompt"]);
+    assert_eq!(started["actions"][0]["when"], json!(["idle"]));
+    assert_eq!(started["actions"][0]["requires"], json!(["terminal"]));
+    h.state("idle").await;
+    let r = h
+        .call(
+            "binding/action",
+            json!({ "binding": "b1", "action": "clear-prompt" }),
+        )
+        .await;
+    assert_eq!(r["status"], "done");
+    let bad = h
+        .driver
+        .call("binding/action", json!({ "binding": "b1", "action": "submit" }))
+        .await;
+    assert!(bad.is_err());
+    h.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+// The shell fake reads raw input and takes Ctrl+C; the Windows fake does not.
+async fn shadow_mode_reports_a_prompt_the_transcript_recorded_differently() {
+    let correlate = parrot_proto::driver_data::parse(
+        "correlate.kdl",
+        "kind \"user\" {\n  match \"position\" \"text\"\n  prefer \"tui\"\n  history \"transcript\"\n  compare \"text\"\n}\n",
+    )
+    .unwrap();
+    let (mut h, started) = Harness::start_with(false, |c| {
+        c.shadow = true;
+        c.correlate = Some(correlate);
+    })
+    .await;
+    started.unwrap();
+    h.state("idle").await;
+    h.prompt("msg_1", "hello there").await;
+    h.turn_done("turn-1").await;
+    // The turn's comparison has time to run, and the screen settles, before the next prompt.
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    for _ in 0..30 {
+        if h.screen().await["state"] == "idle" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    h.call(
+        "binding/prompt",
+        json!({ "binding": "b1", "message": "msg_2", "text": "typo here", "steer": false }),
+    )
+    .await;
+    h.turn_done("turn-2").await;
+    let notice = h
+        .until("shadow notice", |u| u["update"]["code"] == "x.parrot/shadow")
+        .await;
+    assert!(
+        notice["update"]["text"].as_str().unwrap().contains("text"),
+        "{notice}"
+    );
+    let notices = h
+        .seen
+        .iter()
+        .filter(|u| u["update"]["code"] == "x.parrot/shadow")
+        .count();
+    assert_eq!(notices, 1, "the matching turn reported nothing");
+    h.stop().await;
 }

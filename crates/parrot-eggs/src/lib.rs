@@ -22,7 +22,9 @@ pub mod signing;
 pub mod store;
 pub mod target;
 
-pub use driver::{CliSpec, CommandVariant, DriverFile, DriverRun, ShimSpec};
+pub use driver::{
+    CliSpec, CommandVariant, DriverFile, DriverRun, McpStyle, ShimSpec, TranscriptFormat, TranscriptSpec,
+};
 pub use probe::{Probe, ProbeStep};
 pub use store::{Eggs, LoadedEgg};
 pub use target::{ParrotTarget, TARGET};

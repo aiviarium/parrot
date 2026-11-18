@@ -122,7 +122,7 @@ async fn a_data_only_egg_drives_the_tui_core_over_stdio() {
     std::fs::write(
         dir.path().join("driver.kdl"),
         format!(
-            "driver \"builtin\" name=\"tui\"\ncommand \"{command}\"\ntranscript \"{transcript}\"\ndata-version \"1\"\n"
+            "driver \"builtin\" name=\"tui\"\ncommand \"{command}\"\ntranscript \"jsonl\" dir=\"{transcript}\"\ndata-version \"1\"\n"
         ),
     )
     .unwrap();

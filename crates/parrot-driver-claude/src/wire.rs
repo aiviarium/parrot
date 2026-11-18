@@ -73,6 +73,36 @@ pub enum ClaudeInMsg {
 pub enum System {
     Init(SystemInit),
     CompactBoundary(CompactBoundary),
+    /// A background or subagent task began; `tool_use_id` names the Task call that runs it.
+    TaskStarted(TaskStarted),
+    /// A task ended.
+    TaskNotification(TaskNotification),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskStarted {
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskNotification {
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// `completed`, `failed` or `stopped`.
+    pub status: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 /// Permission modes. A new one parses as `Open::Unknown`.
@@ -471,6 +501,12 @@ pub enum ControlRequestBody {
     },
     SetPermissionMode {
         mode: Open<PermissionMode>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    /// Host to CLI: stop one task, such as a subagent.
+    StopTask {
+        task_id: String,
         #[serde(flatten)]
         extra: Extra,
     },

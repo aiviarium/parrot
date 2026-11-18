@@ -131,8 +131,15 @@ async fn a_phone_answers_a_request_from_a_push() {
         !listed.to_string().contains(&secret),
         "token/list shows the secret"
     );
-    let file = std::fs::read_to_string(serve.state_dir().join("tokens.json")).unwrap();
-    assert!(!file.contains(&secret), "the secret is stored in the clear");
+    // Tokens live in the runtime's store, hashed.
+    assert!(!serve.state_dir().join("tokens.json").exists());
+    for name in ["state.db", "state.db-wal"] {
+        let db = std::fs::read(serve.state_dir().join(name)).unwrap_or_default();
+        assert!(
+            !db.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "the secret is stored in the clear in {name}"
+        );
+    }
 
     owner
         .ok("session/prompt", json!({ "session": session, "text": "run ls" }))

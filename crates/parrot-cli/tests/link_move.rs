@@ -254,6 +254,10 @@ async fn a_session_moves_over_a_link_and_outlives_its_first_runtime() {
             "laptop",
             "--grant",
             "read,prompt,manage,delegate",
+            // The session moves into the server's environment and stays the laptop's to reach.
+            "--offer-env",
+            "--sessions",
+            "linked",
             "--json",
         ],
         None,

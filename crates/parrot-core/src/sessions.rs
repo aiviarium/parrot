@@ -454,7 +454,15 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
             Err(RpcError::new(-32001, format!("{method} is not implemented"))
                 .with_data(json!({ "feature": "session.history" })))
         }
-        "env/list" => check(cx.state, conn, Scope::Read).map(|()| json!({ "envs": [env_json(cx.state)] })),
+        "env/list" => check(cx.state, conn, Scope::Read).map(|()| {
+            // A link that doesn't offer the environment sees none (spec 24.1).
+            let mut envs: Vec<Value> = crate::principals::env_offered(cx.state, conn)
+                .then(|| env_json(cx.state))
+                .into_iter()
+                .collect();
+            envs.extend(crate::links::peer_envs(cx, conn));
+            json!({ "envs": envs })
+        }),
         _ => Err(RpcError::new(-32601, format!("method not found: {method}"))),
     };
     match result {
@@ -609,6 +617,7 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
                 .sessions
                 .workspaces
                 .get(workspace)
+                .filter(|_| crate::tree::visible_workspace(cx.state, conn, workspace))
                 .ok_or_else(|| not_found("workspace", workspace))?;
             let found = (w.id.clone(), w.path.clone());
             if let Err(e) = fenced(&found.1) {

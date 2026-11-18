@@ -7,7 +7,7 @@
 //! before revealing its own, and the responder checks the dialler's against its pins.
 
 use crate::LinkError;
-use crate::frame::{self, Assembler, MAX_MESSAGE, NOISE_MAX};
+use crate::frame::{self, Assembler, MAX_MESSAGE, MIN_MESSAGE, NOISE_MAX};
 use crate::keys::{Pins, PublicKey, StaticKey};
 use crate::pairing::{InviteCode, Invites, Secret, Side};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,23 @@ struct Hello {
     mode: Mode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     invite: Option<String>,
+    /// The largest Noise message the dialer's carrier takes, when it is under 64 KiB: a
+    /// message-based carrier delivers each message whole, so the accepting side keeps to it too.
+    /// The hello is in the prologue, so this is authenticated with the handshake.
+    #[serde(rename = "maxMessage", default, skip_serializing_if = "Option::is_none")]
+    max_message: Option<usize>,
+}
+
+impl Hello {
+    fn new(mode: Mode, invite: Option<String>, max_message: usize) -> Hello {
+        Hello {
+            parrot: "link".into(),
+            version: 1,
+            mode,
+            invite,
+            max_message: (max_message < NOISE_MAX).then_some(max_message.max(MIN_MESSAGE)),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +141,13 @@ pub struct LinkWriter<S> {
     buf: Vec<u8>,
 }
 
+impl<S> LinkWriter<S> {
+    /// The largest plaintext part one Noise message carries on this connection.
+    pub fn part_len(&self) -> usize {
+        self.part_len
+    }
+}
+
 impl<S: AsyncWrite> LinkWriter<S> {
     /// Sends one message, split into as many Noise messages as it needs.
     pub async fn send(&mut self, msg: &[u8]) -> Result<(), LinkError> {
@@ -182,12 +206,7 @@ impl Dialer {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let hello = Hello {
-            parrot: "link".into(),
-            version: 1,
-            mode: Mode::Xx,
-            invite: None,
-        };
+        let hello = Hello::new(Mode::Xx, None, self.max_message);
         self.run(stream, hello, expected, None).await
     }
 
@@ -196,12 +215,7 @@ impl Dialer {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let hello = Hello {
-            parrot: "link".into(),
-            version: 1,
-            mode: Mode::Pair,
-            invite: Some(code.invite.clone()),
-        };
+        let hello = Hello::new(Mode::Pair, Some(code.invite.clone()), self.max_message);
         let mut conn = self.run(stream, hello, &code.key, Some(&code.secret)).await?;
         conn.paired = Some(code.invite.clone());
         Ok(conn)
@@ -359,7 +373,11 @@ impl Listener {
                 Some(invite)
             }
         };
-        connection(stream, hs, remote, Side::Accepted, paired, self.max_message)
+        // The smaller of this side's limit and the one the dialer's carrier stated.
+        let max_message = hello.max_message.map_or(self.max_message, |m| {
+            m.clamp(MIN_MESSAGE, NOISE_MAX).min(self.max_message)
+        });
+        connection(stream, hs, remote, Side::Accepted, paired, max_message)
     }
 }
 

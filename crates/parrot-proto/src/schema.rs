@@ -9,8 +9,8 @@ use schemars::{JsonSchema, SchemaGenerator};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    action, agent, driver, driver_data, env, error, handshake, ids, item, option, principal, prompt, request,
-    session, state, subscribe, usage, workspace,
+    action, agent, driver, driver_data, env, error, handshake, ids, item, link, option, principal, prompt,
+    request, session, state, subscribe, usage, workspace,
 };
 
 /// The schema of one type, with its own `$defs`.
@@ -328,6 +328,17 @@ pub fn register(r: &mut Registry) {
     r.method::<workspace::WorkspaceMergeParams, workspace::WorkspaceMergeResult>("workspace/merge");
     r.method::<workspace::WorkspaceRemoveParams, ids::Empty>("workspace/remove");
     r.method::<workspace::WorkspaceTransferParams, workspace::WorkspaceTransferResult>("workspace/transfer");
+    // Links and the methods one runtime calls on a linked one (spec 24, E1, E9).
+    r.method::<link::LinkListParams, link::LinkListResult>("link/list");
+    r.method::<link::CarrierListParams, link::CarrierListResult>("carrier/list");
+    r.method::<link::LinkInviteParams, link::LinkInviteResult>("link/invite");
+    r.method::<link::LinkAddParams, link::LinkAddResult>("link/add");
+    r.method::<link::LinkUpdateParams, link::LinkUpdateResult>("link/update");
+    r.method::<link::LinkRemoveParams, ids::Empty>("link/remove");
+    r.method::<link::BlobPutParams, ids::Empty>("blob/put");
+    r.method::<link::SessionOfferParams, link::SessionOfferResult>("session/offer");
+    r.method::<link::SessionCommitParams, link::SessionCommitResult>("session/commit");
+    r.method::<link::WorkspaceReceiveParams, link::WorkspaceReceiveResult>("workspace/receive");
     // The methods a runtime calls on a driver (spec 30.1).
     r.method::<driver::BindingStartParams, driver::BindingStartResult>("binding/start");
     r.method::<driver::BindingStopParams, ids::Empty>("binding/stop");
@@ -498,6 +509,32 @@ mod tests {
         assert!(all["$defs"]["Message"].is_object());
         assert!(all["$defs"]["MovedData"].is_object());
         assert!(super::schema_for::<super::error::MovedData>()["properties"]["runtime"].is_object());
+    }
+
+    /// The link methods are in the table, `link/add` with what it asks a peer for when it pairs
+    /// over the carrier, and `workspace/receive` with the transfer it unpacks.
+    #[test]
+    fn link_methods_are_in_the_table() {
+        let all = super::all();
+        let methods = &all["x-methods"];
+        for m in [
+            "link/list",
+            "link/invite",
+            "link/add",
+            "link/update",
+            "link/remove",
+            "carrier/list",
+            "blob/put",
+            "session/offer",
+            "session/commit",
+            "workspace/receive",
+        ] {
+            assert!(methods.get(m).is_some(), "{m} is missing");
+        }
+        let add = all["$defs"]["LinkAddParams"]["properties"].clone();
+        assert!(add["ask"].is_object(), "{add}");
+        let receive = &all["$defs"]["WorkspaceReceiveParams"]["required"];
+        assert_eq!(receive, &serde_json::json!(["workspace", "transfer"]));
     }
 
     /// Every method and notification in the table points at a definition that exists.

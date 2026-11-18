@@ -1,5 +1,6 @@
 //! `parrot eggs` against the in-repo registry `eggs/` and against a static registry packed
 //! from it.
+#![cfg(unix)]
 
 mod common;
 

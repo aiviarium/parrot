@@ -257,3 +257,10 @@ action name="attach" description="Attach a file by pasting its path." {
     }
   }
 }
+
+// Codex takes a prompt typed while it works into the running turn when Enter is pressed.
+action name="steer" description="Send a prompt into the running turn." {
+  require state="working" hold="300ms"
+  steps paste="$text"
+  steps key="enter"
+}

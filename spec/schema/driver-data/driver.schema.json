@@ -48,6 +48,28 @@
       "items": {
         "$ref": "#/$defs/ShimSpec"
       }
+    },
+    "transcript": {
+      "description": "Where the TUI core reads the harness's own transcript.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TranscriptSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mcp": {
+      "description": "How the TUI core hands the harness the `parrot` MCP server (spec 26).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/McpStyle"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -181,6 +203,60 @@
       "required": [
         "versions",
         "dir"
+      ]
+    },
+    "TranscriptSpec": {
+      "description": "`transcript \"claude\"`, `transcript \"codex\"` or `transcript \"jsonl\" dir=\"<folder>\"`.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/TranscriptFormat"
+        },
+        "dir": {
+          "description": "The folder to watch, in place of the format's own. `~` is the home folder.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "format"
+      ]
+    },
+    "TranscriptFormat": {
+      "description": "The transcript formats the TUI core reads.",
+      "oneOf": [
+        {
+          "description": "Claude Code's project transcripts, in the folder for the working directory.",
+          "type": "string",
+          "const": "claude"
+        },
+        {
+          "description": "Codex rollout files under `sessions/`.",
+          "type": "string",
+          "const": "codex"
+        },
+        {
+          "description": "Plain JSONL messages in `dir`.",
+          "type": "string",
+          "const": "jsonl"
+        }
+      ]
+    },
+    "McpStyle": {
+      "description": "How the TUI core passes the `parrot` MCP server to the harness. The token is only ever in\nthe environment.",
+      "oneOf": [
+        {
+          "description": "`--mcp-config <json>`.",
+          "type": "string",
+          "const": "mcp-config"
+        },
+        {
+          "description": "`-c mcp_servers.parrot.*` config overrides.",
+          "type": "string",
+          "const": "config-override"
+        }
       ]
     }
   }

@@ -124,6 +124,18 @@ driver "builtin" name="tui"
 command "example-cli"
 controls "tui"
 data-version "1"
+transcript "jsonl" dir="~/.example-cli/transcripts"
+mcp "mcp-config"
 ```
 
 Either shows up under the egg's own id, such as `gemini`.
+
+The TUI core reads items from the harness's own transcript when `transcript` names one:
+
+| Node | The TUI core |
+| --- | --- |
+| `transcript "claude"` | Reads Claude Code's project transcript for the working directory |
+| `transcript "codex"` | Reads the Codex rollout under `sessions/` |
+| `transcript "jsonl" dir=…` | Reads the newest `.jsonl` in the folder, in Claude Code's message format |
+| `mcp "mcp-config"` | Passes the `parrot` MCP server as `--mcp-config` JSON |
+| `mcp "config-override"` | Passes it as `-c mcp_servers.parrot.*` overrides |

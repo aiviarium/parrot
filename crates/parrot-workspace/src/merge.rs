@@ -1,9 +1,11 @@
 //! Merging one workspace's branch into another (spec 8, Appendix E8).
 //!
-//! Both workspaces must be worktrees of the same repository, which is what makes the branch names
-//! visible on both sides. `into` has to be clean first: a merge on top of uncommitted changes cannot
-//! be aborted without losing them. Conflicts leave `into` exactly as it was and are returned as a
-//! result rather than an error, so the caller can list them.
+//! When both workspaces are worktrees of the same repository, `into` sees `from`'s branch as it is.
+//! When `from` is a repository of its own, such as a workspace that arrived over a link and was
+//! sent back, its branch is fetched into a hidden ref of `into`'s repository first, merged from
+//! there, and the ref is deleted after. `into` has to be clean first: a merge on top of
+//! uncommitted changes cannot be aborted without losing them. Conflicts leave `into` exactly as it
+//! was and are returned as a result rather than an error, so the caller can list them.
 
 use std::path::{Path, PathBuf};
 
@@ -15,7 +17,7 @@ use crate::git::{self, Git, GitError};
 pub enum MergeError {
     #[error("{0} is not a git repository")]
     NotARepository(PathBuf),
-    #[error("{from} and {into} are not worktrees of the same repository")]
+    #[error("{from} and {into} share no history")]
     NotSameRepository { from: PathBuf, into: PathBuf },
     #[error("workspace {path} has uncommitted changes: {changed:?}")]
     Dirty { path: PathBuf, changed: Vec<String> },
@@ -39,12 +41,7 @@ pub fn merge(
 ) -> Result<WorkspaceMergeResult, MergeError> {
     let from_common = common_dir(from)?.ok_or_else(|| MergeError::NotARepository(from.to_path_buf()))?;
     let into_common = common_dir(into)?.ok_or_else(|| MergeError::NotARepository(into.to_path_buf()))?;
-    if from_common != into_common {
-        return Err(MergeError::NotSameRepository {
-            from: from.to_path_buf(),
-            into: into.to_path_buf(),
-        });
-    }
+    let same = from_common == into_common;
 
     let changed = git::status(into)?;
     if !changed.is_empty() {
@@ -58,7 +55,49 @@ pub fn merge(
     if git::branch(into)?.is_none() {
         return Err(MergeError::NoBranch(into.to_path_buf()));
     }
-    let reference = format!("refs/heads/{branch}");
+    let fetched = (!same).then(|| fetch(from, into, &branch)).transpose()?;
+    let reference = fetched.clone().unwrap_or_else(|| format!("refs/heads/{branch}"));
+    // A separate repository merges only when it shares history, as one that came from here does.
+    if fetched.is_some() && !Git::new(into).succeeds(&["merge-base", "HEAD", &reference])? {
+        let _ = Git::new(into).run(&["update-ref", "-d", &reference]);
+        return Err(MergeError::NotSameRepository {
+            from: from.to_path_buf(),
+            into: into.to_path_buf(),
+        });
+    }
+    let result = merge_ref(into, &branch, &reference, method, message);
+    if let Some(r) = &fetched {
+        // The hidden ref only carried the commits over; the merge commit keeps what it needs.
+        let _ = Git::new(into).run(&["update-ref", "-d", r]);
+    }
+    result
+}
+
+/// Fetches `branch` of the separate repository `from` into a hidden ref of `into`'s repository.
+fn fetch(from: &Path, into: &Path, branch: &str) -> Result<String, MergeError> {
+    let reference = format!("refs/parrot/incoming/{branch}");
+    let source = from.to_string_lossy().into_owned();
+    let fetched = Git::new(into).run(&[
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        &source,
+        &format!("+refs/heads/{branch}:{reference}"),
+    ]);
+    match fetched {
+        Ok(_) => Ok(reference),
+        Err(GitError::Failed { stderr, .. }) => Err(MergeError::Failed { stderr }),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn merge_ref(
+    into: &Path,
+    branch: &str,
+    reference: &str,
+    method: MergeMethod,
+    message: Option<&str>,
+) -> Result<WorkspaceMergeResult, MergeError> {
     let counts = Git::new(into).run(&["rev-list", "--count", &format!("HEAD..{reference}")])?;
     if counts.trim() == "0" {
         return Ok(WorkspaceMergeResult::default());
@@ -71,14 +110,14 @@ pub fn merge(
             if let Some(message) = message {
                 args.extend(["--message", message]);
             }
-            args.push(&reference);
+            args.push(reference);
             git.run(&args)
         }
         MergeMethod::Squash => {
             let message = message
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("Squash merge of {branch}"));
-            squash(&git, &reference, &message)
+            squash(&git, reference, &message)
         }
     };
 
@@ -237,9 +276,60 @@ mod tests {
         assert!(matches!(error, MergeError::Dirty { .. }));
 
         std::fs::write(into.path.join("README.md"), "# A made-up project\n").unwrap();
+        // A repository with a history of its own.
         let other = Repo::new();
+        Git::new(other.path())
+            .run(&["commit", "--quiet", "--amend", "--message", "another start"])
+            .unwrap();
         let error = merge(&from.path, other.path(), MergeMethod::Merge, None).unwrap_err();
         assert!(matches!(error, MergeError::NotSameRepository { .. }));
+    }
+
+    #[test]
+    fn merges_back_a_separate_repository_that_shares_history() {
+        let repo = Repo::new();
+        let into = worktree(&repo, "into", "parrot/ses_beta");
+        // A workspace that went away and came back as a repository of its own, on its branch.
+        let back = repo.parent().join("arrived");
+        Git::new(repo.path())
+            .run(&[
+                "clone",
+                "--quiet",
+                &repo.path().to_string_lossy(),
+                &back.to_string_lossy(),
+            ])
+            .unwrap();
+        let arrived = Worktree {
+            path: back.clone(),
+            branch: "parrot/ses_alpha".into(),
+            ..into.clone()
+        };
+        let git = Git::new(&back);
+        git.run(&["config", "user.name", "Made Up"]).unwrap();
+        git.run(&["config", "user.email", "made-up@example.invalid"])
+            .unwrap();
+        git.run(&["checkout", "--quiet", "-b", "parrot/ses_alpha"])
+            .unwrap();
+        let tip = commit(
+            &arrived,
+            "far.txt",
+            "made on the server
+",
+            "server work",
+        );
+
+        let result = merge(&back, &into.path, MergeMethod::Merge, None).unwrap();
+        assert!(result.conflicts.is_none());
+        assert_eq!(result.commit.as_deref(), Some(tip.as_str()));
+        assert_eq!(
+            std::fs::read_to_string(into.path.join("far.txt")).unwrap(),
+            "made on the server\n"
+        );
+        // The hidden ref that carried the commits is gone.
+        let refs = Git::new(&into.path)
+            .run(&["for-each-ref", "refs/parrot/incoming"])
+            .unwrap();
+        assert!(refs.is_empty(), "{refs}");
     }
 
     #[test]

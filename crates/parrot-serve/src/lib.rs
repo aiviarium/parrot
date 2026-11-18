@@ -4,6 +4,7 @@
 //! `Input`s for it, and `executor` turns the core's effects back into messages and backend calls.
 
 pub mod backend_impl;
+pub mod blobs;
 pub mod config;
 pub mod desktop;
 pub mod dispatch;

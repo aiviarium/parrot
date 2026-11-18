@@ -22,8 +22,54 @@ pub enum Peer {
         /// Function name patterns the client may provide (E8); `None` allows any.
         provides: Option<Vec<String>>,
     },
-    /// A linked runtime, after the link handshake.
-    Link { link: String, scopes: Vec<String> },
+    /// A linked runtime, after the link handshake, with the grant and offer this runtime gave it.
+    Link {
+        link: String,
+        scopes: Vec<String>,
+        offer: LinkOffer,
+    },
+}
+
+/// What a runtime shows a linked peer (spec 24.1): its environment, and which of its sessions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkOffer {
+    /// Whether the peer sees this environment and its agents, and may create sessions in it.
+    pub env: bool,
+    pub sessions: OfferedSessions,
+}
+
+/// Which sessions a link's peer sees.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OfferedSessions {
+    /// None at all.
+    #[default]
+    None,
+    /// Only sessions created over the link or moved here over it, and their descendants.
+    Linked,
+    /// Every session.
+    All,
+}
+
+impl LinkOffer {
+    /// Reads a link record's `offer`. Anything missing or unknown offers nothing.
+    pub fn from_json(offer: &Value) -> LinkOffer {
+        LinkOffer {
+            env: offer.get("env").and_then(Value::as_bool).unwrap_or(false),
+            sessions: match offer.get("sessions").and_then(Value::as_str) {
+                Some("all") => OfferedSessions::All,
+                Some("linked") => OfferedSessions::Linked,
+                _ => OfferedSessions::None,
+            },
+        }
+    }
+
+    /// Everything: the environment and every session.
+    pub fn all() -> LinkOffer {
+        LinkOffer {
+            env: true,
+            sessions: OfferedSessions::All,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

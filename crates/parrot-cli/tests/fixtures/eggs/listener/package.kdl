@@ -1,0 +1,21 @@
+format 1
+
+package {
+  group example
+  id listener
+  version "0.1.0"
+}
+
+about {
+  name "Made-up listener"
+  summary "A carrier egg for tests that listens: the runtime runs it beside itself and it hands inbound channels over."
+  license MIT
+}
+
+targets {
+  parrot {
+    requires {
+      parrot "^0.1"
+    }
+  }
+}

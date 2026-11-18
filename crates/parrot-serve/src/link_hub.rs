@@ -29,6 +29,9 @@ const LINK_KIND: &str = "link";
 /// How long `parrot link invite` may take when it runs through a carrier.
 const INVITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The feature a runtime announces in its `initialize` to a peer whose SSH key it restricted.
+const RESTRICTED: &str = "x.parrot/restrictedKey";
+
 /// The id of the hub's own `initialize` call to the peer.
 const INIT_ID: &str = "hub:init";
 
@@ -146,6 +149,44 @@ impl LinkHub {
         self.carriers.lock().expect("lock").clone()
     }
 
+    /// Starts `<carrier> listen` for each carrier egg that listens, and starts it again with
+    /// backoff when it ends (spec 24.2). For each inbound channel the egg runs
+    /// `$PARROT_BIN connect --link --socket $PARROT_SOCKET --fd <n>`, or connects to
+    /// `$PARROT_LINK_SOCKET` itself. The processes end with the runtime.
+    pub fn start_listeners(self: &Arc<Self>, socket: PathBuf, parrot: PathBuf) {
+        let link_socket = parrot_link::endpoint::link_socket_path(&socket);
+        for egg in self.carriers().listeners() {
+            let (socket, link_socket, parrot) = (socket.clone(), link_socket.clone(), parrot.clone());
+            tokio::spawn(async move {
+                let mut backoff = MIN_BACKOFF;
+                loop {
+                    // Under `parrot guard`, so it never outlives the runtime, even one killed.
+                    let started = tokio::process::Command::new(&parrot)
+                        .args(["guard", "--"])
+                        .arg(&egg.program)
+                        .args(&egg.args)
+                        .arg("listen")
+                        .env("PARROT_BIN", &parrot)
+                        .env("PARROT_SOCKET", &socket)
+                        .env("PARROT_LINK_SOCKET", &link_socket)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .kill_on_drop(true)
+                        .spawn();
+                    match started {
+                        Ok(mut child) => {
+                            let status = child.wait().await;
+                            eprintln!("parrot: the {} carrier stopped listening: {status:?}", egg.name);
+                        }
+                        Err(e) => eprintln!("parrot: cannot start the {} carrier: {e}", egg.name),
+                    }
+                    tokio::time::sleep(backoff).await;
+                    backoff = next_backoff(backoff);
+                }
+            });
+        }
+    }
+
     /// Addresses put into invite codes, such as the TCP listener's.
     pub fn add_address(&self, address: String) {
         self.addresses.lock().expect("lock").push(address);
@@ -224,11 +265,20 @@ impl LinkHub {
         });
     }
 
+    fn set_containment(&self, link: &str, containment: &str) {
+        self.update(|rs| {
+            if let Some(r) = rs.iter_mut().find(|r| r["id"] == link) {
+                r["containment"] = json!(containment);
+            }
+        });
+    }
+
     /// The `Link` JSON of spec 24.1, without what the hub keeps for itself.
     fn public(record: &Value) -> Value {
         let mut r = record.clone();
         if let Some(o) = r.as_object_mut() {
             o.remove("invite");
+            o.remove("restrictedKey");
         }
         r
     }
@@ -267,6 +317,10 @@ impl LinkHub {
             "status": "unpaired",
             "invite": code.invite,
         });
+        let mut link = link;
+        if p["authorizedKey"].as_bool() == Some(true) {
+            link["restrictedKey"] = json!(true);
+        }
         self.update(|rs| rs.push(link.clone()));
         Ok(json!({ "code": code.encode(), "link": Self::public(&link) }))
     }
@@ -279,8 +333,27 @@ impl LinkHub {
             Some(code) => InviteCode::parse(code).map_err(link_error)?,
             None => invite_over_carrier(&carrier, p["name"].as_str().unwrap_or_default(), &p).await?,
         };
-        let channel = self.carriers().open(&carrier).await.map_err(link_error)?;
-        self.pair_on(&p, carrier, channel, &code).await
+        // The carrier, then each fallback, until one reaches the peer and pairs.
+        let carriers = self.carriers();
+        let mut last = None;
+        for (i, c) in std::iter::once(&carrier).chain(&carrier.fallback).enumerate() {
+            let channel = match carriers.open(c).await {
+                Ok(channel) => channel,
+                Err(e) => {
+                    last = Some(link_error(e));
+                    continue;
+                }
+            };
+            match self
+                .clone()
+                .pair_with(&p, carrier.clone(), channel, &code, i)
+                .await
+            {
+                Ok(v) => return Ok(v),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| invalid("no carrier")))
     }
 
     /// Pairs over a channel that is already open, such as an in-process duplex, and serves the
@@ -291,6 +364,18 @@ impl LinkHub {
         carrier: CarrierRef,
         channel: parrot_link::carrier::Channel,
         code: &InviteCode,
+    ) -> Result<Value, RpcError> {
+        self.pair_with(p, carrier, channel, code, 0).await
+    }
+
+    /// Pairs over `channel`, which carrier `index` of `carrier` opened (0 for the carrier itself).
+    async fn pair_with(
+        self: Arc<Self>,
+        p: &Value,
+        carrier: CarrierRef,
+        channel: parrot_link::carrier::Channel,
+        code: &InviteCode,
+        index: usize,
     ) -> Result<Value, RpcError> {
         let name = p["name"].as_str().ok_or_else(|| invalid("name is required"))?;
         let conn = Dialer::new(self.key.clone())
@@ -309,7 +394,7 @@ impl LinkHub {
             "offer": p.get("offer").cloned().unwrap_or_else(|| json!({ "env": false, "sessions": "none" })),
             "containment": channel.containment,
             "status": "connected",
-            "via": channel.kind,
+            "via": via_name(&channel.kind, index),
             "since": parrot_core::sessions::timestamp(now_ms()),
         });
         self.update(|rs| rs.push(link.clone()));
@@ -370,31 +455,45 @@ impl LinkHub {
                 return;
             };
             self.set_status(&link, "connecting", None);
-            let carriers = self.carriers();
-            if let Ok((_, channel)) = carriers.open_with_fallback(&carrier).await {
-                let via = channel.kind.clone();
-                match Dialer::new(self.key.clone())
-                    .max_message(channel.max_message)
-                    .dial(channel.stream, &key)
-                    .await
-                {
-                    Ok(conn) => {
-                        backoff = Duration::from_secs(1);
-                        self.clone().serve_conn(link.clone(), conn, Some(via)).await;
-                        continue;
-                    }
-                    // A key that doesn't match waits for the owner (spec 24.3).
-                    Err(LinkError::Key { .. }) => {
-                        self.set_status(&link, "down", None);
-                        return;
-                    }
-                    Err(_) => {}
+            match self.dial_any(&carrier, &key).await {
+                Dialled::Up(conn, via) => {
+                    backoff = MIN_BACKOFF;
+                    self.clone().serve_conn(link.clone(), *conn, Some(via)).await;
+                    continue;
                 }
+                // A key that doesn't match waits for the owner (spec 24.3).
+                Dialled::WrongKey => {
+                    self.set_status(&link, "down", None);
+                    return;
+                }
+                Dialled::Down => {}
             }
             self.set_status(&link, "down", None);
             tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(Duration::from_secs(300));
+            backoff = next_backoff(backoff);
         }
+    }
+
+    /// Dials the carrier, then each fallback in order (spec 24.5). A carrier that opens but
+    /// doesn't reach the peer fails over too; a peer with the wrong key stops the round.
+    async fn dial_any(&self, carrier: &CarrierRef, key: &PublicKey) -> Dialled {
+        let carriers = self.carriers();
+        for (i, c) in std::iter::once(carrier).chain(&carrier.fallback).enumerate() {
+            let Ok(channel) = carriers.open(c).await else {
+                continue;
+            };
+            let via = via_name(&channel.kind, i);
+            match Dialer::new(self.key.clone())
+                .max_message(channel.max_message)
+                .dial(channel.stream, key)
+                .await
+            {
+                Ok(conn) => return Dialled::Up(Box::new(conn), via),
+                Err(LinkError::Key { .. }) => return Dialled::WrongKey,
+                Err(_) => {}
+            }
+        }
+        Dialled::Down
     }
 
     /// Authenticates one inbound stream from the link endpoint and serves it.
@@ -449,10 +548,12 @@ impl LinkHub {
             .as_array()
             .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
+        let offer = parrot_core::LinkOffer::from_json(&record["offer"]);
         let Ok(mut c) = rt
             .connect(Peer::Link {
                 link: link.clone(),
                 scopes,
+                offer,
             })
             .await
         else {
@@ -468,11 +569,21 @@ impl LinkHub {
             mut writer,
             ..
         } = conn;
+        // A peer whose SSH key this runtime restricted to `connect --link` learns it here, so its
+        // ssh link isn't shown as a shell (spec 24.4).
+        let mut features = json!({});
+        if record["restrictedKey"].as_bool() == Some(true) {
+            features[RESTRICTED] = json!({});
+        }
         let init = json!({ "jsonrpc": "2.0", "id": INIT_ID, "method": "initialize", "params": {
             "protocol": [1],
             "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
-            "features": {},
+            "features": features,
         }});
+        let via_ssh = via
+            .as_deref()
+            .or(record["via"].as_str())
+            .is_some_and(|v| v == "ssh" || v.starts_with("ssh (fallback"));
         let id = c.id.clone();
         let read = async {
             loop {
@@ -491,12 +602,19 @@ impl LinkHub {
                         conn: id.clone(),
                         id: None,
                         method: "link/peer".into(),
-                        params: json!({ "runtime": r["id"], "env": r["env"] }),
+                        params: json!({ "runtime": r["id"], "env": r["env"], "name": record["name"] }),
                     };
                     if !rt.incoming(&id, Incoming::Input(input)).await {
                         return;
                     }
                     continue;
+                }
+                if via_ssh
+                    && let Ok(v) = serde_json::from_str::<Value>(&text)
+                    && v["method"] == "initialize"
+                {
+                    let restricted = v["params"]["features"].get(RESTRICTED).is_some();
+                    self.set_containment(&link, if restricted { "restricted" } else { "shell" });
                 }
                 if !rt.incoming(&id, classify(&id, &text)).await {
                     return;
@@ -530,6 +648,32 @@ impl LinkHub {
             self.set_status(&link, "down", None);
         }
     }
+}
+
+/// The first wait before dialling again, doubled after each failed round up to [`MAX_BACKOFF`].
+pub const MIN_BACKOFF: Duration = Duration::from_secs(1);
+/// The longest wait between rounds (spec 24.5).
+pub const MAX_BACKOFF: Duration = Duration::from_secs(300);
+
+/// The wait after `backoff`, doubled and capped.
+pub fn next_backoff(backoff: Duration) -> Duration {
+    (backoff * 2).clamp(MIN_BACKOFF, MAX_BACKOFF)
+}
+
+/// `Link.via`: the carrier's kind, and which fallback when it isn't the first carrier.
+pub fn via_name(kind: &str, index: usize) -> String {
+    if index == 0 {
+        kind.to_string()
+    } else {
+        format!("{kind} (fallback {index})")
+    }
+}
+
+/// How one round of dialling ended.
+enum Dialled {
+    Up(Box<LinkConnection<Box<dyn parrot_link::carrier::Stream>>>, String),
+    WrongKey,
+    Down,
 }
 
 fn new_link_id() -> String {

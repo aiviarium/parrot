@@ -199,6 +199,8 @@ pub fn record(cx: &mut Cx, session: &str, status: &str) {
     let task = task_of(cx.state, session)
         .map(|t| json!(t))
         .unwrap_or(Value::Null);
+    // A session that moved here reports to its parent's runtime (E2).
+    crate::links::child_changed(cx, session, status, &task);
     cx.state.tasks.cursor += 1;
     let cursor = cx.state.tasks.cursor;
     cx.state.tasks.changes.push(Change {

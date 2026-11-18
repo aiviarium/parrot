@@ -94,7 +94,7 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     for (message, value) in take("inflight") {
         uncertain(cx, &message, &value);
     }
-    for kind in ["moved", "outbox", "arrived"] {
+    for kind in ["moved", "outbox", "arrived", "remote", "peer"] {
         for (id, value) in take(kind) {
             crate::links::restore(cx, kind, &id, &value);
         }

@@ -96,6 +96,10 @@ pub struct RuntimeBackend {
     tokens: Option<std::sync::Arc<crate::tokens::TokenStore>>,
     /// Where workspaces that arrive over a link are unpacked.
     workspace_root: Option<PathBuf>,
+    /// Where transfers arriving over links are kept until they are used.
+    transfers: PathBuf,
+    /// The task that runs blob operations in order, started with the first one.
+    blobs: Option<mpsc::UnboundedSender<crate::blobs::Job>>,
 }
 
 impl RuntimeBackend {
@@ -147,6 +151,9 @@ impl RuntimeBackend {
             writer: Some(tx),
             links: None,
             workspace_root: None,
+            transfers: std::env::temp_dir()
+                .join(format!("parrot-transfers-{}", crate::dispatch::new_conn_id())),
+            blobs: None,
             scratch: std::env::temp_dir(),
             notifier: crate::notify::Notifier::default(),
             tui: HashMap::new(),
@@ -169,6 +176,13 @@ impl RuntimeBackend {
     /// Unpacks workspaces that arrive over a link under `root` (spec 8, 24).
     pub fn with_workspace_root(mut self, root: PathBuf) -> Self {
         self.workspace_root = Some(root);
+        self
+    }
+
+    /// Keeps transfers arriving over links under `dir`, which is emptied when the first one
+    /// arrives (spec 24.2).
+    pub fn with_transfers(mut self, dir: PathBuf) -> Self {
+        self.transfers = dir;
         self
     }
 
@@ -334,6 +348,32 @@ impl Backend for RuntimeBackend {
                 Some(root) => json!(root),
                 None => Value::Null,
             };
+        }
+        if crate::blobs::handles(&op, &params) {
+            let tx = self.blobs.get_or_insert_with(|| {
+                let (tx, mut rx) = mpsc::unbounded_channel::<crate::blobs::Job>();
+                let root = self.transfers.clone();
+                let rt = self.rt.clone();
+                tokio::spawn(async move {
+                    let clear = root.clone();
+                    let _ = tokio::task::spawn_blocking(move || crate::blobs::clear(&clear)).await;
+                    // One at a time, in the order the core sent them (see `blobs`).
+                    while let Some(job) = rx.recv().await {
+                        let root = root.clone();
+                        let crate::blobs::Job { call, op, params } = job;
+                        let result =
+                            tokio::task::spawn_blocking(move || crate::blobs::run(&root, &op, params))
+                                .await
+                                .unwrap_or_else(|e| {
+                                    Err(RpcError::new(-32603, format!("blob task failed: {e}")))
+                                });
+                        let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+                    }
+                });
+                tx
+            });
+            let _ = tx.send(crate::blobs::Job { call, op, params });
+            return;
         }
         if op.starts_with("link.") || op.starts_with("carrier.") {
             let hub = self.links.clone();

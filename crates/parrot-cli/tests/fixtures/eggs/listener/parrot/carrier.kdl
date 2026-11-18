@@ -1,0 +1,3 @@
+carrier "listener" title="Made-up listener" max-message=4096 containment="restricted" listens=#true
+run "bin/carrier"
+target "{\"type\":\"object\",\"required\":[\"parrot\",\"socket\"],\"properties\":{\"parrot\":{\"type\":\"string\"},\"socket\":{\"type\":\"string\"}}}"

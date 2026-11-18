@@ -3,4 +3,7 @@ driver "command" {
 }
 cli "codex" versions=">=0.167.0, <0.168.0"
 data-version "1"
-controls "native"
+controls "native" "tui"
+// The TUI core reads the rollout files and passes the MCP server as -c overrides.
+transcript "codex"
+mcp "config-override"
