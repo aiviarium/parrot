@@ -214,7 +214,6 @@ fn session_id(result: &Value) -> String {
 }
 
 #[tokio::test]
-#[ignore = "the runtime's agent registry in parrot-core lists only claude"]
 async fn a_codex_approval_is_answered_through_the_runtime() {
     let serve = Serve::start(Some(&scenario("command-approval.jsonl")));
     let work = serve.work_dir();

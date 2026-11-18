@@ -17,6 +17,8 @@ pub trait Backend: Send + 'static {
     fn driver_call(&mut self, binding: BindingId, call: u64, method: String, params: Value);
     fn stop_binding(&mut self, binding: BindingId);
     fn persist(&mut self, record: Value);
+    /// Returns once every record persisted so far is written.
+    fn sync(&mut self) {}
     /// Told of every timer; the executor schedules the `Input::Tick` itself.
     fn timer_at(&mut self, _at_ms: u64) {}
     /// Call a driver without a binding (`agent/list`); answer with `Input::AgentReply`.
@@ -135,6 +137,23 @@ impl Executor {
             Err(TrySendError::Closed(_)) => {
                 self.conns.remove(conn);
             }
+        }
+    }
+
+    /// Execute one input's effects: its records are written first, so nothing the input caused
+    /// reaches a client or driver before the store has it (spec 34).
+    pub fn execute_all(&mut self, effects: Vec<Effect>) {
+        let (records, rest): (Vec<_>, Vec<_>) = effects
+            .into_iter()
+            .partition(|e| matches!(e, Effect::Persist { .. }));
+        if !records.is_empty() {
+            for effect in records {
+                self.execute(effect);
+            }
+            self.backend.sync();
+        }
+        for effect in rest {
+            self.execute(effect);
         }
     }
 

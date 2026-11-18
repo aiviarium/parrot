@@ -36,7 +36,8 @@ pub struct Sessions {
 impl Default for Sessions {
     fn default() -> Self {
         let mut agents = BTreeMap::new();
-        agents.insert("claude".to_string(), claude_agent());
+        agents.insert("claude".to_string(), builtin_agent("claude", "Claude Code"));
+        agents.insert("codex".to_string(), builtin_agent("codex", "Codex"));
         Self {
             by_id: BTreeMap::new(),
             info: BTreeMap::new(),
@@ -48,11 +49,12 @@ impl Default for Sessions {
     }
 }
 
-fn claude_agent() -> Value {
+/// A built-in agent before its driver has answered `agent/list`.
+fn builtin_agent(id: &str, name: &str) -> Value {
     json!({
-        "id": "claude",
-        "name": "Claude Code",
-        "driver": { "name": "claude", "version": env!("CARGO_PKG_VERSION"), "kind": "builtin", "data": "1" },
+        "id": id,
+        "name": name,
+        "driver": { "name": id, "version": env!("CARGO_PKG_VERSION"), "kind": "builtin", "data": "1" },
         "installed": true,
         "auth": "unknown",
         "usable": true,
