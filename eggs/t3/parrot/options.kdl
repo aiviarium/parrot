@@ -1,0 +1,9 @@
+// T3 reports the models of its provider instance; these are the shapes Parrot shows until the
+// first `t3_model_list` answer arrives.
+option "model" role="model" label="Model" applies="next-turn" {
+  choice "default" label="Provider default"
+}
+option "mode" role="mode" label="Approval mode" applies="now" {
+  choice "approval-required" label="Ask before edits" tags="ask"
+  choice "full-access" label="Full access" tags="bypass"
+}
