@@ -166,6 +166,7 @@ fn token_scopes_limit_calls() {
             token: "tok_x".into(),
             scopes: vec!["read".into()],
             sessions: None,
+            provides: None,
         },
     });
     let (r, _) = sim.call(

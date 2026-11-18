@@ -3,11 +3,10 @@
 //! carry titles and short text only, never items or code.
 //!
 //! The backend sees every record the core persists; a request that opens with `notify` other
-//! than `none` is an event. Delivery is plain HTTP (`http://` URLs), off the actor thread.
+//! than `none` is an event. Delivery is HTTP or HTTPS, off the actor thread.
 
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The longest `text` a push body carries.
 const TEXT_MAX: usize = 200;
@@ -54,7 +53,8 @@ impl Notifier {
             .chars()
             .take(TEXT_MAX)
             .collect();
-        let mut body = json!({ "event": "request", "session": session, "title": title, "text": text });
+        // `request` lets a client answer straight from the push.
+        let mut body = json!({ "event": "request", "session": session, "request": r["id"], "title": title, "text": text });
         if let Some(u) = &self.url {
             body["url"] = json!(format!("{u}{session}"));
         }
@@ -104,38 +104,37 @@ async fn deliver(target: &Target, body: &Value) -> std::io::Result<()> {
     }
 }
 
-/// A minimal HTTP/1.1 POST to an `http://` URL.
+/// POSTs `body` to an `http://` or `https://` URL, off the async threads.
 async fn post(url: &str, headers: &[(&str, &str)], body: String) -> std::io::Result<()> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Unsupported, "only http:// targets"))?;
-    let (host, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, "/"),
-    };
-    let addr = if host.contains(':') {
-        host.to_string()
-    } else {
-        format!("{host}:80")
-    };
-    let mut stream = tokio::net::TcpStream::connect(addr).await?;
-    let mut req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        body.len()
-    );
-    for (k, v) in headers {
-        req.push_str(&format!("{k}: {v}\r\n"));
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "push targets are http:// or https:// URLs",
+        ));
     }
-    req.push_str("\r\n");
-    req.push_str(&body);
-    stream.write_all(req.as_bytes()).await?;
-    let mut status = [0u8; 12];
-    stream.read_exact(&mut status).await?;
-    if !status[9..].starts_with(b"2") {
-        return Err(std::io::Error::other(format!(
-            "target answered {}",
-            String::from_utf8_lossy(&status[9..])
-        )));
-    }
-    Ok(())
+    let url = url.to_string();
+    let headers: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    tokio::task::spawn_blocking(move || {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .build()
+            .into();
+        let mut req = agent.post(&url);
+        for (k, v) in &headers {
+            req = req.header(k, v);
+        }
+        // The URL may hold a secret path, so errors name only the status.
+        match req.send(body) {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(code)) => {
+                Err(std::io::Error::other(format!("target answered {code}")))
+            }
+            Err(e) => Err(std::io::Error::other(e.to_string())),
+        }
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }

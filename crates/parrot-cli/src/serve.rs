@@ -1,7 +1,7 @@
 //! `parrot serve`: the runtime on the local socket, and on WebSocket with `--ws`.
 
-use parrot_core::{Clock, Core, Ids, Peer};
-use parrot_serve::{Runtime, RuntimeBackend, TokenCheck};
+use parrot_core::{Clock, Core, Ids};
+use parrot_serve::{Runtime, RuntimeBackend};
 use parrot_store::Store;
 use std::io;
 use std::path::PathBuf;
@@ -33,15 +33,6 @@ impl Ids for UlidIds {
             id.push(ALPHABET[((v >> (125 - 5 * i)) & 31) as usize] as char);
         }
         id
-    }
-}
-
-/// Refuses every client token until token storage exists.
-struct NoTokens;
-
-impl TokenCheck for NoTokens {
-    fn check(&self, _token: &str) -> Option<Peer> {
-        None
     }
 }
 
@@ -122,6 +113,11 @@ pub async fn run(
     let mut notifier = parrot_serve::notify::Notifier::new(targets);
     notifier.url = config.notify_url.clone();
     let tui = config.tui.clone();
+    let tokens = Arc::new(
+        parrot_serve::tokens::TokenStore::open(dir.join("tokens.json"))
+            .map_err(|e| format!("cannot read the tokens: {e}"))?,
+    );
+    let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
@@ -129,6 +125,7 @@ pub async fn run(
             .with_scratch(scratch)
             .with_notifier(notifier)
             .with_tui(tui)
+            .with_tokens(backend_tokens)
     });
     hub.attach(rt.clone());
 
@@ -156,7 +153,7 @@ pub async fn run(
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
-        parrot_serve::websocket::serve_websocket(rt.clone(), listener, Arc::new(NoTokens))
+        parrot_serve::websocket::serve_websocket(rt.clone(), listener, tokens.clone())
             .await
             .map_err(|e| format!("websocket: {e}"))
     };

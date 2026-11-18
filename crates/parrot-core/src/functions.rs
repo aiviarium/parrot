@@ -96,6 +96,14 @@ pub fn provide(cx: &mut Cx, conn: &str, specs: &[Value]) -> Result<(), RpcError>
     let mut keys = Vec::new();
     for spec in specs {
         let key = check_spec(spec)?;
+        if let Some(patterns) = provides_filter(cx, conn)
+            && !patterns.iter().any(|p| matches(p, &key.0))
+        {
+            return Err(
+                RpcError::new(-32003, format!("this token may not provide {}", key.0))
+                    .with_data(json!({ "reason": "provides" })),
+            );
+        }
         if let Some((owner, _)) = cx.state.functions.provided.get(&key)
             && owner != conn
         {
@@ -153,8 +161,11 @@ fn catalog(cx: &Cx, conn: &str) -> Vec<Value> {
 }
 
 /// A token client's `provides` patterns, if it has them (E8).
-fn provides_filter(_cx: &Cx, _provider: &str) -> Option<Vec<String>> {
-    None
+fn provides_filter(cx: &Cx, provider: &str) -> Option<Vec<String>> {
+    match cx.state.principals.conns.get(provider).map(|c| &c.peer) {
+        Some(crate::Peer::Token { provides, .. }) => provides.clone(),
+        _ => None,
+    }
 }
 
 /// Glob match with `*` as any run of characters.

@@ -272,3 +272,53 @@ pub fn initialize_params(name: &str) -> Value {
         "features": {},
     })
 }
+
+/// Builds `fake-claude` once and returns its path, beside the `parrot` binary.
+pub fn fake_claude() -> &'static Path {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .args([
+                "build",
+                "--locked",
+                "-p",
+                "parrot-driver-claude",
+                "--bin",
+                "fake-claude",
+            ])
+            .status()
+            .expect("cargo runs");
+        assert!(status.success(), "building fake-claude failed");
+        let path = Path::new(PARROT).with_file_name(format!("fake-claude{}", std::env::consts::EXE_SUFFIX));
+        assert!(path.exists(), "no fake-claude at {}", path.display());
+        path
+    })
+}
+
+/// A scenario of the fake Claude CLI.
+pub fn scenario(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../parrot-driver-claude/fixtures/scenarios")
+        .join(name)
+}
+
+/// The environment that makes the `claude` agent run `fake-claude` on `scenario`.
+pub fn fake_claude_env(scenario: &Path) -> Vec<(String, String)> {
+    vec![
+        ("PARROT_CLAUDE_BIN".into(), fake_claude().display().to_string()),
+        (
+            "PARROT_FAKE_CLAUDE_SCENARIO".into(),
+            scenario.display().to_string(),
+        ),
+    ]
+}
+
+/// A loopback port nothing listens on right now.
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}

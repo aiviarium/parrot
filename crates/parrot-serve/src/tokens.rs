@@ -1,7 +1,13 @@
-//! Checking WebSocket client tokens (spec 3.4).
+//! Client tokens (spec 3.4, 35, E8): created, listed and revoked by the owner, checked on each
+//! WebSocket upgrade. Secrets are kept only as SHA-256 hashes, in `tokens.json` (mode `0600`).
 
 use parrot_core::Peer;
+use parrot_proto::rpc::RpcError;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
 /// Turns the secret from a `parrot.token.<token>` subprotocol into the connection's peer.
 pub trait TokenCheck: Send + Sync + 'static {
@@ -16,5 +22,264 @@ pub struct StaticTokens(pub HashMap<String, Peer>);
 impl TokenCheck for StaticTokens {
     fn check(&self, token: &str) -> Option<Peer> {
         self.0.get(token).cloned()
+    }
+}
+
+/// Every scope a token may carry.
+const SCOPES: [&str; 9] = [
+    "read",
+    "prompt",
+    "answer",
+    "configure",
+    "manage",
+    "delegate",
+    "workspace",
+    "destructive",
+    "functions",
+];
+
+/// Secrets start with this, so they are easy to spot in a leak scan.
+const SECRET_PREFIX: &str = "pt_";
+
+#[derive(Debug, Clone)]
+struct Record {
+    /// The `Token` as listed, with `provides`.
+    token: Value,
+    /// Hex SHA-256 of the secret.
+    hash: String,
+}
+
+/// Tokens in memory, written through to a file when it has one.
+#[derive(Debug, Default)]
+pub struct TokenStore {
+    path: Option<PathBuf>,
+    records: Mutex<Vec<Record>>,
+}
+
+fn hash(secret: &str) -> String {
+    Sha256::digest(secret.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The time now in RFC 3339, UTC, to the second.
+fn now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since the epoch (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// Whether an RFC 3339 UTC time is in the past. Times in the same `Z` form compare as text.
+fn expired(expires: &str, now: &str) -> bool {
+    let cut = |s: &str| s.get(..19).unwrap_or(s).to_string();
+    cut(expires) <= cut(now)
+}
+
+fn strings(v: &Value) -> Option<Vec<String>> {
+    v.as_array()
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+}
+
+impl TokenStore {
+    /// A store kept only in memory.
+    pub fn memory() -> TokenStore {
+        TokenStore::default()
+    }
+
+    /// A store in `path`, read now if it exists.
+    pub fn open(path: PathBuf) -> std::io::Result<TokenStore> {
+        let records = match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str::<Vec<Value>>(&text)
+                .map_err(std::io::Error::other)?
+                .into_iter()
+                .filter_map(|v| {
+                    Some(Record {
+                        hash: v["hash"].as_str()?.to_string(),
+                        token: v["token"].clone(),
+                    })
+                })
+                .collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e),
+        };
+        Ok(TokenStore {
+            path: Some(path),
+            records: Mutex::new(records),
+        })
+    }
+
+    fn save(&self, records: &[Record]) -> Result<(), RpcError> {
+        let Some(path) = &self.path else { return Ok(()) };
+        let all: Vec<Value> = records
+            .iter()
+            .map(|r| json!({ "token": r.token, "hash": r.hash }))
+            .collect();
+        let text = serde_json::to_string_pretty(&all).expect("JSON serializes");
+        let tmp = path.with_extension("json.tmp");
+        let write = || -> std::io::Result<()> {
+            std::fs::write(&tmp, text)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+            }
+            std::fs::rename(&tmp, path)
+        };
+        write().map_err(|e| RpcError::new(-32603, format!("cannot write the tokens: {e}")))
+    }
+
+    /// Runs a `token.*` operation from the core.
+    pub fn op(&self, op: &str, params: Value) -> Result<Value, RpcError> {
+        match op {
+            "token.create" => self.create(&params),
+            "token.list" => {
+                let records = self.records.lock().unwrap();
+                Ok(json!({ "tokens": records.iter().map(|r| r.token.clone()).collect::<Vec<_>>() }))
+            }
+            "token.revoke" => {
+                let id = params["token"].as_str().unwrap_or_default();
+                let mut records = self.records.lock().unwrap();
+                let before = records.len();
+                records.retain(|r| r.token["id"] != id);
+                if records.len() == before {
+                    return Err(RpcError::new(-32002, format!("token not found: {id}")));
+                }
+                self.save(&records)?;
+                Ok(json!({}))
+            }
+            _ => Err(RpcError::new(-32601, format!("method not found: {op}"))),
+        }
+    }
+
+    fn create(&self, p: &Value) -> Result<Value, RpcError> {
+        let invalid = |m: &str| RpcError::new(-32602, format!("invalid params: {m}"));
+        let name = p["name"].as_str().ok_or_else(|| invalid("name is required"))?;
+        let scopes = strings(&p["scopes"]).ok_or_else(|| invalid("scopes is required"))?;
+        if let Some(bad) = scopes.iter().find(|s| !SCOPES.contains(&s.as_str())) {
+            return Err(invalid(&format!("unknown scope {bad}")));
+        }
+        let bytes: [u8; 32] = rand::random();
+        let secret = format!("{SECRET_PREFIX}{}", parrot_link::base32::encode(&bytes));
+        let id = format!(
+            "tok_{}",
+            &parrot_link::base32::encode(&Sha256::digest(bytes))[..26]
+        );
+        let mut token = json!({ "id": id, "name": name, "scopes": scopes, "created": now() });
+        for field in ["sessions", "provides"] {
+            if !p[field].is_null() {
+                token[field] = json!(strings(&p[field]).ok_or_else(|| invalid(field))?);
+            }
+        }
+        if let Some(e) = p["expires"].as_str() {
+            token["expires"] = json!(e);
+        }
+        let mut records = self.records.lock().unwrap();
+        records.push(Record {
+            token: token.clone(),
+            hash: hash(&secret),
+        });
+        self.save(&records)?;
+        Ok(json!({ "token": token, "secret": secret }))
+    }
+}
+
+impl TokenCheck for TokenStore {
+    fn check(&self, secret: &str) -> Option<Peer> {
+        let h = hash(secret);
+        let now = now();
+        let mut records = self.records.lock().unwrap();
+        let r = records.iter_mut().find(|r| r.hash == h)?;
+        if r.token["expires"].as_str().is_some_and(|e| expired(e, &now)) {
+            return None;
+        }
+        r.token["lastUsed"] = json!(now);
+        Some(Peer::Token {
+            token: r.token["id"].as_str()?.to_string(),
+            scopes: strings(&r.token["scopes"]).unwrap_or_default(),
+            sessions: strings(&r.token["sessions"]),
+            provides: strings(&r.token["provides"]),
+        })
+    }
+}
+
+impl<T: TokenCheck> TokenCheck for std::sync::Arc<T> {
+    fn check(&self, token: &str) -> Option<Peer> {
+        (**self).check(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_are_stored_hashed_and_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let store = TokenStore::open(path.clone()).unwrap();
+        let made = store
+            .op(
+                "token.create",
+                json!({ "name": "phone", "scopes": ["answer"], "sessions": ["ses_a"], "provides": ["acme.*"] }),
+            )
+            .unwrap();
+        let secret = made["secret"].as_str().unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(!file.contains(secret), "the secret is on disk");
+
+        let again = TokenStore::open(path).unwrap();
+        let Some(Peer::Token {
+            scopes,
+            sessions,
+            provides,
+            ..
+        }) = again.check(secret)
+        else {
+            panic!("the token is not accepted");
+        };
+        assert_eq!(scopes, ["answer"]);
+        assert_eq!(sessions.unwrap(), ["ses_a"]);
+        assert_eq!(provides.unwrap(), ["acme.*"]);
+        assert!(again.check("pt_wrong").is_none());
+
+        let id = made["token"]["id"].as_str().unwrap();
+        again.op("token.revoke", json!({ "token": id })).unwrap();
+        assert!(again.check(secret).is_none());
+        assert!(
+            store
+                .op("token.create", json!({ "name": "x", "scopes": ["root"] }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn expired_tokens_are_refused() {
+        let store = TokenStore::memory();
+        let made = store
+            .op(
+                "token.create",
+                json!({ "name": "old", "scopes": ["read"], "expires": "2001-01-01T00:00:00Z" }),
+            )
+            .unwrap();
+        assert!(store.check(made["secret"].as_str().unwrap()).is_none());
     }
 }

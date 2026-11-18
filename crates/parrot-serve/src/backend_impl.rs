@@ -92,6 +92,7 @@ pub struct RuntimeBackend {
     notifier: crate::notify::Notifier,
     /// Agents under TUI control, run in process (spec 32.2).
     tui: HashMap<String, crate::config::TuiAgent>,
+    tokens: Option<std::sync::Arc<crate::tokens::TokenStore>>,
 }
 
 impl RuntimeBackend {
@@ -144,6 +145,7 @@ impl RuntimeBackend {
             scratch: std::env::temp_dir(),
             notifier: crate::notify::Notifier::default(),
             tui: HashMap::new(),
+            tokens: None,
         }
     }
 
@@ -156,6 +158,12 @@ impl RuntimeBackend {
     /// Runs `link.*` operations with this hub (spec 24).
     pub fn with_links(mut self, hub: std::sync::Arc<crate::link_hub::LinkHub>) -> Self {
         self.links = Some(hub);
+        self
+    }
+
+    /// Keeps client tokens here for `token/*` (spec 3.4).
+    pub fn with_tokens(mut self, tokens: std::sync::Arc<crate::tokens::TokenStore>) -> Self {
+        self.tokens = Some(tokens);
         self
     }
 
@@ -306,6 +314,18 @@ impl Backend for RuntimeBackend {
                     None => Err(RpcError::new(-32001, "links are off")
                         .with_data(json!({ "feature": "profile.link" }))),
                 };
+                let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+            });
+            return;
+        }
+        if op.starts_with("token.") {
+            let result =
+                match &self.tokens {
+                    Some(t) => t.op(&op, params),
+                    None => Err(RpcError::new(-32001, "tokens are off")
+                        .with_data(json!({ "feature": "profile.remote" }))),
+                };
+            tokio::spawn(async move {
                 let _ = rt.input(Input::WorkspaceReply { call, result }).await;
             });
             return;

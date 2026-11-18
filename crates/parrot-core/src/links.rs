@@ -59,6 +59,12 @@ pub enum Pending {
     Offer(Move),
     /// The commit of a move.
     Commit(Move),
+    /// `token/revoke`: the token's connections close once the hub has revoked it.
+    Revoke {
+        conn: String,
+        id: Option<RequestId>,
+        token: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +129,21 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
             );
             Reply::Later
         }
+        "token/create" | "token/list" | "token/revoke" => {
+            if let Err(e) = owner_only(cx, conn) {
+                return Reply::Now(Err(e));
+            }
+            let token = params.get("token").and_then(Value::as_str).map(str::to_string);
+            let op = method.replacen('/', ".", 1);
+            let call = cx.call_workspace(CallOwner::Links, &op, params);
+            let (conn, id) = (conn.to_string(), id.cloned());
+            let pending = match token.filter(|_| method == "token/revoke") {
+                Some(token) => Pending::Revoke { conn, id, token },
+                None => Pending::Hub { conn, id },
+            };
+            cx.state.links.pending.insert(call, pending);
+            Reply::Later
+        }
         "blob/put" => Reply::Now(blob_put(cx, conn, params)),
         "session/offer" => Reply::Now(offer(cx, conn, params)),
         "session/commit" => Reply::Now(commit(cx, conn, params)),
@@ -139,6 +160,21 @@ pub fn intercept(
     method: &str,
     params: &Value,
 ) -> Option<Reply> {
+    // A token limited to some sessions can't make roots (E8).
+    if method == "session/new"
+        && params.get("parent").is_none_or(Value::is_null)
+        && matches!(
+            cx.state.principals.conns.get(conn).map(|c| &c.peer),
+            Some(Peer::Token {
+                sessions: Some(_),
+                ..
+            })
+        )
+    {
+        return Some(Reply::Now(Err(
+            RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "sessions" }))
+        )));
+    }
     let session = params.get("session").and_then(Value::as_str)?.to_string();
     if let Some(runtime) = cx.state.links.moved.get(&session) {
         return Some(Reply::Now(Err(RpcError::new(MOVED, "the session moved")
@@ -509,6 +545,24 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
     };
     match pending {
         Pending::Hub { conn, id } | Pending::Forward { conn, id } => {
+            if let Some(id) = id {
+                cx.reply(&conn, id, result);
+            }
+        }
+        Pending::Revoke { conn, id, token } => {
+            if result.is_ok() {
+                let closing: Vec<String> = cx
+                    .state
+                    .principals
+                    .conns
+                    .iter()
+                    .filter(|(_, c)| matches!(&c.peer, Peer::Token { token: t, .. } if *t == token))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for c in closing {
+                    cx.emit(Effect::Close { conn: c });
+                }
+            }
             if let Some(id) = id {
                 cx.reply(&conn, id, result);
             }
