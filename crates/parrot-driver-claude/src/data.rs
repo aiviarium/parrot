@@ -19,8 +19,11 @@ pub const BUILTIN: Builtin = Builtin {
 
 static DATA: OnceLock<(DriverData, Option<String>)> = OnceLock::new();
 
-/// The version `claude --version` reports, which picks the egg's version shim (spec 31).
+/// The version `claude --version` reports, which picks the egg's version shim (spec 31). Only a
+/// driver the runtime started from an egg (`PARROT_DRIVER_DATA` set) asks, so the compiled-in
+/// data stays the same wherever the driver runs on its own, as in tests.
 fn cli_version() -> Option<String> {
+    std::env::var_os(parrot_proto::driver_data::DRIVER_DATA_ENV)?;
     let bin = std::env::var_os(crate::driver::CLAUDE_BIN_ENV).unwrap_or_else(|| "claude".into());
     let out = std::process::Command::new(bin)
         .arg("--version")

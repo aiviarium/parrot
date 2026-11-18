@@ -3,6 +3,8 @@
 //! bundle that carries a summary, the history and the workspace, and rewinds with files.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -99,7 +101,7 @@ impl Serve {
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_CLAUDE_BIN", claude)
             .env("PARROT_FAKE_CLAUDE_SCENARIO", claude_scenario(dir.path(), second))

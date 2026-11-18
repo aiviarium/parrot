@@ -1,6 +1,8 @@
 //! The client commands against a real `parrot serve` over `fake-claude`: new, prompt, watch until idle.
 #![cfg(unix)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::OnceLock;
@@ -43,7 +45,7 @@ impl Serve {
             .join(scenario);
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_CLAUDE_BIN", fake_claude())
             .env("PARROT_FAKE_CLAUDE_SCENARIO", scenario)

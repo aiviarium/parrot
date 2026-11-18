@@ -1,0 +1,28 @@
+format 1
+
+package {
+  group example
+  id echo
+  version "0.1.0"
+}
+
+about {
+  name "Echo"
+  summary "An example third-party Parrot driver that echoes each prompt."
+  license MIT
+  license Apache-2.0
+}
+
+targets {
+  parrot {
+    requires {
+      parrot "^0.1"
+    }
+    variants {
+      variant os=linux arch=x86_64
+      variant os=linux arch=aarch64
+      variant os=macos arch=aarch64
+      variant os=windows arch=x86_64
+    }
+  }
+}

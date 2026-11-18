@@ -114,9 +114,7 @@ pub async fn run(
     );
     let mut notifier = parrot_serve::notify::Notifier::new(targets);
     notifier.url = config.notify_url.clone();
-    // Eggs that run under TUI control, then `config.json`, which wins.
-    let mut tui: std::collections::BTreeMap<_, _> = drivers.tui_agents().into_iter().collect();
-    tui.extend(config.tui.clone());
+    let tui = config.tui.clone();
     let tokens = Arc::new(
         parrot_serve::tokens::TokenStore::open(dir.join("tokens.json"))
             .map_err(|e| format!("cannot read the tokens: {e}"))?,

@@ -370,8 +370,16 @@ impl Backend for RuntimeBackend {
         // An agent with a native driver answers agent calls through it, even when it can also
         // run under TUI control.
         let native = self.resolve(&agent);
-        if let (Some(a), Err(_)) = (self.tui.get(&agent), &native) {
-            let config = crate::tui::driver_config(&agent, a);
+        let tui = match &native {
+            Ok(_) => None,
+            Err(_) => self
+                .tui
+                .get(&agent)
+                .cloned()
+                .or_else(|| self.drivers.as_ref().and_then(|d| d.tui_agent(&agent))),
+        };
+        if let Some(a) = tui {
+            let config = crate::tui::driver_config(&agent, &a);
             tokio::spawn(async move {
                 let result = match config {
                     Ok(config) => {

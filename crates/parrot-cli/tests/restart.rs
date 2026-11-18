@@ -2,6 +2,8 @@
 //! `claude` is killed mid-session and started again on the same state directory.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -56,7 +58,7 @@ impl Serve {
         let socket = dir.join("sock");
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.join("state"))
+            .arg(common::with_eggs(dir.join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_CLAUDE_BIN", fake_claude())
             .env("PARROT_FAKE_CLAUDE_SCENARIO", scenario)

@@ -207,7 +207,11 @@ impl DriverFile {
             .map(|v| v.run.clone())
             .or_else(|| run.clone());
         let exe = if os == "windows" { ".exe" } else { "" };
-        let fill = |p: &str| p.replace("{os}", os).replace("{arch}", arch).replace("{exe}", exe);
+        let fill = |p: &str| {
+            p.replace("{os}", os)
+                .replace("{arch}", arch)
+                .replace("{exe}", exe)
+        };
         Some(match program {
             Some(p) => Ok((fill(&p), args.clone())),
             None => Err(format!("the driver has no program for {os}-{arch}")),
@@ -336,8 +340,10 @@ data-version "1"
 
     #[test]
     fn fills_the_platform_into_a_command() {
-        let d = DriverFile::parse("driver \"command\" {\n  run \"variants/{os}-{arch}/d{exe}\"\n}\ndata-version \"1\"\n")
-            .unwrap();
+        let d = DriverFile::parse(
+            "driver \"command\" {\n  run \"variants/{os}-{arch}/d{exe}\"\n}\ndata-version \"1\"\n",
+        )
+        .unwrap();
         let (run, _) = d.command_for("windows", "x86_64").unwrap().unwrap();
         assert_eq!(run, "variants/windows-x86_64/d.exe");
         let (run, _) = d.command_for("linux", "aarch64").unwrap().unwrap();

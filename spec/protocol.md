@@ -273,7 +273,7 @@ interface Agent {
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `agent/list` | `{ env? }` | `{ agents }` |
+| `agent/list` | `{ env? }` | `{ agents, hint?: string }`; `hint` says how to install a driver egg when there is none (31) |
 | `agent/refresh` | `{ agent, env? }` | `{ agent }` |
 
 ## 7. Environments
@@ -1523,8 +1523,8 @@ in the parent, then the subagent's own updates with `subagent: <key>`. `binding/
   with kill-on-close on Windows. A crashed runtime leaves no harness process running.
 - Stopping: `binding/stop` per binding, then standard input closes, then the process tree is killed
   after 10 seconds.
-- Built-in drivers implement the same messages as a Rust trait; `parrot driver <name>` serves them on
-  stdio.
+- The runtime builds in only the general cores, `acp` and `tui`; `parrot driver <name>` serves them on
+  stdio. Every other driver is a program in its egg (31).
 
 ## 31. Driver data
 
@@ -1543,7 +1543,16 @@ with the `parrot` target, versioned separately from the runtime, as KDL files:
 | `probe/*.kdl` | Probe scenarios for nightly checks |
 | `fixtures/` | Conformance fixtures |
 
-- Each file can be scoped to harness version ranges; the newest matching block wins.
+- Each file can be scoped to harness version ranges with a version shim: `shim "<range>" dir="<dir>"` in
+  `driver.kdl`. When the driver detects a harness version in the range, the files in `<dir>` replace
+  the egg's files of the same name. Lines go from the oldest range to the newest; the last that holds
+  the version wins.
+- The runtime starts a driver with `PARROT_DRIVER_DATA` (the egg's `parrot` folder),
+  `PARROT_DRIVER_AGENT` (the egg's package id) and `PARROT_DRIVER_AGENT_NAME` (its display name). The
+  driver reports that id and name in `agent/list`, so a data-only egg on a built-in core, such as
+  `gemini` on `driver "builtin" name="acp"`, is its own agent.
+- With no egg installed the runtime has no agents; `agent/list` then also returns `hint`, a sentence
+  that says how to install one.
 - A harness version newer than every range uses the newest blocks, and the agent reports
   `harness.verified: false`.
 - The schemas of these files are part of this spec's generated schema.

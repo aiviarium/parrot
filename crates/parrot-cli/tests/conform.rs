@@ -1,5 +1,8 @@
-//! `parrot conform` against the real Claude driver and a real `parrot serve`, both over `fake-claude`.
+//! `parrot conform` against the installed Claude driver egg and a real `parrot serve`, both over
+//! `fake-claude`.
 #![cfg(unix)]
+
+mod common;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -34,9 +37,17 @@ fn scenarios() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../parrot-driver-claude/fixtures/scenarios")
 }
 
+/// A state directory with the in-repo eggs installed, shared by this file's tests.
+fn eggs_state() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| common::egg_template().to_path_buf())
+}
+
 fn conform(args: &[&str]) -> Output {
     Command::new(PARROT)
         .arg("conform")
+        .arg("--state-dir")
+        .arg(eggs_state())
         .arg("--scenarios")
         .arg(scenarios())
         .args(["--scenario-var", "PARROT_FAKE_CLAUDE_SCENARIO", "--verbose"])
@@ -57,7 +68,8 @@ fn assert_passes(out: &Output, fixtures: usize) {
 
 #[test]
 fn driver_fixtures_pass_against_the_claude_driver() {
-    let out = conform(&[PARROT, "driver", "claude"]);
+    // No command: conform starts the driver of the installed `claude` egg.
+    let out = conform(&["--agent", "claude"]);
     assert_passes(&out, parrot_fixture_count("driver"));
 }
 
@@ -75,13 +87,7 @@ fn a_failing_fixture_fails_the_run() {
 {"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 99}}}
 "#;
     std::fs::write(dir.path().join("wrong.jsonl"), fixture).unwrap();
-    let out = conform(&[
-        "--fixtures",
-        dir.path().to_str().unwrap(),
-        PARROT,
-        "driver",
-        "claude",
-    ]);
+    let out = conform(&["--fixtures", dir.path().to_str().unwrap()]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(1), "{stdout}");
     assert!(

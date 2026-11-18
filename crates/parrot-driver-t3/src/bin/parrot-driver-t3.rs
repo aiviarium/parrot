@@ -2,5 +2,9 @@
 //! `eggs/t3`, ships it as a Hatchery variant per platform.
 
 fn main() {
-    parrot_driver::bin::main("parrot-driver-t3", env!("CARGO_PKG_VERSION"), parrot_driver_t3::serve_stdio)
+    parrot_driver::bin::main(
+        "parrot-driver-t3",
+        env!("CARGO_PKG_VERSION"),
+        parrot_driver_t3::serve_stdio,
+    )
 }

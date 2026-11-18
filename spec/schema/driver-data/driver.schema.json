@@ -41,6 +41,13 @@
       ],
       "format": "uint32",
       "minimum": 0
+    },
+    "shims": {
+      "description": "Version shims: folders whose files replace the egg's own for a range of harness\nversions. The last listed range that holds the detected version wins (spec 31).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ShimSpec"
+      }
     }
   },
   "required": [
@@ -156,6 +163,24 @@
       "enum": [
         "native",
         "tui"
+      ]
+    },
+    "ShimSpec": {
+      "description": "One `shim \">=2.2\" dir=\"shims/2.2\"` line.",
+      "type": "object",
+      "properties": {
+        "versions": {
+          "description": "A semver range of harness versions.",
+          "type": "string"
+        },
+        "dir": {
+          "description": "The folder, relative to the egg's `parrot` folder.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "versions",
+        "dir"
       ]
     }
   }

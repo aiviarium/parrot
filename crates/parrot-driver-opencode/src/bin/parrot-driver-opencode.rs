@@ -2,5 +2,9 @@
 //! `eggs/opencode`, ships it as a Hatchery variant per platform.
 
 fn main() {
-    parrot_driver::bin::main("parrot-driver-opencode", env!("CARGO_PKG_VERSION"), parrot_driver_opencode::serve_stdio)
+    parrot_driver::bin::main(
+        "parrot-driver-opencode",
+        env!("CARGO_PKG_VERSION"),
+        parrot_driver_opencode::serve_stdio,
+    )
 }

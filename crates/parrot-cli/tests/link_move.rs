@@ -4,6 +4,8 @@
 // The helpers are shared in shape with `e2e.rs`; this test uses only some of them.
 #![allow(dead_code)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -64,7 +66,7 @@ impl Serve {
         let socket = dir.path().join("sock");
         let mut cmd = Command::new(PARROT);
         cmd.args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .stdin(Stdio::null());
         if let Some(scenario) = scenario {

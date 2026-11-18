@@ -249,22 +249,30 @@ pub fn shim_for(driver_kdl: &str, version: Option<&str>) -> Option<Shim> {
     let version = semver::Version::parse(version?.trim()).ok()?;
     shims(driver_kdl)
         .into_iter()
-        .filter(|s| s.versions.matches(&version))
-        .next_back()
+        .rfind(|s| s.versions.matches(&version))
 }
 
 /// The text of `file` for a harness under `shim`: the shim's copy from `$PARROT_DRIVER_DATA`,
 /// else its compiled-in copy, else the egg's own file as [`read`] finds it.
-pub fn read_shimmed(file: &str, builtin: &Builtin, base: &str, shim: Option<&Shim>) -> Result<(String, DataSource), DataError> {
+pub fn read_shimmed(
+    file: &str,
+    builtin: &Builtin,
+    base: &str,
+    shim: Option<&Shim>,
+) -> Result<(String, DataSource), DataError> {
     if let Some(shim) = shim {
         if let Some(dir) = std::env::var_os(DRIVER_DATA_ENV) {
             let path = Path::new(&dir).join(&shim.dir).join(file);
             if path.exists() {
-                let text =
-                    std::fs::read_to_string(&path).map_err(|e| DataError::Io(e, path.display().to_string()))?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| DataError::Io(e, path.display().to_string()))?;
                 return Ok((text, DataSource::Egg));
             }
-        } else if let Some((_, _, text)) = builtin.shims.iter().find(|(d, f, _)| *d == shim.dir && *f == file) {
+        } else if let Some((_, _, text)) = builtin
+            .shims
+            .iter()
+            .find(|(d, f, _)| *d == shim.dir && *f == file)
+        {
             return Ok(((*text).to_owned(), DataSource::Builtin));
         }
     }
@@ -779,7 +787,11 @@ mod shim_tests {
 
     #[test]
     fn a_compiled_in_shim_replaces_a_file() {
-        const SHIMS: &[(&str, &str, &str)] = &[("shims/new", "options.kdl", "option \"x\" role=\"mode\" label=\"X\"\n")];
+        const SHIMS: &[(&str, &str, &str)] = &[(
+            "shims/new",
+            "options.kdl",
+            "option \"x\" role=\"mode\" label=\"X\"\n",
+        )];
         let b = Builtin {
             driver: "data-version \"2\"\nshim \">=3.0.0\" dir=\"shims/new\"\n",
             shims: SHIMS,

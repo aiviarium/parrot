@@ -2,5 +2,9 @@
 //! `eggs/claude`, ships it as a Hatchery variant per platform.
 
 fn main() {
-    parrot_driver::bin::main("parrot-driver-claude", env!("CARGO_PKG_VERSION"), parrot_driver_claude::serve_stdio)
+    parrot_driver::bin::main(
+        "parrot-driver-claude",
+        env!("CARGO_PKG_VERSION"),
+        parrot_driver_claude::serve_stdio,
+    )
 }

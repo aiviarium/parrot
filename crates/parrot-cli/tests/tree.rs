@@ -3,6 +3,8 @@
 //! their branches, calling as the parent session's principal over the protocol.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -50,7 +52,7 @@ impl Serve {
             .join("../parrot-driver-claude/fixtures/scenarios/text-turn.jsonl");
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_CLAUDE_BIN", fake_claude())
             .env("PARROT_FAKE_CLAUDE_SCENARIO", scenario)

@@ -2,6 +2,8 @@
 //! test link endpoint, and the Noise session runs end to end through it.
 #![cfg(unix)]
 
+mod common;
+
 use parrot_link::carrier::{CarrierRef, Carriers};
 use parrot_link::endpoint::{accept_same_user, bind_link_socket, link_socket_path};
 use parrot_link::keys::PinSet;
@@ -185,7 +187,7 @@ fn link_list_reports_an_unsupported_runtime() {
     let socket = dir.path().join("run/sock");
     let mut serve = Command::new(PARROT)
         .args(["serve", "--state-dir"])
-        .arg(dir.path().join("state"))
+        .arg(common::with_eggs(dir.path().join("state")))
         .env("PARROT_SOCKET", &socket)
         .stdin(Stdio::null())
         .spawn()

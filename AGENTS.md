@@ -31,6 +31,12 @@ vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/R
 
 CI runs the Rust jobs for a change to `crates/`, `Cargo.toml` or `Cargo.lock`. It runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
 
+## Drivers and eggs
+
+- `parrot` builds in only the ACP and TUI cores. The Claude, Codex, pi, opencode and T3 drivers are binaries, `parrot-driver-<agent>`, packed into the eggs in `eggs/`. `eggs/README.md` describes the eggs and `docs/drivers.md` the driver protocol for authors.
+- `scripts/pack-eggs.sh` builds this machine's driver binaries, copies them into `eggs/<agent>/parrot/variants/<os>-<arch>/` and packs every egg into a static registry in `target/eggs-registry`. Install from it with `parrot eggs install aiviarium/claude --registry target/eggs-registry`.
+- The CLI tests install the in-repo eggs, with freshly built driver binaries, into each test's state directory. Start `parrot serve` through `common::Serve`, or pass the state directory through `common::with_eggs`.
+
 ## Profiles and casts
 
 - The profiles in `eggs/<agent>/parrot/profile.kdl` are the live ones. `crates/parrot-tui/fixtures/profiles/` holds frozen copies that the truth files and tree tests use. Change both together, then run `cargo test -p parrot-tui` and `parrot-term-tool measure crates/parrot-tui/fixtures/casts`.

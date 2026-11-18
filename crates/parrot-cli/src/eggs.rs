@@ -1,7 +1,7 @@
 //! `parrot eggs`: install, list, check and pack driver eggs (the `parrot` Hatchery target).
 
 use crate::serve::default_state_dir;
-use parrot_eggs::{EggSource, Eggs, ParrotTarget};
+use parrot_eggs::{Eggs, ParrotTarget};
 use std::path::PathBuf;
 
 #[derive(clap::Args)]
@@ -16,10 +16,12 @@ enum Command {
     Install {
         #[arg(required = true)]
         specs: Vec<String>,
-        /// A registry folder searched first: a static registry, or a folder of package
-        /// folders like the repository's `eggs/`.
+        /// A registry searched first: the `https://` URL of a static registry, a static
+        /// registry folder, or a folder of package folders like the repository's `eggs/`.
+        /// Without one, `PARROT_EGGS_REGISTRY` or the release registry,
+        /// https://aiviarium.github.io/parrot/eggs.
         #[arg(long = "registry")]
-        registries: Vec<PathBuf>,
+        registries: Vec<String>,
         #[arg(long)]
         state_dir: Option<PathBuf>,
     },
@@ -29,7 +31,7 @@ enum Command {
         #[arg(long)]
         state_dir: Option<PathBuf>,
     },
-    /// Lists each agent's egg: installed, or compiled in.
+    /// Lists each installed agent's egg.
     List {
         #[arg(long)]
         state_dir: Option<PathBuf>,
@@ -89,11 +91,11 @@ pub async fn run(args: Args) -> Result<(), String> {
             for p in &problems {
                 eprintln!("parrot: {p}");
             }
+            if loaded.is_empty() && !json {
+                println!("no driver eggs installed; try `parrot eggs install aiviarium/claude`");
+            }
             for egg in loaded {
-                let source = match egg.source {
-                    EggSource::Installed => "installed",
-                    EggSource::Builtin => "builtin",
-                };
+                let source = "installed";
                 let (status, detail) = match &egg.driver {
                     Ok(_) => ("ok", None),
                     Err(e) => ("refused", Some(e.clone())),

@@ -51,7 +51,8 @@ where
 }
 
 /// A boxed reply to one driver call.
-pub type Reply = std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, parrot_proto::rpc::RpcError>> + Send>>;
+pub type Reply =
+    std::pin::Pin<Box<dyn Future<Output = Result<serde_json::Value, parrot_proto::rpc::RpcError>> + Send>>;
 
 /// Serves JSON-RPC lines on stdin and stdout: each request goes to `handle` on its own task, and
 /// each value from `updates` is sent as an `update` notification. Returns when stdin closes.

@@ -17,8 +17,8 @@ use std::path::Path;
 /// The driver configuration from an egg's `parrot` folder.
 pub fn config_from_data(dir: &Path) -> Result<Config, String> {
     let profile_path = dir.join("profile.kdl");
-    let profile = parrot_tui::Profile::load(&profile_path)
-        .map_err(|e| format!("{}: {e}", profile_path.display()))?;
+    let profile =
+        parrot_tui::Profile::load(&profile_path).map_err(|e| format!("{}: {e}", profile_path.display()))?;
     let driver = std::fs::read_to_string(dir.join("driver.kdl")).unwrap_or_default();
     let json = driver_data::to_json(&driver, Children::Lists).unwrap_or_default();
     let command = driver_data::driver_command(&driver)

@@ -40,6 +40,9 @@ impl Serve {
     pub fn start_in(dir: tempfile::TempDir, setup: Setup) -> Self {
         let state = dir.path().join("state");
         std::fs::create_dir_all(&state).unwrap();
+        if !state.join("eggs").exists() {
+            install_eggs(&state);
+        }
         if let Some(config) = &setup.config {
             std::fs::write(state.join("config.json"), config.to_string()).unwrap();
         }
@@ -321,4 +324,116 @@ pub fn free_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+/// The in-repo eggs whose drivers are standalone binaries, each built from `parrot-driver-<id>`.
+pub const DRIVER_EGGS: &[&str] = &["claude", "codex", "pi", "opencode", "t3"];
+
+/// The directory cargo puts the workspace's binaries in: the one `parrot` is in.
+pub fn bin_dir() -> &'static Path {
+    Path::new(PARROT).parent().expect("parrot is in a directory")
+}
+
+/// Builds every driver binary and fake CLI once, beside `parrot`.
+pub fn build_drivers() {
+    static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BUILT.get_or_init(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let mut cmd = Command::new(cargo);
+        cmd.args(["build", "--locked", "--bins"]);
+        for id in DRIVER_EGGS {
+            cmd.args(["-p", &format!("parrot-driver-{id}")]);
+        }
+        cmd.args(["-p", "parrot-driver-acp"]);
+        let status = cmd.status().expect("cargo runs");
+        assert!(status.success(), "building the driver binaries failed");
+    });
+}
+
+/// A copy of the in-repo `eggs/` folder with this platform's driver binaries in their variant
+/// folders, as a release packs them, and a state directory with every egg installed from it.
+/// Built once per test process; [`install_eggs`] copies the installed eggs from here.
+pub fn egg_template() -> &'static Path {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        build_drivers();
+        let root = bin_dir().join(format!("test-eggs-{}", std::process::id()));
+        // Earlier test processes leave their templates; drop those older than an hour.
+        for e in std::fs::read_dir(bin_dir()).into_iter().flatten().flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(3600));
+            if old && e.file_name().to_string_lossy().starts_with("test-eggs-") {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let registry = root.join("registry");
+        copy_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eggs"),
+            &registry,
+            false,
+        );
+        let key = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        for id in DRIVER_EGGS {
+            let exe = format!("parrot-driver-{id}{}", std::env::consts::EXE_SUFFIX);
+            let variant = registry.join(id).join("parrot/variants").join(&key);
+            std::fs::create_dir_all(&variant).unwrap();
+            std::fs::copy(bin_dir().join(&exe), variant.join(&exe)).unwrap();
+        }
+        let state = root.join("state");
+        let mut cmd = Command::new(PARROT);
+        cmd.args(["eggs", "install"]);
+        for id in DRIVER_EGGS.iter().chain(&["acp"]) {
+            cmd.arg(format!("aiviarium/{id}"));
+        }
+        let out = cmd
+            .arg("--registry")
+            .arg(&registry)
+            .arg("--state-dir")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "installing the in-repo eggs failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        state
+    })
+}
+
+/// Installs every in-repo egg into `state` as `parrot eggs install` would, so the runtime
+/// starts each driver from its egg. The driver binaries are linked, not copied.
+pub fn install_eggs(state: &Path) {
+    copy_tree(&egg_template().join("eggs"), &state.join("eggs"), true);
+}
+
+/// Copies a folder. With `link`, files under a `variants` folder become symbolic links.
+pub fn copy_tree(from: &Path, to: &Path, link: bool) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        if src.is_dir() {
+            // Binaries a developer packed into the source eggs are not this build's.
+            if !link && src.file_name().is_some_and(|n| n == "variants") {
+                continue;
+            }
+            copy_tree(&src, &dst, link);
+        } else if link && src.components().any(|c| c.as_os_str() == "variants") {
+            std::os::unix::fs::symlink(&src, &dst).unwrap();
+        } else {
+            std::fs::copy(&src, &dst).unwrap();
+        }
+    }
+}
+
+/// `state`, with the in-repo eggs installed into it unless it has eggs already.
+pub fn with_eggs(state: PathBuf) -> PathBuf {
+    if !state.join("eggs").exists() {
+        std::fs::create_dir_all(&state).unwrap();
+        install_eggs(&state);
+    }
+    state
 }

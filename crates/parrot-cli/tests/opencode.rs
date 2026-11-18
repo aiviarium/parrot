@@ -2,6 +2,8 @@
 //! client on the local socket.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -51,7 +53,7 @@ impl Serve {
         let socket = dir.path().join("sock");
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_OPENCODE_BIN", fake_opencode())
             .stdin(Stdio::null())
