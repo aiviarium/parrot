@@ -1,0 +1,2 @@
+// Codex waits `tool_timeout_sec` for a call to an MCP server, 60 seconds unless configured.
+tool-timeout 60

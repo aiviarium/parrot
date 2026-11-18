@@ -351,7 +351,7 @@ pub fn plan_new(cx: &mut Cx, conn: &str, p: &SessionNewParams) -> Result<Plan, R
         &p.agent,
         p.env.as_deref().unwrap_or(&cx.state.principals.env),
     )?;
-    if matches!(p.workspace, WorkspaceRequest::Worktree { .. }) {
+    if matches!(p.workspace, Some(WorkspaceRequest::Worktree { .. })) {
         // Spawning with a new worktree needs `workspace` (E8).
         check(cx.state, conn, Scope::Workspace)?;
     }
@@ -500,22 +500,30 @@ fn tree(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: parrot_proto::session::SessionTreeParams = parse(params)?;
     check_session(cx.state, conn, Scope::Read, &p.session)?;
     let all = subtree_depths(cx.state, &p.session);
-    let offset: usize = match &p.cursor {
-        Some(c) => c.parse().map_err(|_| RpcError::new(-32602, "invalid cursor"))?,
+    // The cursor is the last session of the page before; children that join later don't
+    // shift what follows it.
+    let start = match &p.cursor {
+        Some(c) => {
+            all.iter()
+                .position(|(s, _)| s == c)
+                .ok_or_else(|| RpcError::new(-32602, "invalid cursor: the session left the tree"))?
+                + 1
+        }
         None => 0,
     };
     let limit = p.limit.unwrap_or(100).clamp(1, 1000) as usize;
-    let nodes: Vec<Value> = all
+    let end = (start + limit).min(all.len());
+    let nodes: Vec<Value> = all[start..end]
         .iter()
-        .skip(offset)
-        .take(limit)
         .filter_map(|(s, d)| {
             crate::sessions::summary_json(cx.state, s).map(|v| json!({ "session": v, "depth": d }))
         })
         .collect();
     let mut v = json!({ "nodes": nodes });
-    if offset + limit < all.len() {
-        v["next"] = json!((offset + limit).to_string());
+    if end < all.len()
+        && let Some((last, _)) = all.get(end - 1)
+    {
+        v["next"] = json!(last);
     }
     Ok(v)
 }
@@ -638,7 +646,7 @@ fn list_workspaces(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcE
 /// limited to some sessions sees only theirs (E8), everyone else sees all.
 pub fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
     let Some(me) = session_principal(state, conn) else {
-        if !token_limited(state, conn) {
+        if !crate::principals::limited(state, conn) {
             return true;
         }
         let owner = state
@@ -663,17 +671,6 @@ pub fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
                 .get(s)
                 .is_some_and(|i| i.workspace == workspace)
         })
-}
-
-/// Whether the connection holds a token limited to some sessions.
-pub fn token_limited(state: &State, conn: &str) -> bool {
-    matches!(
-        state.principals.conns.get(conn).map(|c| &c.peer),
-        Some(crate::Peer::Token {
-            sessions: Some(_),
-            ..
-        })
-    )
 }
 
 fn own_workspace(state: &State, me: &str, workspace: &str) -> bool {
@@ -716,7 +713,7 @@ fn create(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
     let p: WorkspaceCreateParams = parse(params)?;
     check(cx.state, conn, Scope::Workspace)?;
     // A new workspace belongs to no session yet, so a session-limited token can't make one (E8).
-    if token_limited(cx.state, conn) {
+    if crate::principals::limited(cx.state, conn) {
         return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "sessions" })));
     }
     if p.env != cx.state.principals.env {

@@ -9,8 +9,8 @@ use schemars::{JsonSchema, SchemaGenerator};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    action, agent, driver, driver_data, env, error, handshake, ids, item, option, principal, prompt, request,
-    session, state, subscribe, usage, workspace,
+    action, agent, driver, driver_data, env, error, function, handshake, ids, item, link, option, principal,
+    prompt, request, seed, session, state, subscribe, task, usage, workspace,
 };
 
 /// The schema of one type, with its own `$defs`.
@@ -284,6 +284,7 @@ pub fn register(r: &mut Registry) {
     r.add::<driver_data::PinArgs>();
     r.add::<driver_data::CorrelateFile>();
     r.add::<driver_data::CorrelateKind>();
+    r.add::<driver_data::LimitsFile>();
 
     // The methods a client calls, from spec 39 and Appendix E8.
     r.method::<handshake::InitializeParams, handshake::InitializeResult>("initialize");
@@ -328,6 +329,37 @@ pub fn register(r: &mut Registry) {
     r.method::<workspace::WorkspaceMergeParams, workspace::WorkspaceMergeResult>("workspace/merge");
     r.method::<workspace::WorkspaceRemoveParams, ids::Empty>("workspace/remove");
     r.method::<workspace::WorkspaceTransferParams, workspace::WorkspaceTransferResult>("workspace/transfer");
+    r.method::<session::SessionConfigureParams, ids::Empty>("session/configure");
+    r.method::<seed::SessionBundleParams, seed::SessionBundleResult>("session/bundle");
+    r.method::<subscribe::SessionReadParams, subscribe::SessionReadResult>("session/read");
+    r.method::<session::SessionDiscoverParams, session::SessionDiscoverResult>("session/discover");
+    r.method::<session::SessionAdoptParams, session::SessionAdoptResult>("session/adopt");
+    r.method::<task::TaskAssignParams, task::TaskAssignResult>("task/assign");
+    r.method::<task::TaskFinishParams, ids::Empty>("task/finish");
+    r.method::<task::TaskFailParams, ids::Empty>("task/fail");
+    r.method::<task::TaskWaitParams, task::TaskWaitResult>("task/wait");
+    r.method::<function::FunctionListParams, function::FunctionListResult>("function/list");
+    r.method::<function::FunctionSearchParams, function::FunctionListResult>("function/search");
+    r.method::<function::FunctionDescribeParams, function::FunctionDescribeResult>("function/describe");
+    r.method::<function::FunctionCallParams, function::FunctionResult>("function/call");
+    r.method::<function::FunctionProvideParams, ids::Empty>("function/provide");
+    r.method::<ids::Empty, principal::TokenListResult>("token/list");
+    r.method::<principal::TokenCreateParams, principal::TokenCreateResult>("token/create");
+    r.method::<principal::TokenRevokeParams, ids::Empty>("token/revoke");
+    // Links and the methods one runtime calls on a linked one (spec 24, E1, E9).
+    r.method::<link::LinkListParams, link::LinkListResult>("link/list");
+    r.method::<link::CarrierListParams, link::CarrierListResult>("carrier/list");
+    r.method::<link::LinkInviteParams, link::LinkInviteResult>("link/invite");
+    r.method::<link::LinkAddParams, link::LinkAddResult>("link/add");
+    r.method::<link::LinkUpdateParams, link::LinkUpdateResult>("link/update");
+    r.method::<link::LinkRemoveParams, ids::Empty>("link/remove");
+    r.method::<link::BlobPutParams, ids::Empty>("blob/put");
+    r.method::<link::SessionOfferParams, link::SessionOfferResult>("session/offer");
+    r.method::<link::SessionCommitParams, link::SessionCommitResult>("session/commit");
+    r.method::<link::WorkspaceReceiveParams, link::WorkspaceReceiveResult>("workspace/receive");
+    // The requests a runtime sends to a client: calls of functions it provides (spec 25.2).
+    r.client_method::<function::FunctionCallParams, function::FunctionResult>("function/call");
+
     // The methods a runtime calls on a driver (spec 30.1).
     r.method::<driver::BindingStartParams, driver::BindingStartResult>("binding/start");
     r.method::<driver::BindingStopParams, ids::Empty>("binding/stop");
@@ -351,6 +383,7 @@ pub struct Registry {
     generator: SchemaGenerator,
     roots: Map<String, Value>,
     methods: BTreeMap<String, Value>,
+    client_methods: BTreeMap<String, Value>,
     notifications: BTreeMap<String, Value>,
 }
 
@@ -373,6 +406,16 @@ impl Registry {
         );
     }
 
+    /// A request the runtime sends to a client, with its params and result.
+    pub fn client_method<P: JsonSchema, R: JsonSchema>(&mut self, name: &str) {
+        self.add::<P>();
+        self.add::<R>();
+        self.client_methods.insert(
+            name.to_string(),
+            json!({ "params": ref_to::<P>(), "result": ref_to::<R>() }),
+        );
+    }
+
     /// A notification's params, as a `$ref` into `$defs`.
     pub fn notification<P: JsonSchema>(&mut self, name: &str) {
         self.add::<P>();
@@ -386,6 +429,7 @@ pub fn all() -> Value {
         generator: SchemaGenerator::default(),
         roots: Map::new(),
         methods: BTreeMap::new(),
+        client_methods: BTreeMap::new(),
         notifications: BTreeMap::new(),
     };
     register(&mut r);
@@ -397,6 +441,7 @@ pub fn all() -> Value {
         "title": "Parrot protocol, version 1",
         "$defs": defs,
         "x-methods": r.methods,
+        "x-client-methods": r.client_methods,
         "x-notifications": r.notifications,
     })
 }
@@ -500,13 +545,40 @@ mod tests {
         assert!(super::schema_for::<super::error::MovedData>()["properties"]["runtime"].is_object());
     }
 
+    /// The link methods are in the table, `link/add` with what it asks a peer for when it pairs
+    /// over the carrier, and `workspace/receive` with the transfer it unpacks.
+    #[test]
+    fn link_methods_are_in_the_table() {
+        let all = super::all();
+        let methods = &all["x-methods"];
+        for m in [
+            "link/list",
+            "link/invite",
+            "link/add",
+            "link/update",
+            "link/remove",
+            "carrier/list",
+            "blob/put",
+            "session/offer",
+            "session/commit",
+            "workspace/receive",
+        ] {
+            assert!(methods.get(m).is_some(), "{m} is missing");
+        }
+        let add = all["$defs"]["LinkAddParams"]["properties"].clone();
+        assert!(add["ask"].is_object(), "{add}");
+        let receive = &all["$defs"]["WorkspaceReceiveParams"]["required"];
+        assert_eq!(receive, &serde_json::json!(["workspace", "transfer"]));
+    }
+
     /// Every method and notification in the table points at a definition that exists.
     #[test]
     fn methods_resolve_to_defs() {
         let all = super::all();
         let defs = &all["$defs"];
         let mut names = 0;
-        for (name, method) in all["x-methods"].as_object().unwrap() {
+        let client = all["x-client-methods"].as_object().unwrap().iter();
+        for (name, method) in all["x-methods"].as_object().unwrap().iter().chain(client) {
             for key in ["params", "result"] {
                 let r = method[key]["$ref"]
                     .as_str()

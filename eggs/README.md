@@ -12,6 +12,7 @@ Each folder here is a Hatchery package for one agent. The runtime installs the `
 | `<agent>/parrot/driver.kdl` | How the driver runs, which CLI versions it covers, and its data version |
 | `<agent>/parrot/options.kdl` | Option maps: roles, choices with semantic tags, `dependsOn` rules |
 | `<agent>/parrot/levels.kdl` | Permission levels and the tools each level allows (E4) |
+| `<agent>/parrot/limits.kdl` | Numbers the CLI imposes: `tool-timeout` is how many seconds it waits for one tool call. Calls into Parrot and approvals return before it |
 | `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source wins |
 | `<agent>/parrot/profile.kdl` | The TUI profile, for agents with TUI control. This is the live copy |
 | `<agent>/parrot/shims/<dir>/` | Files that replace the ones above for a range of CLI versions |
@@ -76,12 +77,22 @@ target "{\"type\":\"object\"}"
 | Node | Meaning |
 | --- | --- |
 | `carrier "kind"` | The kind that a link's carrier selects. `title`, `max-message`, `containment` and `listens` are optional |
+| `listens=#true` | The runtime runs `<program> listen` beside itself for inbound channels |
 | `max-message=…` | The largest message on the channel, at least 4096 bytes |
 | `containment=…` | `restricted` or `shell` |
 | `run "path" args…` | The program, relative to the `parrot` folder |
 | `target "json"` | The JSON Schema of the carrier's target |
 
 The runtime starts `<program> dial` for each connection and writes the target as JSON on its first input line. The program answers `{"ready":true}` on its first output line, and from then on its standard input and output are the channel. A carrier egg that leaves out `containment` counts as `shell`.
+
+On the channel, each Noise message has its length as two bytes in front. A carrier whose platform sends messages rather than a byte stream sends each Noise message as one message of its own. Neither side's Noise messages exceed `max-message`: the dialling runtime tells the other runtime the limit in its handshake.
+
+A carrier egg with `listens=#true` takes inbound channels as well. The runtime starts `<program> listen` beside itself, under `parrot guard`, and starts it again when it ends. For each inbound channel the program does one of these:
+
+| Way | What the program does |
+| --- | --- |
+| Hand over a descriptor | Runs `$PARROT_BIN connect --link --socket $PARROT_SOCKET --fd <n>` with the channel's descriptor `n` inherited |
+| Relay | Connects to `$PARROT_LINK_SOCKET` and copies bytes both ways |
 
 ## Probe scenarios
 

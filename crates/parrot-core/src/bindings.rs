@@ -246,6 +246,7 @@ pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) 
                     sessions::changed(cx, &session);
                 }
                 if state == SessionState::Idle {
+                    crate::links::on_idle(cx, &session);
                     queue::on_idle(cx, &session);
                 }
                 if hidden {
@@ -385,6 +386,11 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             background,
             detail,
         } => {
+            // A binding being replaced, as in a rebind, still reports while it stops; only the
+            // session's current binding sets its state.
+            if crate::directory::binding_of(cx.state, &session).as_deref() != Some(binding) {
+                return;
+            }
             let changed = {
                 let Some(s) = cx.state.sessions.info.get_mut(&session) else {
                     return;
@@ -410,6 +416,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 crate::tasks::on_idle(cx, &session);
                 crate::budgets::on_idle(cx, &session);
                 crate::seeds::on_idle(cx, &session);
+                crate::links::on_idle(cx, &session);
                 queue::on_idle(cx, &session);
                 crate::wakes::pump(cx, &session);
             }
@@ -451,6 +458,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 patch.turn = Some(map_key(cx, binding, "trn", t, None));
             }
             patch.binding = Some(binding.to_string());
+            mark_function(cx.state, &mut patch);
             cx.publish(sid, json!({ "type": "item", "item": patch }));
         }
         DriverUpdateKind::Turn { turn } => {
@@ -495,7 +503,16 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                     .into_iter()
                     .collect()
             });
+            let failed_now = failed.is_some();
             crate::actions::note_turn(cx.state, &session, running, failed);
+            crate::actions::persist_failed(cx, &session, failed_now || running);
+            // A running turn is kept in the store, so a restart can end it as `interrupted` (E7).
+            if running {
+                cx.persist(json!({ "op": "put", "kind": "turn", "id": turn.id,
+                    "value": { "session": session, "turn": turn } }));
+            } else {
+                cx.persist(json!({ "op": "delete", "kind": "turn", "id": turn.id }));
+            }
             cx.publish(sid, json!({ "type": "turn", "turn": turn }));
         }
         DriverUpdateKind::Ref { reference } => {
@@ -544,6 +561,24 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             }));
         }
         _ => {}
+    }
+}
+
+/// A tool call into the injected `parrot` server is shown with the function it reached and the
+/// server, where the driver didn't say (spec 25.1).
+fn mark_function(state: &State, patch: &mut parrot_proto::item::ItemPatch) {
+    let Some(set) = patch.set.as_mut() else {
+        return;
+    };
+    if set.contains_key("function") {
+        return;
+    }
+    let Some(tool) = set.get("tool").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(function) = crate::functions::function_of_tool(state, tool, set.get("input")) {
+        set.insert("function".into(), json!(function));
+        set.entry("server").or_insert_with(|| json!("parrot"));
     }
 }
 

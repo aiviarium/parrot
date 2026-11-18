@@ -50,6 +50,26 @@ pub fn note_turn(state: &mut State, session: &str, running: bool, failed: Option
     };
 }
 
+/// Keep a session's failed inputs in the store, so `retry` works after a restart. A running
+/// turn leaves them as they are; it clears them only when it ends without failing.
+pub fn persist_failed(cx: &mut Cx, session: &str, keep: bool) {
+    match cx.state.actions.failed_inputs.get(session) {
+        Some(inputs) => {
+            let value = json!(inputs);
+            cx.persist(json!({ "op": "put", "kind": "failed", "id": session, "value": value }));
+        }
+        None if !keep => cx.persist(json!({ "op": "delete", "kind": "failed", "id": session })),
+        None => {}
+    }
+}
+
+/// Put back a session's failed inputs read from the store.
+pub fn restore_failed(state: &mut State, session: &str, value: &Value) {
+    if let Ok(inputs) = serde_json::from_value::<Vec<String>>(value.clone()) {
+        state.actions.failed_inputs.insert(session.to_string(), inputs);
+    }
+}
+
 fn runtime_action(id: &str, label: &str, description: &str, input: Option<Value>) -> Action {
     Action {
         id: id.into(),
@@ -128,7 +148,9 @@ fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let params = if params.is_null() { json!({}) } else { params };
     let p: ActionListParams = serde_json::from_value(params).map_err(|e| invalid(e.to_string()))?;
     let actions = match &p.session {
-        Some(s) if cx.state.sessions.by_id.contains_key(s) => actions_of(cx.state, s),
+        Some(s) if cx.state.sessions.by_id.contains_key(s) && crate::principals::sees(cx.state, conn, s) => {
+            actions_of(cx.state, s)
+        }
         Some(s) => return Err(RpcError::new(-32002, format!("no session {s}"))),
         None => Vec::new(),
     };
@@ -141,7 +163,7 @@ fn invoke(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
         return Err(RpcError::new(-32001, "only session actions are supported")
             .with_data(json!({ "feature": "action.agent" })));
     };
-    if !cx.state.sessions.by_id.contains_key(&session) {
+    if !cx.state.sessions.by_id.contains_key(&session) || !crate::principals::sees(cx.state, conn, &session) {
         return Err(RpcError::new(-32002, format!("no session {session}")));
     }
     let Some(action) = actions_of(cx.state, &session)

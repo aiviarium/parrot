@@ -117,17 +117,29 @@ pub async fn run(
     );
     let mut notifier = parrot_serve::notify::Notifier::new(targets);
     notifier.url = config.notify_url.clone();
+    if let Some(ca) = &config.notify_ca {
+        let pem =
+            std::fs::read(dir.join(ca)).map_err(|e| format!("cannot read notifyCa {}: {e}", ca.display()))?;
+        notifier
+            .trust(&pem)
+            .map_err(|e| format!("notifyCa {}: {e}", ca.display()))?;
+    }
     let tui = config.tui.clone();
     let tokens = Arc::new(
-        parrot_serve::tokens::TokenStore::open(dir.join("tokens.json"))
-            .map_err(|e| format!("cannot read the tokens: {e}"))?,
+        parrot_serve::tokens::TokenStore::with_store(
+            Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?,
+            Some(dir.join("tokens.json")),
+        )
+        .map_err(|e| format!("cannot read the tokens: {e}"))?,
     );
     let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
     let workspace_root = workspace_root.unwrap_or_else(|| dir.join("workspaces"));
+    let transfers = dir.join("transfers");
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
             .with_links(backend_hub)
+            .with_transfers(transfers)
             .with_scratch(scratch)
             .with_notifier(notifier)
             .with_drivers(drivers)
@@ -203,6 +215,11 @@ async fn serve_link_local(
     let path = parrot_link::endpoint::link_socket_path(socket);
     let listener = parrot_link::endpoint::bind_link_socket(&path)
         .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    // Carrier eggs that listen hand their inbound channels to this endpoint.
+    match std::env::current_exe() {
+        Ok(parrot) => hub.start_listeners(socket.to_path_buf(), parrot),
+        Err(e) => eprintln!("parrot: cannot start listening carriers: {e}"),
+    }
     parrot_serve::link_hub::serve_link_socket(hub, listener)
         .await
         .map_err(|e| format!("link socket: {e}"))

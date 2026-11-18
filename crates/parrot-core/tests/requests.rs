@@ -1,5 +1,7 @@
 //! Requests, options and actions, driven through `Core::handle` with a manual clock.
 
+mod common;
+
 use parrot_core::bindings::BindingRecord;
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::sessions::SessionRecord;
@@ -10,7 +12,7 @@ use serde_json::{Value, json};
 fn core() -> (Core, ManualClock) {
     let clock = ManualClock::default();
     clock.set(1_000);
-    let mut core = Core::new(Box::new(clock.clone()), Box::new(SeqIds::default()));
+    let mut core = common::core(Box::new(clock.clone()), Box::new(SeqIds::default()));
     for (id, parent, binding) in [
         ("ses_root", None, None),
         ("ses_a", Some("ses_root"), Some("bnd_a")),

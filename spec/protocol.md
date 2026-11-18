@@ -407,7 +407,7 @@ interface Background { id: string; kind: "task" | "subagent" | "command" | strin
 interface NewSession {
   agent: string
   env?: string                     // default: the parent's env, else the local env
-  workspace: WorkspaceRequest      // required: where work happens is always an explicit choice
+  workspace?: WorkspaceRequest     // required unless a seed carries the workspace (23.1): where work happens is always an explicit choice
   cwd?: string
   options?: Record<string, Json>
   title?: string
@@ -573,6 +573,7 @@ type Update =
   | { type: "env"; env: Environment }                   // index
   | { type: "workspace"; workspace: Workspace }         // index
   | { type: "deleted"; kind: "session" | "workspace"; id: string }   // index
+  | { type: "functions"; pinned: string[] }             // sessions with an MCP server (26)
 ```
 
 - Only items are patched; everything else is sent whole.
@@ -1323,6 +1324,9 @@ interface FunctionResult {
 - With `functions.mcp`, the driver injects one MCP server named `parrot` into each binding, for that
   binding only and never in the harness's global configuration. It runs in the binding's environment,
   reached over loopback HTTP with a per-binding token, or through `parrot mcp --binding <id>` on stdio.
+  `parrot mcp --listen 127.0.0.1:0` serves the HTTP form and prints its URL. It takes the binding's
+  credential as `Authorization: Bearer`, answers each `POST` in its body, sends notifications on a
+  `GET` event stream, and refuses an `Origin` that is not loopback.
 - MCP tool names are function names with `.` replaced by `__` (`parrot__sessions__spawn`). Function
   names may not contain `__`.
 - **Listing.** Sorted by name, so the harness's prompt cache survives changes elsewhere:
@@ -1331,7 +1335,11 @@ interface FunctionResult {
   - `parrot__functions__search`, `parrot__functions__describe` and `parrot__functions__call`, which
     reach every other function the session may call without listing it.
 - The listing changes only when the session's scopes or ceiling change, or a pinned function is
-  provided or removed; the server then sends `notifications/tools/list_changed`.
+  provided or removed. The runtime then sends a `functions` update on the stream of each session
+  with an MCP server, and the server sends `notifications/tools/list_changed` once its listing has
+  changed.
+- The server checks arguments against the input schema of a tool it lists before calling, and a
+  bad call returns `invalid_input` with the path of the first problem.
 - Without `functions.mcp`, the session has no functions; tasks complete on `idle`.
 
 ## 27. Calls from harness code
@@ -1665,6 +1673,8 @@ with the `parrot` target, versioned separately from the runtime, as KDL files:
   announced as features.
 - The runtime's Rust types are the source. `schemars` generates the JSON Schema (including driver data
   files), which is committed; the TypeScript client is generated from it; CI fails on a stale schema.
+  The schema's `x-methods` lists the methods a client or runtime calls, `x-client-methods` the
+  requests a runtime sends to a client, and `x-notifications` the notifications.
 - Open unions use a custom `Open<T>` (a known variant, or the raw `serde_json::Value`), since
   `#[serde(other)]` covers only unit variants. Every struct keeps unknown fields in
   `#[serde(flatten)] extra`. Patches apply to `serde_json::Map`.

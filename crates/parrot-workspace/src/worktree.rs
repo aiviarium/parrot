@@ -79,6 +79,12 @@ pub enum WorktreeError {
     UnknownBase(String),
     #[error("worktree {path} has uncommitted changes: {changed:?}")]
     Dirty { path: PathBuf, changed: Vec<String> },
+    #[error("worktree {path} has {commits} commits on {branch} that no other branch has")]
+    Unmerged {
+        path: PathBuf,
+        branch: String,
+        commits: u64,
+    },
     #[error("could not read the commit counts from {0:?}")]
     Counts(String),
     #[error(transparent)]
@@ -205,6 +211,20 @@ fn parse_counts(counts: &str) -> Result<(u32, u32), WorktreeError> {
 
 /// Removes a worktree. Without `force` a worktree with uncommitted changes is refused, and
 /// `force` also discards the changes git needs a second `--force` for, such as in a submodule.
+/// How many commits of the worktree's `HEAD` no other branch reaches, so removing the
+/// worktree and later its branch would lose them.
+fn unmerged(worktree: &Worktree) -> Result<u64, WorktreeError> {
+    // `--exclude` before `--branches` names the branch relative to `refs/heads`.
+    let own = format!("--exclude={}", worktree.branch);
+    let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
+    if !worktree.branch.is_empty() {
+        args.push(&own);
+    }
+    args.push("--branches");
+    let out = Git::new(&worktree.path).run(&args)?;
+    out.trim().parse().map_err(|_| WorktreeError::Counts(out.clone()))
+}
+
 pub fn remove(worktree: &Worktree, force: bool) -> Result<(), WorktreeError> {
     if !force {
         let status = worktree.status()?;
@@ -212,6 +232,14 @@ pub fn remove(worktree: &Worktree, force: bool) -> Result<(), WorktreeError> {
             return Err(WorktreeError::Dirty {
                 path: worktree.path.clone(),
                 changed: status.changed,
+            });
+        }
+        let commits = unmerged(worktree)?;
+        if commits > 0 {
+            return Err(WorktreeError::Unmerged {
+                path: worktree.path.clone(),
+                branch: worktree.branch.clone(),
+                commits,
             });
         }
     }
@@ -312,6 +340,31 @@ mod tests {
                 .lines()
                 .any(|line| line == "parrot/ses_alpha")
         );
+    }
+
+    #[test]
+    fn removal_refuses_commits_no_other_branch_has() {
+        let repo = Repo::new();
+        let worktree = new_worktree(&repo, "feature", "parrot/ses_alpha");
+        // A worktree with nothing of its own goes.
+        let empty = new_worktree(&repo, "empty", "parrot/ses_beta");
+        remove(&empty, false).unwrap();
+
+        std::fs::write(worktree.path.join("notes.txt"), "work\n").unwrap();
+        let git = Git::new(&worktree.path);
+        git.run(&["add", "notes.txt"]).unwrap();
+        git.run(&["commit", "--quiet", "-m", "Add notes"]).unwrap();
+        let error = remove(&worktree, false).unwrap_err();
+        assert!(
+            matches!(error, WorktreeError::Unmerged { commits: 1, .. }),
+            "{error}"
+        );
+        assert!(worktree.path.exists());
+
+        // Once another branch has the commit, the worktree may go.
+        repo.git(&["branch", "keep", "parrot/ses_alpha"]);
+        remove(&worktree, false).unwrap();
+        assert!(!worktree.path.exists());
     }
 
     #[test]

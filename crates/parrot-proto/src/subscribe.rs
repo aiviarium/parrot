@@ -184,6 +184,10 @@ pub enum Update {
         kind: DeletedKind,
         id: String,
     },
+    /// The pinned functions changed, so an MCP listing built from them is stale (spec 26).
+    Functions {
+        pinned: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

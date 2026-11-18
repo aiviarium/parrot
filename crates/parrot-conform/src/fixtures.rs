@@ -28,4 +28,10 @@ pub const RUNTIME: &[(&str, &str)] = &[
     ("lists", include_str!("../fixtures/runtime/lists.jsonl")),
     ("snapshot", include_str!("../fixtures/runtime/snapshot.jsonl")),
     ("read", include_str!("../fixtures/runtime/read.jsonl")),
+    ("retry", include_str!("../fixtures/runtime/retry.jsonl")),
+    ("continue", include_str!("../fixtures/runtime/continue.jsonl")),
+    ("steer", include_str!("../fixtures/runtime/steer.jsonl")),
+    ("choice", include_str!("../fixtures/runtime/choice.jsonl")),
+    ("option-set", include_str!("../fixtures/runtime/option-set.jsonl")),
+    ("tree", include_str!("../fixtures/runtime/tree.jsonl")),
 ];

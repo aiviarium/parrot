@@ -121,6 +121,13 @@ impl Carriers {
         Ok(())
     }
 
+    /// The carrier eggs that deliver inbound connections, run beside the runtime as `listen`.
+    pub fn listeners(&self) -> Vec<EggCarrier> {
+        let mut eggs: Vec<EggCarrier> = self.eggs.values().filter(|e| e.listens).cloned().collect();
+        eggs.sort_by(|a, b| a.name.cmp(&b.name));
+        eggs
+    }
+
     /// What `carrier/list` returns.
     pub fn list(&self) -> Vec<CarrierInfo> {
         let mut out = builtins();
@@ -490,6 +497,34 @@ mod tests {
         ] {
             assert!(ssh_argv(&target(t.clone())).is_err(), "{t}");
         }
+    }
+
+    #[tokio::test]
+    async fn tcp_reaches_the_address_and_refuses_extra_fields() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let echo = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 5];
+            s.read_exact(&mut buf).await.unwrap();
+            s.write_all(&buf).await.unwrap();
+        });
+        let mut channel = tcp(&target(json!({ "address": addr }))).await.unwrap();
+        assert_eq!(channel.kind, "tcp");
+        assert_eq!(channel.containment, Containment::Restricted);
+        channel.stream.write_all(b"hello").await.unwrap();
+        let mut back = [0u8; 5];
+        channel.stream.read_exact(&mut back).await.unwrap();
+        assert_eq!(&back, b"hello");
+        echo.await.unwrap();
+
+        assert!(tcp(&target(json!({}))).await.is_err());
+        assert!(
+            tcp(&target(json!({ "address": "127.0.0.1:1", "via": "x" })))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

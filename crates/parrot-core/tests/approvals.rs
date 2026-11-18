@@ -1,6 +1,8 @@
 //! Function approvals (E5, 27.2): ceiling patterns, requests for calls above the session's level,
 //! `pending_approval` after the wait, and retries with the same key.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer};
 use serde_json::{Value, json};
@@ -16,7 +18,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         Sim {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::default())),
             clock,
             next_id: 0,
         }
@@ -241,4 +243,102 @@ fn effects_the_ceiling_does_not_list_open_a_request() {
     );
     assert!(reply(&effects, &id).is_none());
     assert_eq!(sim.core.state.functions.approvals.len(), 1);
+}
+
+#[test]
+fn the_wait_follows_the_harness_tool_timeout_from_its_egg() {
+    use parrot_core::agents::AgentEgg;
+    use parrot_proto::agent::{Control, DriverKind};
+    let egg = |timeout| AgentEgg {
+        id: "claude".into(),
+        name: "Claude".into(),
+        driver_name: "claude".into(),
+        driver_version: "1".into(),
+        kind: DriverKind::Process,
+        data: "1".into(),
+        controls: vec![Control::Native],
+        cli_versions: None,
+        refused: None,
+        tool_timeout: timeout,
+    };
+    let (mut sim, session) = setup();
+    sim.core.state.functions.wait_ms = None;
+    assert_eq!(
+        parrot_core::functions::approval_wait_ms(&sim.core.state, &session),
+        170_000
+    );
+    parrot_core::agents::load(&mut sim.core.state, vec![egg(Some(60))]);
+    // 60 seconds less a tenth.
+    assert_eq!(
+        parrot_core::functions::approval_wait_ms(&sim.core.state, &session),
+        54_000
+    );
+    let (_, effects) = sim.send(
+        "con_o",
+        "function/call",
+        call_params(&session, "acme.deploy", "k9"),
+    );
+    let id = json!(sim.next_id);
+    assert!(reply(&effects, &id).is_none(), "the call waits");
+    assert!(
+        reply(&sim.advance(53_000), &id).is_none(),
+        "still within the limit"
+    );
+    let r = reply(&sim.advance(1_000), &id)
+        .expect("an answer at the limit")
+        .unwrap();
+    assert_eq!(r["error"]["code"], "pending_approval", "{r}");
+}
+
+#[test]
+fn providing_a_pinned_function_tells_sessions_with_an_mcp_server() {
+    let mut sim = Sim::new();
+    sim.core.state.functions.mcp = Some("parrot".into());
+    sim.connect("con_o", json!([]));
+    let (r, _) = sim.call(
+        "con_o",
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" } }),
+    );
+    // session/new subscribes its caller to the session.
+    r.unwrap();
+    let functions_updates = |effects: &[Effect]| -> Vec<Value> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Notify { params, .. } if params["update"]["type"] == "functions" => {
+                    Some(params["update"].clone())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let mut pinned = spec("acme.notes.add", "write", json!(["write"]));
+    pinned["pinned"] = json!(true);
+
+    sim.connect("con_p", json!([]));
+    let (r, effects) = sim.call(
+        "con_p",
+        "function/provide",
+        json!({ "functions": [pinned.clone()] }),
+    );
+    r.unwrap();
+    let updates = functions_updates(&effects);
+    assert_eq!(
+        updates,
+        vec![json!({ "type": "functions", "pinned": ["acme.notes.add"] })]
+    );
+
+    // The same set again changes nothing; an unpinned function is not announced.
+    let (_, effects) = sim.call(
+        "con_p",
+        "function/provide",
+        json!({ "functions": [pinned, spec("acme.peek", "read", json!(["read"]))] }),
+    );
+    assert!(functions_updates(&effects).is_empty());
+
+    // The provider leaving takes the pinned function away.
+    let effects = sim.core.handle(Input::Disconnected { conn: "con_p".into() });
+    let updates = functions_updates(&effects);
+    assert_eq!(updates, vec![json!({ "type": "functions", "pinned": [] })]);
 }

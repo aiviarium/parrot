@@ -14,6 +14,8 @@
 //! differently. Every message received feeds the projection: items after their patches, requests,
 //! options, queue, state, turns and usage.
 //!
+//! `{ "$has": … }` matches an array with at least one entry that fits, wherever it is.
+//!
 //! Strings `"$seq"`, `"$id:<name>"`, `"$time"` and `"$any"` stand for values the target picks; the
 //! matcher binds each `$id` name once and holds it to that. Strings `"$<var>"` for a variable the
 //! runner was given, such as `"$dir"` and `"$agent"`, are replaced in both directions.
@@ -218,6 +220,21 @@ impl Bindings {
                 } else {
                     fail(format!("expected {want}, got {a}"))
                 }
+            }
+            // `{"$has": pattern}`: an array with at least one entry that matches, such as the
+            // choice with a given intent wherever it is listed.
+            Value::Object(po) if po.len() == 1 && po.contains_key("$has") => {
+                let Some(aa) = a.as_array() else {
+                    return fail(format!("expected an array, got {a}"));
+                };
+                for (i, av) in aa.iter().enumerate() {
+                    let mut trial = self.clone();
+                    if trial.match_at(&po["$has"], av, &format!("{path}[{i}]")).is_ok() {
+                        *self = trial;
+                        return Ok(());
+                    }
+                }
+                fail(format!("no entry matches {}: {a}", po["$has"]))
             }
             Value::Object(po) => {
                 let Some(ao) = a.as_object() else {
@@ -432,6 +449,17 @@ mod tests {
         let mut b = Bindings::default();
         assert!(b.try_matches(&json!(["$id:a", 1]), &json!(["x", 2])).is_err());
         assert!(b.id("a").is_none());
+    }
+
+    #[test]
+    fn has_finds_an_entry_anywhere_and_binds_from_it() {
+        let mut b = Bindings::default();
+        let choices = json!([{ "id": "c-deny", "intent": "deny" }, { "id": "c-allow", "intent": "allow" }]);
+        let pattern = json!({ "$has": { "id": "$id:allow", "intent": "allow" } });
+        assert!(b.matches(&pattern, &choices).is_ok());
+        assert_eq!(b.id("allow"), Some(&json!("c-allow")));
+        let none = json!({ "$has": { "intent": "neutral" } });
+        assert!(b.matches(&none, &choices).is_err());
     }
 
     #[test]

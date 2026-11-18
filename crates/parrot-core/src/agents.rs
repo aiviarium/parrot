@@ -1,7 +1,7 @@
 //! The agents the runtime knows (spec 6): which exist, how each is driven, and what discovery
 //! found. Agents come from installed driver eggs, fed in with [`load`]. With no egg installed the
-//! runtime has no agents, and `agent/list` says how to install one. The built-in list is only the
-//! default of a core that never loads eggs, as in tests.
+//! runtime has no agents, and `agent/list` says how to install one. The core names no harness:
+//! tests load their agents the same way.
 //!
 //! When a driver reports the harness version it found, the agent's `harness.verified` says
 //! whether its egg's `cli versions` range covers it (spec 31). Sessions of an unverified agent
@@ -13,7 +13,6 @@ use parrot_proto::agent::{Control, DriverKind};
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 
 /// What `agent/list` adds when no driver egg is installed.
 pub const NO_EGGS_HINT: &str = "No driver eggs are installed. Install one with `parrot eggs install aiviarium/claude` (or codex, pi, opencode, t3, acp), then restart `parrot serve`.";
@@ -33,31 +32,8 @@ pub struct AgentEgg {
     pub cli_versions: Option<String>,
     /// Why the egg can't be used, such as a `requires parrot` this runtime doesn't meet.
     pub refused: Option<String>,
-}
-
-/// The agents known before any egg is loaded.
-pub fn builtin() -> BTreeMap<String, Value> {
-    let mut agents = BTreeMap::new();
-    agents.insert("claude".to_string(), builtin_agent("claude", "Claude Code"));
-    agents.insert("codex".to_string(), builtin_agent("codex", "Codex"));
-    agents.insert("pi".to_string(), builtin_agent("pi", "Pi"));
-    agents.insert("opencode".to_string(), builtin_agent("opencode", "opencode"));
-    agents
-}
-
-/// A built-in agent before its driver has answered `agent/list`.
-fn builtin_agent(id: &str, name: &str) -> Value {
-    record(&AgentEgg {
-        id: id.into(),
-        name: name.into(),
-        driver_name: id.into(),
-        driver_version: env!("CARGO_PKG_VERSION").into(),
-        kind: DriverKind::Builtin,
-        data: "1".into(),
-        controls: vec![Control::Native],
-        cli_versions: None,
-        refused: None,
-    })
+    /// The harness's tool-call timeout in seconds, from the egg's `limits.kdl`.
+    pub tool_timeout: Option<u64>,
 }
 
 /// The `Agent` JSON for an egg before its driver has answered `agent/list`.
@@ -181,6 +157,10 @@ pub fn session_harness(state: &State, agent: &str) -> Option<Value> {
 pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, params: Value) -> Reply {
     match method {
         "agent/list" => Reply::Now(check(cx.state, conn, Scope::Read).map(|()| {
+            // A link that doesn't offer the environment sees none of its agents (spec 24.1).
+            if !crate::principals::env_offered(cx.state, conn) {
+                return json!({ "agents": [] });
+            }
             let agents = agents(cx.state);
             if agents.is_empty() && cx.state.sessions.eggs_loaded {
                 json!({ "agents": agents, "hint": NO_EGGS_HINT })
@@ -316,6 +296,11 @@ pub fn on_agent_reply(cx: &mut Cx, agent: &str, call: u64, result: Result<Value,
         };
         cx.reply(&conn, id, result);
     }
+}
+
+/// The tool-call timeout of `agent`'s harness in seconds, from its egg (spec 27.2).
+pub fn tool_timeout(state: &State, agent: &str) -> Option<u64> {
+    state.sessions.eggs.get(agent).and_then(|e| e.tool_timeout)
 }
 
 #[cfg(test)]

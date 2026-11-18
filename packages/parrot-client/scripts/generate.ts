@@ -114,20 +114,28 @@ function entries(key: string): [string, Record<string, Schema>][] {
     .map((name) => [name, table[name]] as [string, Record<string, Schema>])
 }
 
-/** The `Methods` map: each method's params and result, read from `x-methods`. */
-function methods(): string[] {
-  const lines = entries("x-methods").map(
-    ([name, method]) =>
-      `  ${JSON.stringify(name)}: { params: ${typeOf(method.params, "  ")}; result: ${typeOf(method.result, "  ")} }`,
+/** A map of methods to their params and results, read from `key`. */
+function methodTable(key: string, name: string, doc: string): string[] {
+  const lines = entries(key).map(
+    ([method, m]) =>
+      `  ${JSON.stringify(method)}: { params: ${typeOf(m.params, "  ")}; result: ${typeOf(m.result, "  ")} }`,
   )
   if (lines.length === 0) return []
-  return [
-    "/** The methods a client calls, from spec 39 and Appendix E8. */",
-    "export interface Methods {",
-    ...lines,
-    "}",
-    "",
-  ]
+  return [`/** ${doc} */`, `export interface ${name} {`, ...lines, "}", ""]
+}
+
+/** The `Methods` map, from `x-methods`. */
+function methods(): string[] {
+  return methodTable("x-methods", "Methods", "The methods a client calls, from spec 39 and Appendix E8.")
+}
+
+/** The `ClientMethods` map, from `x-client-methods`. */
+function clientMethods(): string[] {
+  return methodTable(
+    "x-client-methods",
+    "ClientMethods",
+    "The requests a runtime sends to a client: calls of the functions it provides (spec 25.2).",
+  )
 }
 
 /** The `Notifications` map: each notification's params, read from `x-notifications`. */
@@ -165,6 +173,7 @@ function emit(): string {
     out.push("")
   }
   out.push(...methods())
+  out.push(...clientMethods())
   out.push(...notifications())
   return `${out.join("\n").trimEnd()}\n`
 }

@@ -66,6 +66,23 @@ fn matches(state: &State, sub: &Subscription, session: Option<&str>, update: &Va
         return false;
     }
     let ty = update.get("type").and_then(Value::as_str);
+    if session.is_none() {
+        // Updates outside any session are filtered by what they are about (spec 24.1, E8).
+        match ty {
+            Some("agent" | "env") if !crate::principals::env_offered(state, &sub.conn) => return false,
+            Some("deleted") if crate::principals::limited(state, &sub.conn) => return false,
+            Some("workspace") => {
+                let w = update
+                    .pointer("/workspace/id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !crate::tree::visible_workspace(state, &sub.conn, w) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
     match &sub.target {
         Watch::Index => for_index(update),
         Watch::Session(target) => session == Some(target.as_str()) && ty != Some("summary"),
@@ -106,11 +123,18 @@ pub fn flush(cx: &mut Cx) {
         let seq = cx.next_seq();
         if is_item && let (Some(s), Some(patch), Some(i)) = (&session, update.get("item"), &item_id) {
             let key = format!("{s}/{i}");
+            let appends_only = patch.as_object().is_some_and(|p| {
+                p.keys()
+                    .all(|k| matches!(k.as_str(), "id" | "binding" | "append" | "streaming"))
+            });
             match items::apply(cx.state, s, patch, seq) {
+                // The text of a stream in flight is in the log; the projection is written when
+                // the stream ends or a field is set, and a restart replays the appends after it.
+                Some(item) if appends_only && item.get("streaming") == Some(&Value::Bool(true)) => {}
                 Some(item) => {
                     let created = items::created(cx.state, s, i);
                     cx.persist(json!({ "op": "put", "kind": "item", "id": key,
-                        "value": { "session": s, "created": created, "item": item } }));
+                        "value": { "session": s, "created": created, "at": seq, "item": item } }));
                 }
                 None => cx.persist(json!({ "op": "delete", "kind": "item", "id": key })),
             }
@@ -189,7 +213,7 @@ pub fn session_snapshot(state: &State, session: &str, n: usize) -> Value {
         .collect();
     let mut v = json!({
         "session": sessions::session_json(state, session),
-        "items": items::newest(state, session, n),
+        "items": items::newest(state, session, n).into_iter().map(items::shown).collect::<Vec<_>>(),
         "requests": crate::requests::open_in(state, session),
         "queue": queue::queue_state(state, session),
         "options": crate::options::options_of(state, session),
@@ -257,7 +281,7 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
                 .collect();
             let mut snap = json!({ "sessions": page });
             if all.len() > 100 {
-                snap["next"] = json!("100");
+                snap["next"] = json!(all[99]);
             }
             result["snapshot"] = snap;
         }
@@ -265,10 +289,14 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
             // The first page of what `session/list` returns; `next` continues it there (10.3).
             let listed = sessions::list_page(cx.state, conn, &Default::default())
                 .unwrap_or_else(|_| json!({ "sessions": [] }));
+            // A link that doesn't offer the environment sees neither it nor its agents (24.1).
+            let env = crate::principals::env_offered(cx.state, conn);
+            let mut envs: Vec<Value> = env.then(|| sessions::env_json(cx.state)).into_iter().collect();
+            envs.extend(crate::links::peer_envs(cx, conn));
             let mut index = json!({
                 "sessions": listed["sessions"],
-                "agents": sessions::agents(cx.state),
-                "envs": [sessions::env_json(cx.state)],
+                "agents": if env { json!(sessions::agents(cx.state)) } else { json!([]) },
+                "envs": envs,
             });
             if let Some(next) = listed.get("next") {
                 index["next"] = next.clone();
@@ -294,6 +322,25 @@ fn subscribe(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> 
         }
     }
     Reply::Later
+}
+
+/// Ends the subscriptions of `conn` to sessions it no longer sees, after its grant changed.
+pub fn drop_unseen(cx: &mut Cx, conn: &str) {
+    let state = &*cx.state;
+    let gone: Vec<String> = state
+        .subscriptions
+        .by_id
+        .values()
+        .filter(|s| s.conn == conn)
+        .filter(|s| match &s.target {
+            Watch::Session(t) | Watch::Tree(t) => !sees(state, conn, t),
+            Watch::Index => false,
+        })
+        .map(|s| s.id.clone())
+        .collect();
+    for id in gone {
+        cx.state.subscriptions.by_id.remove(&id);
+    }
 }
 
 fn unsubscribe(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
