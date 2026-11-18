@@ -25,6 +25,40 @@ pub struct Functions {
     pub tokens: BTreeMap<String, String>,
     /// The `parrot` program for `parrot mcp`; `None` turns the injected server off.
     pub mcp: Option<String>,
+    /// Ceilings over sessions, by session, as `Ceiling` JSON (spec 22). Absent is the empty
+    /// ceiling.
+    pub ceilings: BTreeMap<String, Value>,
+    /// Calls waiting for an approval, by request id (E5, 27.2).
+    pub approvals: BTreeMap<String, Approval>,
+    /// The approval of each keyed call, by caller and key.
+    pub approval_keys: BTreeMap<(String, String), String>,
+    /// How long a call waits for its approval before it returns `pending_approval`; `None` is
+    /// [`MAX_WAIT_MS`].
+    pub wait_ms: Option<u64>,
+}
+
+/// No call blocks longer than this (spec 27.2: 3 minutes, less a margin).
+pub const MAX_WAIT_MS: u64 = 170_000;
+
+#[derive(Debug, Clone)]
+pub struct Approval {
+    pub session: String,
+    /// The caller waiting for the result; `None` once it got `pending_approval`.
+    pub waiting: Option<(String, RequestId)>,
+    /// The connection the call came from, which the approved call runs as.
+    pub conn: String,
+    pub key: Option<(String, String)>,
+    pub params: Value,
+    pub deadline_ms: u64,
+    pub status: ApprovalStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ApprovalStatus {
+    Open,
+    /// Approved and running.
+    Running,
+    Denied,
 }
 
 #[derive(Debug, Clone)]
@@ -244,18 +278,330 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
     }
 }
 
+/// How permission levels and function levels order, lowest first; `network` and `sandboxed`
+/// are the same rung.
+fn level_rank(level: &str) -> u8 {
+    match level {
+        "read" => 0,
+        "write" => 1,
+        "sandboxed" | "network" => 2,
+        "full" => 3,
+        _ => 4,
+    }
+}
+
+/// The ceiling over a session, as `Ceiling` JSON; `{}` is the empty ceiling.
+pub fn ceiling_of(state: &crate::State, session: &str) -> Value {
+    state
+        .functions
+        .ceilings
+        .get(session)
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+
+/// The level a session acts at: its binding's, under its ceiling's.
+fn session_level(state: &crate::State, session: &str, ceiling: &Value) -> u8 {
+    let binding = crate::directory::binding_of(state, session)
+        .and_then(|b| state.bindings.info.get(&b))
+        .and_then(|b| b.level)
+        .and_then(|l| serde_json::to_value(l).ok())
+        .and_then(|v| v.as_str().map(level_rank))
+        .unwrap_or(0);
+    match ceiling["level"].as_str() {
+        Some(c) => binding.min(level_rank(c)),
+        None => binding,
+    }
+}
+
+fn error_result(code: &str, message: &str) -> Value {
+    json!({ "error": { "code": code, "message": message } })
+}
+
 fn function_call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Reply {
     if let Err(e) = principals::check(cx.state, conn, Scope::Read) {
         return Reply::Now(Err(e));
     }
     let name = params["function"].as_str().unwrap_or_default().to_string();
-    let env = params["env"].as_str().unwrap_or_default().to_string();
-    let input = params.get("input").cloned().unwrap_or_else(|| json!({}));
-    let principal = principals::principal_of(cx.state, conn);
+    // A call for a session runs as the session (spec 25.1): its agent's, or a client's naming it.
+    let acting = match cx
+        .state
+        .principals
+        .conns
+        .get(conn)
+        .and_then(|c| c.session.clone())
+    {
+        Some(s) => Some(s),
+        None => match params["session"].as_str() {
+            Some(s) => {
+                if let Err(e) = principals::check_session(cx.state, conn, Scope::Read, s) {
+                    return Reply::Now(Err(e));
+                }
+                Some(s.to_string())
+            }
+            None => None,
+        },
+    };
+    let principal = acting
+        .clone()
+        .unwrap_or_else(|| principals::principal_of(cx.state, conn));
     let key = params["key"].as_str().map(|k| (principal.clone(), k.to_string()));
     if let Some(done) = key.as_ref().and_then(|k| cx.state.functions.keys.get(k)) {
         return Reply::Now(Ok(done.clone()));
     }
+    let is_session_function = SESSION_FUNCTIONS.iter().any(|(n, _, _)| *n == name);
+    if let (Some(session), false) = (&acting, is_session_function) {
+        if let Some(rid) = key.as_ref().and_then(|k| cx.state.functions.approval_keys.get(k)) {
+            // Asked again while the approval is open or the approved call runs (27.2).
+            return Reply::Now(Ok(pending(rid)));
+        }
+        let env = params["env"].as_str().unwrap_or_default().to_string();
+        let spec = cx.state.functions.runtime.get(&name).cloned().or_else(|| {
+            cx.state
+                .functions
+                .provided
+                .get(&(name.clone(), env))
+                .map(|(_, s)| s.clone())
+        });
+        if let Some(spec) = spec {
+            let ceiling = ceiling_of(cx.state, session);
+            if let Some(patterns) = ceiling["functions"].as_array() {
+                let allowed = patterns
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|p| matches(p, &name));
+                if !allowed {
+                    return Reply::Now(Err(RpcError::new(
+                        -32003,
+                        format!("{name} is outside the session's ceiling"),
+                    )
+                    .with_data(json!({ "reason": "ceiling", "function": name }))));
+                }
+            }
+            let level = spec["level"].as_str().unwrap_or("host");
+            let above = level_rank(level) > session_level(cx.state, session, &ceiling);
+            let unlisted = ceiling["effects"].as_array().is_some_and(|listed| {
+                spec["effects"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|e| *e != "read")
+                    .any(|e| !listed.contains(e))
+            });
+            if above || unlisted {
+                return open_approval(cx, conn, id, session, &spec, params, key);
+            }
+        }
+    }
+    run_call(cx, conn, id, params, key, &principal)
+}
+
+/// The `pending_approval` error result for an approval that is still open (27.2).
+fn pending(request: &str) -> Value {
+    json!({ "error": { "code": "pending_approval", "message": "the call waits for an approval",
+        "request": request } })
+}
+
+/// Opens a request for a call that needs one, and waits within the time limit (E5, 27.2).
+fn open_approval(
+    cx: &mut Cx,
+    conn: &str,
+    id: Option<&RequestId>,
+    session: &str,
+    spec: &Value,
+    params: Value,
+    key: Option<(String, String)>,
+) -> Reply {
+    let rid = cx.ids.next("req");
+    let name = spec["name"].as_str().unwrap_or_default();
+    let level = match spec["level"].as_str() {
+        Some("read") => "read",
+        Some("write") => "write",
+        Some("network" | "sandboxed") => "sandboxed",
+        _ => "host",
+    };
+    let request = json!({
+        "id": rid,
+        "session": session,
+        "path": crate::directory::path_of(cx.state, session),
+        "kind": "approval",
+        "title": format!("Call {name}?"),
+        "description": spec["description"],
+        "subject": { "type": "function", "function": name, "input": params.get("input").cloned().unwrap_or_else(|| json!({})) },
+        "level": level,
+        "choices": [
+            { "id": "allow", "label": "Allow", "intent": "allow", "scope": "once" },
+            { "id": "deny", "label": "Deny", "intent": "deny", "scope": "once" },
+        ],
+        "blocking": false,
+        "answerable": "message",
+        "notify": "normal",
+        "status": "open",
+    });
+    let request: parrot_proto::request::Request = match serde_json::from_value(request) {
+        Ok(r) => r,
+        Err(e) => {
+            return Reply::Now(Err(RpcError::new(
+                -32603,
+                format!("cannot open the request: {e}"),
+            )));
+        }
+    };
+    cx.state.requests.by_id.insert(
+        rid.clone(),
+        crate::requests::RequestRecord {
+            request,
+            binding: String::new(),
+            key: rid.clone(),
+            conn: None,
+            expires_ms: None,
+            pending: None,
+            answer_key: None,
+        },
+    );
+    crate::requests::publish_request(cx, &rid);
+    let wait = params["timeout"]
+        .as_u64()
+        .map(|s| s.saturating_mul(1000))
+        .unwrap_or(u64::MAX)
+        .min(cx.state.functions.wait_ms.unwrap_or(MAX_WAIT_MS));
+    let deadline_ms = cx.now_ms + wait;
+    cx.emit(Effect::TimerAt { at_ms: deadline_ms });
+    if let Some(k) = &key {
+        cx.state.functions.approval_keys.insert(k.clone(), rid.clone());
+    }
+    cx.state.functions.approvals.insert(
+        rid.clone(),
+        Approval {
+            session: session.to_string(),
+            waiting: id.map(|id| (conn.to_string(), id.clone())),
+            conn: conn.to_string(),
+            key,
+            params,
+            deadline_ms,
+            status: ApprovalStatus::Open,
+        },
+    );
+    if id.is_some() {
+        Reply::Later
+    } else {
+        Reply::Now(Ok(pending(&rid)))
+    }
+}
+
+/// Answers to the requests of function approvals, before the requests module sees them: they
+/// have no binding to answer.
+pub fn intercept(
+    cx: &mut Cx,
+    conn: &str,
+    _id: Option<&RequestId>,
+    method: &str,
+    params: &Value,
+) -> Option<Reply> {
+    if method != "request/answer" {
+        return None;
+    }
+    let rid = params["request"].as_str()?.to_string();
+    let approval = cx.state.functions.approvals.get(&rid)?.clone();
+    if let Err(e) = principals::check_session(cx.state, conn, Scope::Answer, &approval.session) {
+        return Some(Reply::Now(Err(e)));
+    }
+    if approval.status != ApprovalStatus::Open {
+        return Some(Reply::Now(Err(RpcError::new(-32013, "already answered"))));
+    }
+    let answer: parrot_proto::request::Answer = match serde_json::from_value(params["answer"].clone()) {
+        Ok(a) => a,
+        Err(e) => {
+            return Some(Reply::Now(Err(RpcError::new(
+                -32602,
+                format!("invalid params: {e}"),
+            ))));
+        }
+    };
+    let allow = answer.choice.as_deref() == Some("allow");
+    let by = principals::principal_of(cx.state, conn);
+    if let Some(rec) = cx.state.requests.by_id.get_mut(&rid) {
+        rec.request.status = parrot_proto::request::RequestStatus::Answered;
+        rec.request.answer = Some(answer);
+        rec.request.answered_by = Some(by);
+    }
+    crate::requests::publish_request(cx, &rid);
+    let a = cx.state.functions.approvals.get_mut(&rid)?;
+    if allow {
+        a.status = ApprovalStatus::Running;
+        let (waiting, key, params, caller) =
+            (a.waiting.take(), a.key.clone(), a.params.clone(), a.conn.clone());
+        let (wconn, wid) = match waiting {
+            Some((c, i)) => (c, Some(i)),
+            None => (caller, None),
+        };
+        let principal = approval.session.clone();
+        match run_call(cx, &wconn, wid.as_ref(), params, key.clone(), &principal) {
+            Reply::Now(result) => finish_approved(cx, &rid, key, wconn, wid, result),
+            Reply::Later => {}
+        }
+    } else {
+        a.status = ApprovalStatus::Denied;
+        let denied = error_result("denied", "the call was denied");
+        if let Some(k) = a.key.clone() {
+            cx.state.functions.keys.insert(k.clone(), denied.clone());
+            cx.state.functions.approval_keys.remove(&k);
+        }
+        if let Some((c, i)) = a.waiting.take() {
+            cx.reply(&c, i, Ok(denied));
+        }
+    }
+    Some(Reply::Now(Ok(json!({}))))
+}
+
+/// An approved call that answered at once.
+fn finish_approved(
+    cx: &mut Cx,
+    rid: &str,
+    key: Option<(String, String)>,
+    conn: String,
+    id: Option<RequestId>,
+    result: Result<Value, RpcError>,
+) {
+    let result = result.unwrap_or_else(|e| error_result(&e.code.to_string(), &e.message));
+    if let Some(k) = key {
+        cx.state.functions.keys.insert(k.clone(), result.clone());
+        cx.state.functions.approval_keys.remove(&k);
+    }
+    cx.state.functions.approvals.remove(rid);
+    if let Some(id) = id {
+        cx.reply(&conn, id, Ok(result));
+    }
+}
+
+/// Time passed: callers whose approval is still open get `pending_approval` (27.2).
+pub fn tick(cx: &mut Cx) {
+    let now = cx.now_ms;
+    let due: Vec<(String, (String, RequestId))> = cx
+        .state
+        .functions
+        .approvals
+        .iter_mut()
+        .filter(|(_, a)| a.deadline_ms <= now && a.status == ApprovalStatus::Open)
+        .filter_map(|(rid, a)| a.waiting.take().map(|w| (rid.clone(), w)))
+        .collect();
+    for (rid, (conn, id)) in due {
+        cx.reply(&conn, id, Ok(pending(&rid)));
+    }
+}
+
+/// Runs a call that may run: a session function, a runtime function or a client's.
+fn run_call(
+    cx: &mut Cx,
+    conn: &str,
+    id: Option<&RequestId>,
+    params: Value,
+    key: Option<(String, String)>,
+    principal: &str,
+) -> Reply {
+    let name = params["function"].as_str().unwrap_or_default().to_string();
+    let env = params["env"].as_str().unwrap_or_default().to_string();
+    let input = params.get("input").cloned().unwrap_or_else(|| json!({}));
     // The session functions are projections of protocol methods, called as the caller.
     if let Some((_, method, _)) = SESSION_FUNCTIONS.iter().find(|(n, _, _)| *n == name) {
         let mut p = input;
@@ -266,7 +612,7 @@ fn function_call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value)
             Reply::Now(r) => {
                 let result = match r {
                     Ok(output) => json!({ "output": output }),
-                    Err(e) => json!({ "error": { "code": e.code.to_string(), "message": e.message } }),
+                    Err(e) => error_result(&e.code.to_string(), &e.message),
                 };
                 if let Some(k) = key {
                     cx.state.functions.keys.insert(k, result.clone());
@@ -309,9 +655,7 @@ fn function_call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value)
     if !env.is_empty() {
         forwarded["env"] = json!(env);
     }
-    if let Some(s) = params.get("session") {
-        forwarded["session"] = s.clone();
-    } else if principal.starts_with("ses_") {
+    if principal.starts_with("ses_") {
         forwarded["session"] = json!(principal);
     }
     cx.emit(Effect::ClientCall {
@@ -342,7 +686,10 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
         Err(e) => json!({ "error": { "code": e.code.to_string(), "message": e.message } }),
     };
     if let Some(k) = p.key {
-        cx.state.functions.keys.insert(k, result.clone());
+        cx.state.functions.keys.insert(k.clone(), result.clone());
+        if let Some(rid) = cx.state.functions.approval_keys.remove(&k) {
+            cx.state.functions.approvals.remove(&rid);
+        }
     }
     if let Some(id) = p.id {
         cx.reply(&p.conn, id, Ok(result));

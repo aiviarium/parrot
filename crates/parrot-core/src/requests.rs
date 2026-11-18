@@ -74,7 +74,7 @@ pub fn derive_id(session: &str, binding: &str, kind: &str, key: &str) -> String 
 }
 
 /// Persist and publish a request as it now stands.
-fn publish_request(cx: &mut Cx, id: &str) {
+pub(crate) fn publish_request(cx: &mut Cx, id: &str) {
     let Some(rec) = cx.state.requests.by_id.get(id) else {
         return;
     };
