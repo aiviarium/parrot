@@ -1349,7 +1349,11 @@ dependencies = [
 name = "parrot-guard"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "tempfile",
  "thiserror 2.0.21",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
