@@ -6,6 +6,11 @@ use parrot_driver_codex::fake;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The version of the recorded traces the fake replays.
+    if args.iter().any(|a| a == "--version") {
+        println!("codex-cli 0.167.1");
+        return;
+    }
     let Some(path) = fake::scenario_arg(&args).or_else(|| std::env::var(fake::SCENARIO_ENV).ok()) else {
         eprintln!("fake-codex: give --scenario <path> or set {}", fake::SCENARIO_ENV);
         std::process::exit(64);

@@ -175,7 +175,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent()],
+                agents: vec![probed(&self.config.claude_bin).await],
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/fork" => {
@@ -630,6 +630,10 @@ pub fn agent() -> Agent {
     features.insert("functions.mcp".into(), json!({}));
     features.insert("session.history".into(), json!({}));
     features.insert("session.fork".into(), json!({"at": ["turn"]}));
+    features.insert(
+        "session.subagents".into(),
+        json!({"prompt": false, "cancel": false}),
+    );
     Agent {
         id: "claude".into(),
         env: String::new(),
@@ -658,6 +662,61 @@ pub fn agent() -> Agent {
         meta: None,
         extra: Map::new(),
     }
+}
+
+/// The Claude Code versions the driver was checked against: at least the first, below the second.
+pub const VERIFIED: (&str, &str) = ("2.1.0", "2.2.0");
+
+/// [`agent`] with what the CLI and its config files tell without a session: the version, sign-in,
+/// skills and MCP server names. What can't be found out is left out.
+pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
+    use parrot_driver::probe;
+    let mut a = agent();
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".claude")));
+    match probe::version(bin).await {
+        Some(v) => {
+            a.harness = Some(parrot_proto::agent::HarnessInfo {
+                verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
+                version: v,
+            })
+        }
+        None => {
+            a.installed = false;
+            a.usable = false;
+            a.detail = Some("claude --version did not answer".into());
+        }
+    }
+    let credentials = config
+        .as_ref()
+        .is_some_and(|c| c.join(".credentials.json").is_file());
+    if credentials || std::env::var_os("ANTHROPIC_API_KEY").is_some() {
+        a.auth = AuthStatus::SignedIn;
+    }
+    let mut meta = Map::new();
+    if let Some(c) = &config {
+        let skills = probe::folders_with(&c.join("skills"), "SKILL.md");
+        if !skills.is_empty() {
+            meta.insert("skills".into(), json!(skills));
+        }
+    }
+    // `~/.claude.json` holds the user's MCP servers; only their names are read.
+    let state = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(d) => Some(std::path::PathBuf::from(d).join(".claude.json")),
+        None => home.map(|h| h.join(".claude.json")),
+    };
+    if let Some(f) = state {
+        let servers = probe::json_keys(&f, "mcpServers");
+        if !servers.is_empty() {
+            meta.insert("mcpServers".into(), json!(servers));
+        }
+    }
+    if !meta.is_empty() {
+        a.meta = Some(meta);
+    }
+    a
 }
 
 /// The current time in RFC 3339, UTC, to the millisecond.

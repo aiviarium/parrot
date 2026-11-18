@@ -2,5 +2,6 @@
 
 pub mod correlate;
 pub mod host;
+pub mod probe;
 pub mod process;
 pub mod traits;

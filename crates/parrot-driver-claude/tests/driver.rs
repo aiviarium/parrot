@@ -339,6 +339,8 @@ async fn answer_sends_running_before_the_turn_ends_and_options_still_apply() {
 async fn recorded_trace_plays_end_to_end() {
     let mut c = Client::start("../parrot-conform/fixtures/traces/claude-2.1.327.jsonl");
     c.bind().await;
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["verified"], true, "{agents}");
     let r = c
         .call(
             "binding/prompt",

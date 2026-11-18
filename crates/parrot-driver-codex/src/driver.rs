@@ -264,7 +264,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent()],
+                agents: vec![probed(&self.config.codex_bin).await],
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/fork" => {
@@ -892,6 +892,51 @@ pub fn agent() -> Agent {
         meta: None,
         extra: Map::new(),
     }
+}
+
+/// The Codex versions the driver was checked against: at least the first, below the second.
+pub const VERIFIED: (&str, &str) = ("0.167.0", "0.168.0");
+
+/// [`agent`] with what the CLI and its config files tell without a session: the version, sign-in,
+/// skills and MCP server names. What can't be found out is left out.
+pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
+    use parrot_driver::probe;
+    let mut a = agent();
+    let home = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".codex")));
+    match probe::version(bin).await {
+        Some(v) => {
+            a.harness = Some(parrot_proto::agent::HarnessInfo {
+                verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
+                version: v,
+            })
+        }
+        None => {
+            a.installed = false;
+            a.usable = false;
+            a.detail = Some("codex --version did not answer".into());
+        }
+    }
+    let auth_file = home.as_ref().is_some_and(|h| h.join("auth.json").is_file());
+    if auth_file || std::env::var_os("OPENAI_API_KEY").is_some() {
+        a.auth = AuthStatus::SignedIn;
+    }
+    let mut meta = Map::new();
+    if let Some(h) = &home {
+        let skills = probe::folders_with(&h.join("skills"), "SKILL.md");
+        if !skills.is_empty() {
+            meta.insert("skills".into(), json!(skills));
+        }
+        let servers = probe::toml_tables(&h.join("config.toml"), "mcp_servers");
+        if !servers.is_empty() {
+            meta.insert("mcpServers".into(), json!(servers));
+        }
+    }
+    if !meta.is_empty() {
+        a.meta = Some(meta);
+    }
+    a
 }
 
 /// The current time in RFC 3339, UTC, to the millisecond.

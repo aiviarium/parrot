@@ -438,6 +438,8 @@ async fn frames_rebuild_the_same_items() {
 async fn recorded_trace_plays_end_to_end() {
     let mut c = Client::start("../parrot-conform/fixtures/traces/codex-0.167.1.jsonl");
     let start = c.bind(json!({})).await;
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["verified"], true, "{agents}");
     assert!(start["ref"]["id"].is_string());
     let r = c
         .call(
