@@ -36,6 +36,9 @@ enum Command {
         /// A loopback address to serve WebSocket on, such as `127.0.0.1:7777`.
         #[arg(long)]
         ws: Option<String>,
+        /// An address to accept links on over TCP, such as `0.0.0.0:7421`.
+        #[arg(long)]
+        link_listen: Option<String>,
     },
     /// Relays standard input and output to the local runtime's socket.
     Connect {
@@ -83,7 +86,11 @@ fn main() {
         Command::Eggs(args) => block_on(eggs::run(args)),
         Command::Probe(args) => block_on(probe::run(args)),
         Command::Acp(args) => block_on(acp::run(args)),
-        Command::Serve { state_dir, ws } => block_on(serve::run(state_dir, ws)),
+        Command::Serve {
+            state_dir,
+            ws,
+            link_listen,
+        } => block_on(serve::run(state_dir, ws, link_listen)),
         Command::Connect { socket, link } => block_on(connect::run(socket, link)),
         Command::Driver { name } => block_on(driver::run(name)),
     };
