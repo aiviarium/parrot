@@ -109,8 +109,10 @@ jobs:
         with:
           shared-key: platform-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build the workspace
-        run: cargo build --locked --workspace
+      # The tests build the workspace binaries and examples they need through a helper, which
+      # would otherwise run cargo, holding the lock, inside several test processes at once.
+      - name: Build the workspace, its tests and its examples
+        run: cargo build --locked --workspace --tests --examples
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
