@@ -239,14 +239,25 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
     {
         connection["sessions"] = json!(s);
     }
+    // The profiles this runtime implements (40); `desktop` only where the host has a desktop.
+    let mut features = json!({
+        "profile.core": {}, "profile.tree": {}, "profile.seed": {}, "profile.link": {}, "profile.remote": {},
+        "profile.tui": {}, "x.parrot/actAs": {},
+    });
+    if cx
+        .state
+        .functions
+        .runtime
+        .keys()
+        .any(|n| n.starts_with("parrot.desktop."))
+    {
+        features["profile.desktop"] = json!({});
+    }
     Ok(json!({
         "protocol": protocol,
         "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
         "runtime": { "id": cx.state.principals.runtime, "env": cx.state.principals.env },
-        "features": {
-            "profile.core": {}, "profile.tree": {}, "profile.seed": {}, "profile.link": {}, "profile.remote": {},
-            "profile.desktop": {}, "profile.tui": {}, "x.parrot/actAs": {},
-        },
+        "features": features,
         "connection": connection,
     }))
 }

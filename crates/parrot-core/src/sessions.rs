@@ -444,6 +444,11 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "session/delete" => delete(cx, conn, params),
         "session/screen" => return tui_call(cx, conn, id, params, "binding/screen"),
         "session/keys" => return tui_call(cx, conn, id, params, "binding/keys"),
+        // Adopting harness sessions (9.5) is outside the implemented profiles (40).
+        "session/discover" | "session/adopt" => {
+            Err(RpcError::new(-32001, format!("{method} is not implemented"))
+                .with_data(json!({ "feature": "session.history" })))
+        }
         "env/list" => check(cx.state, conn, Scope::Read).map(|()| json!({ "envs": [env_json(cx.state)] })),
         _ => Err(RpcError::new(-32601, format!("method not found: {method}"))),
     };
