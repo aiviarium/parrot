@@ -224,3 +224,15 @@ mod windows {
         }
     }
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::windows::{default_pipe_name, user_sid};
+
+    #[test]
+    fn the_pipe_is_named_for_the_current_user() {
+        let sid = user_sid().expect("the process has a user token");
+        assert!(sid.starts_with("S-1-"), "{sid}");
+        assert_eq!(default_pipe_name().unwrap(), format!(r"\\.\pipe\parrot-{sid}"));
+    }
+}

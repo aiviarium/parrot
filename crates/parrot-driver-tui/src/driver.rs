@@ -936,7 +936,7 @@ impl Binding {
     async fn stop(&self) {
         if self.pty.try_wait().is_none() {
             // A hang-up is what a closed terminal sends; most TUIs exit on it.
-            let _ = self.pty.signal(rustix::process::Signal::HUP);
+            let _ = self.pty.signal(parrot_term::Signal::Hangup);
             if tokio::time::timeout(STOP_GRACE, self.pty.wait()).await.is_err() {
                 self.kill();
             }

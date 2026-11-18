@@ -107,10 +107,35 @@ fn other<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
 }
 
+/// A signal sent to a running process, named so that every OS spells it the same.
+///
+/// Unix sends the signal to the process. Windows has no signals: an interrupt is Ctrl+C on the
+/// pseudoconsole, and the others end the process tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    Interrupt,
+    Terminate,
+    Hangup,
+}
+
+impl Signal {
+    #[cfg(unix)]
+    fn native(self) -> rustix::process::Signal {
+        match self {
+            Signal::Interrupt => rustix::process::Signal::INT,
+            Signal::Terminate => rustix::process::Signal::TERM,
+            Signal::Hangup => rustix::process::Signal::HUP,
+        }
+    }
+}
+
 /// A running process on a PTY.
 pub struct Pty {
     pid: Option<u32>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
+    /// The PTY input side, kept here so Windows can type Ctrl+C into the pseudoconsole.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    control: Arc<Mutex<Box<dyn Write + Send>>>,
     exit: watch::Receiver<Option<ExitStatus>>,
 }
 
@@ -148,7 +173,8 @@ pub fn spawn(cmd: &PtyCommand) -> io::Result<(Pty, PtySource, PtySink)> {
     let pid = child.process_id();
     let killer = child.clone_killer();
     let mut reader = pair.master.try_clone_reader().map_err(other)?;
-    let writer = pair.master.take_writer().map_err(other)?;
+    let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+        Arc::new(Mutex::new(pair.master.take_writer().map_err(other)?));
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
     std::thread::Builder::new()
@@ -191,11 +217,12 @@ pub fn spawn(cmd: &PtyCommand) -> io::Result<(Pty, PtySource, PtySink)> {
         Pty {
             pid,
             killer: Mutex::new(killer),
+            control: writer.clone(),
             exit: exit_rx,
         },
         PtySource { rx },
         PtySink {
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
             master: Arc::new(Mutex::new(pair.master)),
         },
     ))
@@ -206,13 +233,27 @@ impl Pty {
         self.pid
     }
 
-    /// Sends a signal to the process.
-    pub fn signal(&self, signal: rustix::process::Signal) -> io::Result<()> {
-        let pid = self
-            .pid
-            .and_then(|p| rustix::process::Pid::from_raw(p as i32))
-            .ok_or_else(|| io::Error::other("no pid"))?;
-        rustix::process::kill_process(pid, signal).map_err(io::Error::from)
+    /// Sends `signal` to the process, or as close to it as the OS allows.
+    pub fn signal(&self, signal: Signal) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let pid = self
+                .pid
+                .and_then(|p| rustix::process::Pid::from_raw(p as i32))
+                .ok_or_else(|| io::Error::other("no pid"))?;
+            rustix::process::kill_process(pid, signal.native()).map_err(io::Error::from)
+        }
+        #[cfg(windows)]
+        match signal {
+            // A pseudoconsole has no console control handler to signal, so Ctrl+C is the byte
+            // the terminal would send for it.
+            Signal::Interrupt => {
+                let mut w = self.control.lock().map_err(other)?;
+                w.write_all(b"\x03")?;
+                w.flush()
+            }
+            Signal::Terminate | Signal::Hangup => self.kill(),
+        }
     }
 
     /// Kills the process.

@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsStr;
+use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +49,9 @@ pub struct Process {
 
 impl Process {
     /// Spawns `program` with `args` and extra `env`, in its own process group on Unix.
+    ///
+    /// A bare name is resolved first ([`crate::paths::resolve_cli`]) so that Windows finds the
+    /// `.cmd` or `.ps1` shim a package manager installed.
     pub fn spawn<I, S, E, K, V>(program: impl AsRef<OsStr>, args: I, env: E) -> std::io::Result<Self>
     where
         I: IntoIterator<Item = S>,
@@ -56,7 +60,9 @@ impl Process {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        let mut cmd = Command::new(program);
+        let program = program.as_ref();
+        let resolved = crate::paths::resolve_cli(&program.to_string_lossy());
+        let mut cmd = Command::new(resolved.as_deref().unwrap_or(Path::new(program)));
         cmd.args(args)
             .envs(env)
             .stdin(Stdio::piped())
