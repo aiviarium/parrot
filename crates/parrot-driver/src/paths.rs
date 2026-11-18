@@ -52,10 +52,15 @@ const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.PS1";
 /// On Windows an npm or bun install leaves `foo.cmd`, `foo.ps1` and `foo` shims but no
 /// `foo.exe`, so the name alone does not resolve. Returns `None` when nothing matches.
 pub fn resolve_cli(name: &str) -> Option<PathBuf> {
+    resolve_cli_os(OsStr::new(name))
+}
+
+/// [`resolve_cli`] for a name that need not be UTF-8.
+pub fn resolve_cli_os(name: &OsStr) -> Option<PathBuf> {
     let path = env::var_os("PATH");
     let pathext = env::var_os("PATHEXT");
     resolve_in(
-        OsStr::new(name),
+        name,
         &Search {
             path: path.as_deref(),
             pathext: pathext.as_deref(),
@@ -239,6 +244,7 @@ mod tests {
         assert_eq!(resolve_in(OsStr::new("missing"), &search), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn unix_skips_a_file_that_is_not_executable() {
         let dir = tempfile::tempdir().unwrap();

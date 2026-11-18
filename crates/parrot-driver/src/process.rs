@@ -61,7 +61,7 @@ impl Process {
         V: AsRef<OsStr>,
     {
         let program = program.as_ref();
-        let resolved = crate::paths::resolve_cli(&program.to_string_lossy());
+        let resolved = crate::paths::resolve_cli_os(program);
         let mut cmd = Command::new(resolved.as_deref().unwrap_or(Path::new(program)));
         cmd.args(args)
             .envs(env)
