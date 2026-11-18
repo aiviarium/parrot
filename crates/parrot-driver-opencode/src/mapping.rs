@@ -62,6 +62,8 @@ pub struct MapState {
     pub data: DriverData,
     /// Token and cost totals over the whole session.
     usage: Usage,
+    /// Token and cost totals of the turn running now; its turn update reports these.
+    turn_usage: Usage,
     last_error: Option<String>,
     unnamed: u64,
 }
@@ -80,6 +82,7 @@ impl MapState {
             requests: BTreeMap::new(),
             data,
             usage: Usage::default(),
+            turn_usage: Usage::default(),
             last_error: None,
             unnamed: 1,
         }
@@ -289,6 +292,7 @@ impl MapState {
 
     fn begin_turn(&mut self, input: Option<MessageId>, now: &str) -> Vec<DriverUpdate> {
         self.turns += 1;
+        self.turn_usage = Usage::default();
         let turn = TurnState {
             key: format!("turn-{}", self.turns),
             input,
@@ -420,13 +424,22 @@ impl MapState {
             }
             "session.step.ended" => {
                 if let Some(tokens) = data.get("tokens") {
-                    self.add_usage(tokens, data.get("cost"));
-                    out.push(self.usage_update());
+                    // The runtime adds every usage update, so a report is the step's own tokens.
+                    let delta = self.add_usage(tokens, data.get("cost"));
+                    out.push(self.update(DriverUpdateKind::Usage { usage: delta }));
                 }
             }
             "session.usage.updated" => {
-                self.set_usage(data.get("tokens"), data.get("cost"));
-                out.push(self.usage_update());
+                // The session totals opencode reports are absolute; only the context is not
+                // already known from the steps.
+                if let Some(context) = self.set_usage(data.get("tokens")) {
+                    out.push(self.update(DriverUpdateKind::Usage {
+                        usage: Usage {
+                            context: Some(context),
+                            ..Default::default()
+                        },
+                    }));
+                }
             }
             "session.execution.succeeded" => out.extend(self.settled(None, now)),
             "session.execution.failed" => {
@@ -638,12 +651,7 @@ impl MapState {
         let resources: Vec<String> = data
             .get("resources")
             .and_then(Value::as_array)
-            .map(|r| {
-                r.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
+            .map(|r| r.iter().filter_map(Value::as_str).map(str::to_owned).collect())
             .unwrap_or_default();
         let title = data
             .get("message")
@@ -662,10 +670,7 @@ impl MapState {
             item: None,
             kind: Open::Known(RequestKind::Approval),
             title,
-            description: data
-                .get("message")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            description: data.get("message").and_then(Value::as_str).map(str::to_owned),
             subject: Some(Open::Known(Subject::Tool {
                 tool: action.clone(),
                 input: json!({"resources": resources}),
@@ -710,104 +715,50 @@ impl MapState {
         ]
     }
 
-    /// Adds one step's tokens and cost to the session totals.
-    fn add_usage(&mut self, tokens: &Value, cost: Option<&Value>) {
-        let mut totals = self.usage.tokens.clone().unwrap_or_default();
-        totals.input += tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
-        totals.output += tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
-        let reasoning = tokens.get("reasoning").and_then(Value::as_u64).unwrap_or(0);
-        if reasoning > 0 {
-            totals.reasoning = Some(totals.reasoning.unwrap_or(0) + reasoning);
-        }
-        let cache = tokens.get("cache");
-        let read = cache
-            .and_then(|c| c.get("read"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let write = cache
-            .and_then(|c| c.get("write"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        if read > 0 {
-            totals.cache_read = Some(totals.cache_read.unwrap_or(0) + read);
-        }
-        if write > 0 {
-            totals.cache_write = Some(totals.cache_write.unwrap_or(0) + write);
-        }
-        self.usage.tokens = Some(totals);
-        let amount = self.usage.cost.as_ref().map(|c| c.amount).unwrap_or(0.0)
-            + cost.and_then(Value::as_f64).unwrap_or(0.0);
-        if amount > 0.0 {
-            self.usage.cost = Some(Cost {
-                amount,
-                currency: "USD".into(),
-            });
-        }
-        self.set_context();
-    }
-
-    /// Replaces the totals with the session totals opencode reports.
-    fn set_usage(&mut self, tokens: Option<&Value>, cost: Option<&Value>) {
-        let Some(tokens) = tokens else { return };
-        let read = tokens
-            .get("cache")
-            .and_then(|c| c.get("read"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let write = tokens
-            .get("cache")
-            .and_then(|c| c.get("write"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        self.usage.tokens = Some(parrot_proto::usage::TokenUsage {
-            input: tokens.get("input").and_then(Value::as_u64).unwrap_or(0),
-            output: tokens.get("output").and_then(Value::as_u64).unwrap_or(0),
-            cache_read: (read > 0).then_some(read),
-            cache_write: (write > 0).then_some(write),
-            reasoning: tokens
-                .get("reasoning")
-                .and_then(Value::as_u64)
-                .filter(|r| *r > 0),
-        });
-        if let Some(amount) = cost.and_then(Value::as_f64)
-            && amount > 0.0
-        {
-            self.usage.cost = Some(Cost {
-                amount,
-                currency: "USD".into(),
-            });
-        }
-        self.set_context();
-    }
-
-    fn set_context(&mut self) {
-        let Some(tokens) = &self.usage.tokens else {
-            return;
+    /// Adds one step's tokens and cost to the session and turn totals, and returns the step's own
+    /// usage, which is what the runtime is told.
+    fn add_usage(&mut self, tokens: &Value, cost: Option<&Value>) -> Usage {
+        let delta = Usage {
+            tokens: Some(token_usage(tokens)),
+            cost: cost
+                .and_then(Value::as_f64)
+                .filter(|c| *c > 0.0)
+                .map(|amount| Cost {
+                    amount,
+                    currency: "USD".into(),
+                }),
+            ..Default::default()
         };
-        let used = tokens.input
-            + tokens.output
-            + tokens.cache_read.unwrap_or(0)
-            + tokens.cache_write.unwrap_or(0);
+        accumulate(&mut self.usage, &delta);
+        accumulate(&mut self.turn_usage, &delta);
+        let mut delta = delta;
+        delta.context = self.context();
+        delta
+    }
+
+    /// Takes the session totals opencode reports, and returns the context they imply.
+    fn set_usage(&mut self, tokens: Option<&Value>) -> Option<ContextUsage> {
+        let tokens = tokens?;
+        self.usage.tokens = Some(token_usage(tokens));
+        self.context()
+    }
+
+    fn context(&self) -> Option<ContextUsage> {
+        let tokens = &self.usage.tokens.as_ref()?;
+        let used =
+            tokens.input + tokens.output + tokens.cache_read.unwrap_or(0) + tokens.cache_write.unwrap_or(0);
         if used == 0 {
-            return;
+            return None;
         }
-        if let Some(window) = self.window() {
-            self.usage.context = Some(ContextUsage { used, window });
-        }
+        Some(ContextUsage {
+            used,
+            window: self.window()?,
+        })
     }
 
     fn window(&self) -> Option<u64> {
         let key = self.model.as_ref()?;
-        self.models
-            .iter()
-            .find(|m| &m.key == key)
-            .and_then(|m| m.context)
-    }
-
-    fn usage_update(&self) -> DriverUpdate {
-        self.update(DriverUpdateKind::Usage {
-            usage: self.usage.clone(),
-        })
+        self.models.iter().find(|m| &m.key == key).and_then(|m| m.context)
     }
 
     /// Ends the open turn, with `cancelled` overriding what the stream says.
@@ -850,12 +801,11 @@ impl MapState {
                 started: turn.started,
                 ended: Some(now.to_owned()),
                 error,
-                usage: Some(self.usage.clone()),
+                usage: Some(self.turn_usage.clone()),
                 meta: None,
                 extra: Map::new(),
             },
         }));
-        out.push(self.usage_update());
         out.push(self.state(State::Idle));
         out
     }
@@ -936,6 +886,55 @@ pub fn map(state: &MapState, event: &Event, now: &str) -> (Vec<DriverUpdate>, Ma
     (updates, next)
 }
 
+/// opencode's token counts as the protocol's.
+fn token_usage(tokens: &Value) -> parrot_proto::usage::TokenUsage {
+    let cache = tokens.get("cache");
+    let read = cache
+        .and_then(|c| c.get("read"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let write = cache
+        .and_then(|c| c.get("write"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    parrot_proto::usage::TokenUsage {
+        input: tokens.get("input").and_then(Value::as_u64).unwrap_or(0),
+        output: tokens.get("output").and_then(Value::as_u64).unwrap_or(0),
+        cache_read: (read > 0).then_some(read),
+        cache_write: (write > 0).then_some(write),
+        reasoning: tokens.get("reasoning").and_then(Value::as_u64).filter(|r| *r > 0),
+    }
+}
+
+/// Adds a usage report to a running total.
+fn accumulate(into: &mut Usage, delta: &Usage) {
+    if let Some(tokens) = &delta.tokens {
+        let mut totals = into.tokens.clone().unwrap_or_default();
+        totals.input += tokens.input;
+        totals.output += tokens.output;
+        totals.reasoning = match (totals.reasoning, tokens.reasoning) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+        totals.cache_read = match (totals.cache_read, tokens.cache_read) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+        totals.cache_write = match (totals.cache_write, tokens.cache_write) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+        into.tokens = Some(totals);
+    }
+    if let Some(cost) = &delta.cost {
+        let amount = into.cost.as_ref().map(|c| c.amount).unwrap_or(0.0) + cost.amount;
+        into.cost = Some(Cost {
+            amount,
+            currency: cost.currency.clone(),
+        });
+    }
+}
+
 fn clip(text: &str) -> String {
     if text.chars().count() > OUTPUT_MAX {
         let mut cut: String = text.chars().take(OUTPUT_MAX).collect();
@@ -947,9 +946,18 @@ fn clip(text: &str) -> String {
 }
 
 fn describe(tool: &str, args: &Value) -> String {
-    let detail = ["command", "path", "filePath", "file_path", "pattern", "query", "url", "description"]
-        .iter()
-        .find_map(|k| args.get(*k).and_then(Value::as_str));
+    let detail = [
+        "command",
+        "path",
+        "filePath",
+        "file_path",
+        "pattern",
+        "query",
+        "url",
+        "description",
+    ]
+    .iter()
+    .find_map(|k| args.get(*k).and_then(Value::as_str));
     match detail {
         Some(d) if !d.is_empty() => format!("{tool}: {d}"),
         _ => tool.to_owned(),
@@ -962,13 +970,7 @@ fn map_of(key: &str, value: Value) -> Map<String, Value> {
     m
 }
 
-fn option(
-    id: &str,
-    role: OptionRole,
-    label: &str,
-    schema: Value,
-    value: Option<String>,
-) -> ConfigOption {
+fn option(id: &str, role: OptionRole, label: &str, schema: Value, value: Option<String>) -> ConfigOption {
     ConfigOption {
         id: id.into(),
         role: Some(Open::Known(role)),

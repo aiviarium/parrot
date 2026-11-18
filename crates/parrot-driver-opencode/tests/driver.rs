@@ -145,23 +145,25 @@ async fn text_then_a_tool_streams_and_goes_idle() {
     c.wait(|u| u["update"]["item"]["append"]["text"] == "Hello ")
         .await;
     let text = c
-        .wait(|u| u["update"]["item"]["kind"] == "assistant" && u["update"]["item"]["set"]["text"] == "Hello there.")
+        .wait(|u| {
+            u["update"]["item"]["kind"] == "assistant" && u["update"]["item"]["set"]["text"] == "Hello there."
+        })
         .await;
     assert_eq!(text["update"]["item"]["streaming"], false);
-    let tool = c
-        .wait(|u| u["update"]["item"]["set"]["status"] == "ok")
-        .await;
+    let tool = c.wait(|u| u["update"]["item"]["set"]["status"] == "ok").await;
     assert_eq!(tool["update"]["item"]["set"]["output"], "ran bash");
     assert!(
         c.updates
             .iter()
             .any(|u| u["update"]["item"]["set"]["tool"] == "bash")
     );
-    let done = c.wait(ended("completed")).await;
-    assert_eq!(done["update"]["turn"]["stop"], "end");
+    // A usage update is the step's own tokens; the runtime adds them up.
     let usage = c.wait(|u| u["update"]["type"] == "usage").await;
     assert_eq!(usage["update"]["usage"]["tokens"]["input"], 10);
     assert_eq!(usage["update"]["usage"]["tokens"]["cacheRead"], 2);
+    let done = c.wait(ended("completed")).await;
+    assert_eq!(done["update"]["turn"]["stop"], "end");
+    assert_eq!(done["update"]["turn"]["usage"]["tokens"]["input"], 10);
     c.wait(is_state("idle")).await;
     // Every event is also a frame, so the raw stream can be stored.
     assert!(
@@ -193,8 +195,7 @@ async fn a_permission_is_answered_over_http() {
     .await;
     c.wait(|u| u["update"]["item"]["set"]["output"] == "allowed")
         .await;
-    c.wait(|u| u["update"]["item"]["set"]["text"] == "It ran.")
-        .await;
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "It ran.").await;
     c.wait(ended("completed")).await;
     c.wait(is_state("idle")).await;
 }
@@ -211,9 +212,7 @@ async fn a_denied_permission_marks_the_tool_failed() {
         json!({"binding": "b1", "request": id, "answer": {"choice": "deny"}}),
     )
     .await;
-    let tool = c
-        .wait(|u| u["update"]["item"]["set"]["status"] == "error")
-        .await;
+    let tool = c.wait(|u| u["update"]["item"]["set"]["status"] == "error").await;
     assert_eq!(tool["update"]["item"]["set"]["output"], "denied");
     c.wait(|u| u["update"]["item"]["set"]["text"] == "It did not run.")
         .await;
@@ -312,9 +311,7 @@ async fn mcp_reaches_opencode_with_the_token_in_the_environment() {
     c.bind_with(json!({"mcp": {"url": "http://127.0.0.1:9/mcp", "token": "test-token-123"}}))
         .await;
     c.prompt("[[mcp]]").await;
-    let tool = c
-        .wait(|u| u["update"]["item"]["set"]["status"] == "ok")
-        .await;
+    let tool = c.wait(|u| u["update"]["item"]["set"]["status"] == "ok").await;
     let output = tool["update"]["item"]["set"]["output"].as_str().unwrap();
     let output: Value = serde_json::from_str(output).expect("the fake reports JSON");
     assert_eq!(output["url"], "http://127.0.0.1:9/mcp");

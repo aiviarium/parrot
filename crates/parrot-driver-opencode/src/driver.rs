@@ -91,11 +91,17 @@ pub fn builtin() -> Sources {
 /// Values the driver needs even when a data file leaves them out.
 pub fn default_data() -> DriverData {
     let mut data = DriverData {
-        levels: vec![PermissionLevel::Read, PermissionLevel::Write, PermissionLevel::Host],
+        levels: vec![
+            PermissionLevel::Read,
+            PermissionLevel::Write,
+            PermissionLevel::Host,
+        ],
         ..Default::default()
     };
     // opencode asks before these tools run; the level is what the request is judged by (spec 15.2).
-    for tool in ["read", "grep", "glob", "list", "edit", "write", "patch", "bash", "webfetch", "task"] {
+    for tool in [
+        "read", "grep", "glob", "list", "edit", "write", "patch", "bash", "webfetch", "task",
+    ] {
         let level = match tool {
             "read" | "grep" | "glob" | "list" => PermissionLevel::Read,
             "edit" | "write" | "patch" => PermissionLevel::Write,
@@ -237,7 +243,11 @@ impl Driver {
                 let session = b.session_id()?;
                 let answer = b
                     .client
-                    .request("POST", &format!("/api/session/{session}/interrupt"), Some(&json!({})))
+                    .request(
+                        "POST",
+                        &format!("/api/session/{session}/interrupt"),
+                        Some(&json!({})),
+                    )
                     .await;
                 let interrupted = answer
                     .as_ref()
@@ -291,7 +301,10 @@ impl Driver {
                                 .find(|m| m.enabled && m.provider == provider)
                                 .map(|m| m.key.clone());
                             let Some(model) = model else {
-                                return Err(RpcError::new(-32602, format!("no model for provider {provider}")));
+                                return Err(RpcError::new(
+                                    -32602,
+                                    format!("no model for provider {provider}"),
+                                ));
                             };
                             self.switch_model(&b, &model).await?;
                         }
@@ -344,9 +357,15 @@ impl Driver {
                 let session = b.session_id()?;
                 if p.action == "compact" {
                     b.client
-                        .request("POST", &format!("/api/session/{session}/compact"), Some(&json!({})))
+                        .request(
+                            "POST",
+                            &format!("/api/session/{session}/compact"),
+                            Some(&json!({})),
+                        )
                         .await
-                        .map_err(|e| RpcError::new(-32603, format!("opencode refused the compaction: {e}")))?;
+                        .map_err(|e| {
+                            RpcError::new(-32603, format!("opencode refused the compaction: {e}"))
+                        })?;
                 } else {
                     let text = match (&p.args, &p.input) {
                         (Some(args), _) if !args.trim().is_empty() => args.trim().to_owned(),
@@ -602,6 +621,15 @@ impl Binding {
             task.abort();
         }
         let mut child = self.child.lock().await;
+        // The guard forwards SIGTERM to the server's process group; a SIGKILL would leave the server
+        // running because only the guard knows that group.
+        if let Some(pid) = child.id() {
+            #[cfg(unix)]
+            // SAFETY: kill has no memory effects.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+        }
         if let Ok(Ok(_)) = tokio::time::timeout(STOP_GRACE, child.wait()).await {
             return;
         }
@@ -648,7 +676,9 @@ async fn listen(stdout: ChildStdout) -> Result<(String, impl std::future::Future
 /// Reads the event stream until it ends, then reports opencode as lost unless it is stopping.
 async fn read_events(driver: Arc<Driver>, b: Arc<Binding>, mut events: crate::http::EventStream) {
     while let Some(value) = events.next_event().await {
-        let Some(event) = wire::event(&value) else { continue };
+        let Some(event) = wire::event(&value) else {
+            continue;
+        };
         let raised = event.kind == "permission.asked";
         let updates = b.state.lock().unwrap().step(&event, &now());
         driver.emit(updates);
@@ -659,7 +689,11 @@ async fn read_events(driver: Arc<Driver>, b: Arc<Binding>, mut events: crate::ht
     if !b.stopping.load(Ordering::Relaxed) {
         let updates = b.state.lock().unwrap().exited(&now());
         driver.emit(updates);
-        driver.emit(vec![state_update(&b.id, State::Lost, Some("opencode exited".into()))]);
+        driver.emit(vec![state_update(
+            &b.id,
+            State::Lost,
+            Some("opencode exited".into()),
+        )]);
         driver.bindings.lock().unwrap().remove(&b.id);
     }
 }

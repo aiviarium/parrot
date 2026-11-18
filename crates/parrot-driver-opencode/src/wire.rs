@@ -73,10 +73,7 @@ impl Model {
             .and_then(|c| c.get("input"))
             .and_then(Value::as_array)
             .is_some_and(|inputs| inputs.iter().any(|i| i.as_str() == Some("image")));
-        let enabled = value
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
+        let enabled = value.get("enabled").and_then(Value::as_bool).unwrap_or(true);
         Some(Model {
             key: format!("{provider}/{id}"),
             name,
@@ -114,11 +111,7 @@ pub fn providers(value: &Value) -> Vec<Provider> {
             list.iter()
                 .filter_map(|p| {
                     let id = p.get("id").and_then(Value::as_str)?.to_owned();
-                    let name = p
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&id)
-                        .to_owned();
+                    let name = p.get("name").and_then(Value::as_str).unwrap_or(&id).to_owned();
                     Some(Provider { id, name })
                 })
                 .collect()
@@ -142,10 +135,7 @@ pub fn commands(value: &Value) -> Vec<Command> {
             list.iter()
                 .filter_map(|c| {
                     let name = c.get("name").and_then(Value::as_str)?.to_owned();
-                    let description = c
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
+                    let description = c.get("description").and_then(Value::as_str).map(str::to_owned);
                     Some(Command { name, description })
                 })
                 .collect()

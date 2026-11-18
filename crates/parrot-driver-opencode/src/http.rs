@@ -46,12 +46,7 @@ impl Client {
     }
 
     /// Sends a request and reads the whole answer.
-    pub async fn request(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&Value>,
-    ) -> Result<Value, String> {
+    pub async fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
         let (status, body) = self.request_raw(method, path, body, &[]).await?;
         if !(200..300).contains(&status) {
             return Err(format!(

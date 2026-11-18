@@ -123,17 +123,35 @@ impl Fake {
         );
     }
 
+    /// Reports a tool call that ran without asking.
     fn tool(&self, session: &str, message: &str, name: &str, input: Value, output: &str) {
+        let id = self.tool_called(session, message, name, input);
+        self.tool_end(session, message, &id, true, output);
+    }
+
+    fn tool_called(&self, session: &str, message: &str, name: &str, input: Value) -> String {
         let id = self.next_id("call");
         self.emit(
             "session.tool.called",
             json!({"sessionID": session, "assistantMessageID": message, "id": id, "input": input,
                 "executed": true, "native": {"tool": name}}),
         );
+        id
+    }
+
+    fn tool_end(&self, session: &str, message: &str, id: &str, ok: bool, output: &str) {
+        let mut data = json!({"sessionID": session, "assistantMessageID": message, "id": id,
+            "content": [{"type": "text", "text": output}], "executed": true});
+        if !ok {
+            data["error"] = json!({"type": "PermissionDenied", "message": "denied"});
+        }
         self.emit(
-            "session.tool.success",
-            json!({"sessionID": session, "assistantMessageID": message, "id": id,
-                "content": [{"type": "text", "text": output}], "executed": true}),
+            if ok {
+                "session.tool.success"
+            } else {
+                "session.tool.failed"
+            },
+            data,
         );
     }
 
@@ -212,7 +230,13 @@ impl Fake {
         let mut delay = 0u64;
         if tags.is_empty() && session_files > 0 {
             let word = if session_files == 1 { "image" } else { "images" };
-            self.text(&session, &message, &format!("Received {session_files} {word}."), 0, &abort);
+            self.text(
+                &session,
+                &message,
+                &format!("Received {session_files} {word}."),
+                0,
+                &abort,
+            );
         }
         if tags.is_empty() {
             self.text(&session, &message, &format!("You said: {text}"), delay, &abort);
@@ -260,23 +284,29 @@ impl Fake {
                             self.text(&session, &message, "It ran.", delay, &abort);
                         }
                         Some(_) => {
-                            self.permission_tool(&session, &message, action, resource, false);
+                            let id =
+                                self.tool_called(&session, &message, action, json!({"command": resource}));
+                            self.tool_end(&session, &message, &id, false, "denied");
                             self.text(&session, &message, "It did not run.", delay, &abort);
                         }
                         None => break,
                     }
                 }
-                "bash-approval" => match self.permission(&session, "bash", "ls", &abort) {
-                    Some(decision) if decision != "reject" => {
-                        self.permission_tool(&session, &message, "bash", "ls", true);
-                        self.text(&session, &message, "There are two entries.", delay, &abort);
+                "bash-approval" => {
+                    // The tool call is pending when the permission is asked, as opencode reports it.
+                    let id = self.tool_called(&session, &message, "bash", json!({"command": "ls"}));
+                    match self.permission(&session, "bash", "ls", &abort) {
+                        Some(decision) if decision != "reject" => {
+                            self.tool_end(&session, &message, &id, true, "README.md\nsrc");
+                            self.text(&session, &message, "There are two entries.", delay, &abort);
+                        }
+                        Some(_) => {
+                            self.tool_end(&session, &message, &id, false, "denied");
+                            self.text(&session, &message, "I did not run it.", delay, &abort);
+                        }
+                        None => break,
                     }
-                    Some(_) => {
-                        self.permission_tool(&session, &message, "bash", "ls", false);
-                        self.text(&session, &message, "I did not run it.", delay, &abort);
-                    }
-                    None => break,
-                },
+                }
                 "image" => self.text(&session, &message, "I see it.", delay, &abort),
                 "mcp" => {
                     let output = match self.mcp_server() {
@@ -325,25 +355,6 @@ impl Fake {
             return;
         }
         self.end(&session, &message, failed);
-    }
-
-    fn permission_tool(&self, session: &str, message: &str, action: &str, resource: &str, ran: bool) {
-        let id = self.next_id("call");
-        self.emit(
-            "session.tool.called",
-            json!({"sessionID": session, "assistantMessageID": message, "id": id,
-                "input": {"command": resource}, "executed": true, "native": {"tool": action}}),
-        );
-        let content = if ran {
-            json!([{"type": "text", "text": "README.md\nsrc"}])
-        } else {
-            json!([{"type": "text", "text": "denied"}])
-        };
-        self.emit(
-            if ran { "session.tool.success" } else { "session.tool.failed" },
-            json!({"sessionID": session, "assistantMessageID": message, "id": id, "content": content,
-                "error": {"type": "PermissionDenied", "message": "denied"}, "executed": true}),
-        );
     }
 }
 
@@ -576,7 +587,11 @@ fn route(fake: &Arc<Fake>, method: &str, path: &str, body: &Value) -> Option<Val
         }
         ("POST", ["api", "session", id, "prompt"]) => {
             let id = (*id).to_owned();
-            let text = body.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let text = body
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
             let files = body
                 .get("files")
                 .and_then(Value::as_array)
@@ -587,9 +602,11 @@ fn route(fake: &Arc<Fake>, method: &str, path: &str, body: &Value) -> Option<Val
             let session = id.clone();
             tokio::task::spawn_blocking(move || fake.play(session, text, files));
             let steer = body.get("delivery").and_then(Value::as_str) == Some("steer");
-            Some(json!({"data": {"id": source_id("msg", 0), "sessionID": id, "type": "user",
+            Some(
+                json!({"data": {"id": source_id("msg", 0), "sessionID": id, "type": "user",
                 "time": {"created": 0}, "payload": {"text": ""},
-                "delivery": if steer { "steer" } else { "queue" }}}))
+                "delivery": if steer { "steer" } else { "queue" }}}),
+            )
         }
         ("POST", ["api", "session", _, "interrupt"]) => {
             fake.abort.store(true, Ordering::Relaxed);
@@ -621,7 +638,11 @@ fn route(fake: &Arc<Fake>, method: &str, path: &str, body: &Value) -> Option<Val
         }
         ("POST", ["api", "session", id, "command"]) => {
             let id = (*id).to_owned();
-            let name = body.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let name = body
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
             let fake = fake.clone();
             tokio::task::spawn_blocking(move || {
                 fake.play(id, format!("[[text:Ran /{name}.]]"), 0);
