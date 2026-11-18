@@ -6,7 +6,7 @@
 //! asks the hub for them with `Effect::Workspace` operations named `link.*` and answers the
 //! client when the hub has.
 
-use crate::{CallOwner, Cx, Effect, Peer, Reply, principals, sessions};
+use crate::{CallOwner, Cx, Effect, LinkOffer, OfferedSessions, Peer, Reply, principals, sessions};
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use serde_json::{Value, json};
@@ -14,11 +14,15 @@ use std::collections::BTreeMap;
 
 /// How long an offer waits for its commit before it expires and nothing moved (E1).
 pub const OFFER_TTL_MS: u64 = 60_000;
+/// How long a move waits for a running turn to end before it interrupts it (E9).
+pub const TURN_WAIT_MS: u64 = 30_000;
+/// How long a move waits for an interrupted turn to end before it stops the binding anyway.
+pub const INTERRUPT_GRACE_MS: u64 = 5_000;
 /// The largest `blob/put` chunk (spec 24.2).
 pub const CHUNK: usize = 1024 * 1024;
-/// The most a link may have in flight across its unfinished transfers. Transfers are held in
-/// memory until they complete, so an authenticated peer must not be able to grow them unbounded.
-pub const LINK_BLOBS_MAX: usize = 256 * CHUNK;
+/// The most disk a link may fill with its unfinished transfers. Chunks are written to disk as they
+/// arrive, so an authenticated peer must not be able to grow them unbounded.
+pub const LINK_DISK_MAX: u64 = 4096 * CHUNK as u64;
 /// The error code of a session that moved to another runtime.
 pub const MOVED: i64 = -32050;
 
@@ -46,6 +50,34 @@ pub struct Links {
     pub outbox_ids: BTreeMap<String, Vec<String>>,
     /// Sessions that moved here, with the link they came over.
     pub arrived: BTreeMap<String, String>,
+    /// Moves waiting for the session's running turn to end, by session (E9).
+    pub waiting: BTreeMap<String, Waiting>,
+    /// The disk cap of each link's transfers; 0 means [`LINK_DISK_MAX`].
+    pub disk_max: u64,
+}
+
+impl Links {
+    fn disk_cap(&self) -> u64 {
+        if self.disk_max == 0 {
+            LINK_DISK_MAX
+        } else {
+            self.disk_max
+        }
+    }
+}
+
+/// A move whose session was running a turn when it was asked for. It goes on once the session is
+/// idle; after [`TURN_WAIT_MS`] the turn is interrupted (E9).
+#[derive(Debug, Clone)]
+pub struct Waiting {
+    pub conn: String,
+    pub id: Option<RequestId>,
+    pub link: String,
+    pub params: Value,
+    pub deadline_ms: u64,
+    pub interrupted: bool,
+    /// Whether the queue was paused before the move paused it.
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -58,8 +90,23 @@ pub struct PeerInfo {
 pub enum Pending {
     /// A hub operation answering a client call.
     Hub { conn: String, id: Option<RequestId> },
+    /// `link/update`: the link's live connection takes the new grant and offer once stored.
+    LinkUpdate { conn: String, id: Option<RequestId> },
     /// A call forwarded to the session's owner.
     Forward { conn: String, id: Option<RequestId> },
+    /// `binding/cancel` of a turn a move waited for; the move goes on once it is answered, or
+    /// when the session is idle if that comes first. Stopping the old binding ends what is left.
+    Cancel { session: String },
+    /// A chunk written to disk; a failed write spoils its transfer.
+    BlobWrite { transfer: String },
+    /// Reading an offer's log from disk; the offer is answered after.
+    Log {
+        conn: String,
+        id: Option<RequestId>,
+        link: String,
+        params: Value,
+        unpacked: Option<Value>,
+    },
     /// A chunk of a move's log.
     Chunk { session: String },
     /// The offer of a move; the commit follows its answer.
@@ -114,12 +161,15 @@ pub struct Move {
     pub needs_workspace: bool,
 }
 
+/// A transfer arriving from a peer. Its chunks are on disk; the core keeps their sizes.
 #[derive(Debug, Clone, Default)]
 pub struct Blob {
     pub link: String,
-    pub parts: BTreeMap<u64, String>,
+    pub parts: BTreeMap<u64, u64>,
     pub last: Option<u64>,
     pub expires_ms: u64,
+    /// A chunk couldn't be written, so the transfer can't be used.
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -159,13 +209,12 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
             }
             let op = method.replacen('/', ".", 1);
             let call = cx.call_workspace(CallOwner::Links, &op, params);
-            cx.state.links.pending.insert(
-                call,
-                Pending::Hub {
-                    conn: conn.to_string(),
-                    id: id.cloned(),
-                },
-            );
+            let (conn, id) = (conn.to_string(), id.cloned());
+            let pending = match method {
+                "link/update" => Pending::LinkUpdate { conn, id },
+                _ => Pending::Hub { conn, id },
+            };
+            cx.state.links.pending.insert(call, pending);
             Reply::Later
         }
         "token/create" | "token/list" | "token/revoke" => {
@@ -225,6 +274,12 @@ pub fn intercept(
             RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "sessions" }))
         )));
     }
+    if let Some((_, offer)) = principals::link_offer(cx.state, conn) {
+        let offer = offer.clone();
+        if let Err(e) = offered(&offer, method) {
+            return Some(Reply::Now(Err(e)));
+        }
+    }
     if method == "workspace/transfer" {
         return Some(match transfer(cx, conn, id, params) {
             Ok(()) => Reply::Later,
@@ -233,6 +288,9 @@ pub fn intercept(
     }
     let session = params.get("session").and_then(Value::as_str)?.to_string();
     if let Some(runtime) = cx.state.links.moved.get(&session) {
+        if link_of(cx, conn).is_some() && !principals::sees(cx.state, conn, &session) {
+            return Some(Reply::Now(Err(RpcError::new(-32002, "session not found"))));
+        }
         return Some(Reply::Now(Err(RpcError::new(MOVED, "the session moved")
             .with_data(json!({ "runtime": runtime, "session": session })))));
     }
@@ -258,6 +316,33 @@ pub fn intercept(
         });
     }
     None
+}
+
+/// What a link's offer allows before any session is looked at (spec 24.1). Bringing something
+/// into this environment needs the environment offered; making or receiving sessions also needs
+/// sessions offered, or the peer could never reach what it made; tokens are only for offered
+/// sessions.
+fn offered(offer: &LinkOffer, method: &str) -> Result<(), RpcError> {
+    let refuse = || Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "offer" })));
+    let into_env = matches!(
+        method,
+        "session/new"
+            | "session/offer"
+            | "session/commit"
+            | "workspace/receive"
+            | "workspace/create"
+            | "blob/put"
+            | "agent/refresh"
+    );
+    if into_env && !offer.env {
+        return refuse();
+    }
+    let needs_sessions =
+        matches!(method, "session/new" | "session/offer" | "session/commit") || method.starts_with("token/");
+    if needs_sessions && offer.sessions == OfferedSessions::None {
+        return refuse();
+    }
+    Ok(())
 }
 
 fn forward(
@@ -322,7 +407,97 @@ fn start_move(
     if !cx.state.links.conns.contains_key(link) {
         return Err(RpcError::new(-32030, "environment offline"));
     }
-    let value = session_value(cx, session).ok_or_else(|| RpcError::new(-32002, "session not found"))?;
+    if cx.state.links.waiting.contains_key(session) || crate::seeds::rebinding(cx.state, session) {
+        return Err(
+            RpcError::new(-32004, "a rebind is in progress").with_data(json!({ "state": "rebinding" }))
+        );
+    }
+    if session_value(cx, session).is_none() {
+        return Err(RpcError::new(-32002, "session not found"));
+    }
+    // Nothing is dispatched here from now on (E9), even a prompt queued while the move waits; a
+    // failed move puts this back.
+    let q = cx.state.queue.by_session.entry(session.to_string()).or_default();
+    let paused = std::mem::replace(&mut q.paused, true);
+    let interrupt = params.get("interrupt").and_then(Value::as_bool) == Some(true);
+    let w = Waiting {
+        conn: conn.to_string(),
+        id: id.cloned(),
+        link: link.to_string(),
+        params: params.clone(),
+        deadline_ms: cx.now_ms + TURN_WAIT_MS,
+        interrupted: interrupt,
+        paused,
+    };
+    if !turn_running(cx, session) {
+        continue_move(cx, session, w);
+        return Ok(Value::Null);
+    }
+    // The running turn ends first: the move waits up to 30 seconds, then interrupts it (E9).
+    let mut w = w;
+    if interrupt {
+        w.deadline_ms = cx.now_ms + INTERRUPT_GRACE_MS;
+        cancel_turn(cx, session);
+    }
+    cx.emit(Effect::TimerAt { at_ms: w.deadline_ms });
+    cx.state.links.waiting.insert(session.to_string(), w);
+    Ok(Value::Null)
+}
+
+/// Whether the session's turn is at work. A turn that waits on a request isn't: its open
+/// requests travel with the session and are answered on the new owner (E1).
+fn turn_running(cx: &Cx, session: &str) -> bool {
+    sessions::active(cx.state, session)
+        && cx
+            .state
+            .sessions
+            .info
+            .get(session)
+            .is_some_and(|i| i.state == parrot_proto::state::State::Running)
+}
+
+fn cancel_turn(cx: &mut Cx, session: &str) {
+    if let Some(b) = crate::directory::binding_of(cx.state, session) {
+        let call = cx.call_driver(CallOwner::Links, &b, "binding/cancel", json!({ "binding": b }));
+        cx.state.links.pending.insert(
+            call,
+            Pending::Cancel {
+                session: session.to_string(),
+            },
+        );
+    }
+}
+
+/// A session went idle: a move that waited for its turn goes on.
+pub fn on_idle(cx: &mut Cx, session: &str) {
+    if let Some(w) = cx.state.links.waiting.remove(session) {
+        continue_move(cx, session, w);
+    }
+}
+
+/// The session's turn has ended, or none ran: snapshot it and offer it to the target (E1).
+fn continue_move(cx: &mut Cx, session: &str, w: Waiting) {
+    let fail = |cx: &mut Cx, e: RpcError| {
+        if let Some(q) = cx.state.queue.by_session.get_mut(session) {
+            q.paused = w.paused;
+        }
+        if let Some(id) = w.id.clone() {
+            cx.reply(&w.conn, id, Err(e));
+        }
+    };
+    if !cx.state.links.conns.contains_key(&w.link) {
+        return fail(cx, RpcError::new(-32030, "environment offline"));
+    }
+    let Some(value) = session_value(cx, session) else {
+        return fail(cx, RpcError::new(-32002, "session not found"));
+    };
+    let (conn, id, link, params, paused) = (
+        w.conn.as_str(),
+        w.id.as_ref(),
+        w.link.as_str(),
+        &w.params,
+        w.paused,
+    );
     let wid = cx
         .state
         .sessions
@@ -339,7 +514,8 @@ fn start_move(
         .map(str::to_string)
         .unwrap_or_else(|| cx.ids.next("mov"));
     // What runs next travels with the session (E1): its queue, open requests, turn keys and task.
-    let queue = stored_queue(cx, session);
+    let mut queue = stored_queue(cx, session);
+    queue["paused"] = json!(paused);
     let requests: Vec<Value> = cx
         .state
         .requests
@@ -360,13 +536,6 @@ fn start_move(
         .map(|n| json!({ "session": session, "node": n }))
         .into_iter()
         .collect();
-    // Nothing is dispatched here from the offer on (E9); a failed move puts this back.
-    let paused = match cx.state.queue.by_session.get_mut(session) {
-        Some(q) => std::mem::replace(&mut q.paused, true),
-        None => false,
-    };
-    let mut queue = queue;
-    queue["paused"] = json!(paused);
     // The harness session resumes on the other side, so the old binding stops first (E9).
     sessions::stop_session(cx, session);
     let offer = json!({
@@ -405,7 +574,6 @@ fn start_move(
         }
         None => send_offer(cx, m, None, log),
     }
-    Ok(Value::Null)
 }
 
 /// The stored form of a session's queue, with each entry's driver params.
@@ -499,7 +667,8 @@ fn blob_put(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     };
     let transfer = params["transfer"]
         .as_str()
-        .ok_or_else(|| RpcError::new(-32602, "transfer is required"))?
+        .filter(|t| !t.is_empty() && t.len() <= 128)
+        .ok_or_else(|| RpcError::new(-32602, "transfer is required, at most 128 bytes"))?
         .to_string();
     let index = params["index"]
         .as_u64()
@@ -508,50 +677,72 @@ fn blob_put(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     if data.len() > CHUNK {
         return Err(RpcError::new(-32602, "a chunk is at most 1 MiB"));
     }
+    if let Some(b) = cx.state.links.blobs.get(&transfer)
+        && b.link != link
+    {
+        return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "transfer" })));
+    }
     // A resent chunk replaces itself, so it doesn't count twice.
-    let held: usize = cx
+    let held: u64 = cx
         .state
         .links
         .blobs
         .iter()
         .filter(|(_, b)| b.link == link)
-        .flat_map(|(t, b)| b.parts.iter().map(move |(i, p)| (t, *i, p.len())))
+        .flat_map(|(t, b)| b.parts.iter().map(move |(i, n)| (t, *i, *n)))
         .filter(|(t, i, _)| !(**t == transfer && *i == index))
         .map(|(_, _, n)| n)
         .sum();
-    if held + data.len() > LINK_BLOBS_MAX {
-        return Err(RpcError::new(-32004, "transfer too large")
-            .with_data(json!({ "reason": "size", "limit": LINK_BLOBS_MAX })));
+    let cap = cx.state.links.disk_cap();
+    if held + data.len() as u64 > cap {
+        return Err(
+            RpcError::new(-32004, "transfer too large").with_data(json!({ "reason": "size", "limit": cap }))
+        );
     }
     let expires_ms = cx.now_ms + OFFER_TTL_MS;
-    let blob = cx.state.links.blobs.entry(transfer).or_insert_with(|| Blob {
-        link: link.clone(),
-        expires_ms,
-        ..Blob::default()
-    });
-    if blob.link != link {
-        return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "transfer" })));
-    }
-    // Chunks are keyed by index, so a resent chunk replaces itself.
-    blob.parts.insert(index, data.to_string());
+    let blob = cx
+        .state
+        .links
+        .blobs
+        .entry(transfer.clone())
+        .or_insert_with(|| Blob {
+            link: link.clone(),
+            expires_ms,
+            ..Blob::default()
+        });
+    // A transfer lives as long as chunks keep arriving, so a slow link can finish a large one.
+    blob.expires_ms = expires_ms;
+    blob.parts.insert(index, data.len() as u64);
     if params["last"].as_bool() == Some(true) {
         blob.last = Some(index);
     }
+    // The chunk goes to disk; the host writes chunks and reads transfers in the order sent.
+    let call = cx.call_workspace(
+        CallOwner::Links,
+        "blob.put",
+        json!({ "link": link, "transfer": transfer, "index": index, "data": data }),
+    );
+    cx.state
+        .links
+        .pending
+        .insert(call, Pending::BlobWrite { transfer });
     Ok(json!({}))
 }
 
-fn blob_text(cx: &mut Cx, transfer: &str, link: &str) -> Option<String> {
+/// A complete transfer of `link`, handed over for reading: `{ link, transfer, parts }`, which
+/// `blob.take` and `transfer.unpack` read from disk.
+fn blob_ref(cx: &mut Cx, transfer: &str, link: &str) -> Option<Value> {
     let blob = cx.state.links.blobs.get(transfer)?;
     // A transfer is read only by the link that sent it.
-    if blob.link != link {
+    if blob.link != link || blob.failed {
         return None;
     }
     let last = blob.last?;
     if (0..=last).any(|i| !blob.parts.contains_key(&i)) {
         return None;
     }
-    let blob = cx.state.links.blobs.remove(transfer)?;
-    Some(blob.parts.into_values().collect())
+    cx.state.links.blobs.remove(transfer);
+    Some(json!({ "link": link, "transfer": transfer, "parts": last + 1 }))
 }
 
 /// The target of a move: take the session and start its binding idle (E1). A workspace that
@@ -565,7 +756,7 @@ fn offer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Repl
             let ws = params.get("workspace").filter(|w| w.is_object());
             let transfer = ws.and_then(|w| w["transfer"].as_str()).map(str::to_string);
             let Some(transfer) = transfer else {
-                return Reply::Now(finish_offer(cx, &link, &params, None));
+                return read_log(cx, conn, id, &link, params, None);
             };
             let wid = ws.and_then(|w| w["id"].as_str()).unwrap_or_default().to_string();
             if let Err(e) = principals::check(cx.state, conn, Scope::Workspace) {
@@ -576,7 +767,7 @@ fn offer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Repl
                     RpcError::new(-32004, "wrong state").with_data(json!({ "state": "workspace exists" }))
                 ));
             }
-            let Some(data) = blob_text(cx, &transfer, &link) else {
+            let Some(blob) = blob_ref(cx, &transfer, &link) else {
                 return Reply::Now(Err(
                     RpcError::new(-32004, "wrong state").with_data(json!({ "state": "transfer incomplete" }))
                 ));
@@ -584,7 +775,7 @@ fn offer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Repl
             let call = cx.call_workspace(
                 CallOwner::Links,
                 "transfer.unpack",
-                json!({ "workspace": wid, "data": data }),
+                json!({ "workspace": wid, "blob": blob }),
             );
             cx.state.links.pending.insert(
                 call,
@@ -598,6 +789,37 @@ fn offer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Repl
             Reply::Later
         }
     }
+}
+
+/// Reads the offer's log from disk, then puts the session in place. `unpacked` is where its
+/// workspace arrived, when it travelled.
+fn read_log(
+    cx: &mut Cx,
+    conn: &str,
+    id: Option<&RequestId>,
+    link: &str,
+    params: Value,
+    unpacked: Option<Value>,
+) -> Reply {
+    let blob = params["log"]
+        .as_str()
+        .map(str::to_string)
+        .and_then(|t| blob_ref(cx, &t, link));
+    let Some(blob) = blob else {
+        return Reply::Now(finish_offer(cx, link, &params, unpacked.as_ref(), None));
+    };
+    let call = cx.call_workspace(CallOwner::Links, "blob.take", json!({ "blob": blob }));
+    cx.state.links.pending.insert(
+        call,
+        Pending::Log {
+            conn: conn.to_string(),
+            id: id.cloned(),
+            link: link.to_string(),
+            params,
+            unpacked,
+        },
+    );
+    Reply::Later
 }
 
 /// Checks an offer; `Some` answers a repeated one with what it already did.
@@ -629,6 +851,7 @@ fn finish_offer(
     link: &str,
     params: &Value,
     unpacked: Option<&Value>,
+    log: Option<&str>,
 ) -> Result<Value, RpcError> {
     let session = params["session"].as_str().unwrap_or_default().to_string();
     // Checked again: another offer may have taken the id while the workspace was unpacked.
@@ -664,9 +887,8 @@ fn finish_offer(
     sessions::restore(cx.state, &session, &record);
     // Only clients of this runtime reach it now; the session is no longer the peer's.
     cx.state.links.remote.remove(&session);
-    if let Some(transfer) = params["log"].as_str()
-        && let Some(text) = blob_text(cx, transfer, link)
-        && let Ok(items) = serde_json::from_str::<Vec<Value>>(&text)
+    if let Some(text) = log
+        && let Ok(items) = serde_json::from_str::<Vec<Value>>(text)
     {
         for item in items {
             if let Value::Object(map) = item {
@@ -801,7 +1023,7 @@ fn receive(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Re
             RpcError::new(-32004, "wrong state").with_data(json!({ "state": "workspace exists" }))
         ));
     }
-    let Some(data) = blob_text(cx, transfer, &link) else {
+    let Some(blob) = blob_ref(cx, transfer, &link) else {
         return Reply::Now(Err(
             RpcError::new(-32004, "wrong state").with_data(json!({ "state": "transfer incomplete" }))
         ));
@@ -809,7 +1031,7 @@ fn receive(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Re
     let call = cx.call_workspace(
         CallOwner::Links,
         "transfer.unpack",
-        json!({ "workspace": workspace, "data": data }),
+        json!({ "workspace": workspace, "blob": blob }),
     );
     cx.state.links.pending.insert(
         call,
@@ -831,13 +1053,10 @@ fn link_token(cx: &Cx, conn: &str, link: &str, method: &str, params: &Value) -> 
         return Ok(());
     }
     let forbidden = |reason: &str| RpcError::new(-32003, "forbidden").with_data(json!({ "reason": reason }));
-    let held = principals::scopes_of(&Peer::Link {
-        link: link.to_string(),
-        scopes: match cx.state.principals.conns.get(conn).map(|c| &c.peer) {
-            Some(Peer::Link { scopes, .. }) => scopes.clone(),
-            _ => Vec::new(),
-        },
-    });
+    let held = match cx.state.principals.conns.get(conn).map(|c| &c.peer) {
+        Some(peer @ Peer::Link { .. }) => principals::scopes_of(peer),
+        _ => Vec::new(),
+    };
     let asked: Vec<Scope> = params["scopes"]
         .as_array()
         .ok_or_else(|| RpcError::new(-32602, "scopes is required"))?
@@ -857,14 +1076,8 @@ fn link_token(cx: &Cx, conn: &str, link: &str, method: &str, params: &Value) -> 
         .ok_or_else(|| forbidden("sessions"))?;
     for s in sessions {
         let s = s.as_str().ok_or_else(|| RpcError::new(-32602, "sessions"))?;
-        let created_here = cx
-            .state
-            .sessions
-            .info
-            .get(s)
-            .is_some_and(|i| i.origin["principal"] == link);
-        let arrived = cx.state.links.arrived.get(s).is_some_and(|l| l == link);
-        if !created_here && !arrived {
+        // Only sessions the link made or moved here, and only while the link offers them.
+        if !principals::linked_to(cx.state, s, link) || !principals::sees(cx.state, conn, s) {
             return Err(forbidden("sessions"));
         }
     }
@@ -906,9 +1119,33 @@ fn commit(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     Ok(result)
 }
 
-/// Offers and blobs that outlived their 60 seconds: the session didn't move (E1).
+/// Offers and blobs that outlived their 60 seconds: the session didn't move (E1). Moves that
+/// waited 30 seconds for a turn interrupt it (E9).
 pub fn tick(cx: &mut Cx) {
     let now = cx.now_ms;
+    let due: Vec<(String, bool)> = cx
+        .state
+        .links
+        .waiting
+        .iter()
+        .filter(|(_, w)| w.deadline_ms <= now)
+        .map(|(s, w)| (s.clone(), w.interrupted))
+        .collect();
+    for (session, interrupted) in due {
+        if interrupted {
+            // The interrupt didn't end the turn in time: stopping the old binding will.
+            on_idle(cx, &session);
+            continue;
+        }
+        if let Some(w) = cx.state.links.waiting.get_mut(&session) {
+            w.interrupted = true;
+            w.deadline_ms = now + INTERRUPT_GRACE_MS;
+        }
+        cx.emit(Effect::TimerAt {
+            at_ms: now + INTERRUPT_GRACE_MS,
+        });
+        cancel_turn(cx, &session);
+    }
     let expired: Vec<String> = cx
         .state
         .links
@@ -938,7 +1175,22 @@ pub fn tick(cx: &mut Cx) {
         cx.state.sessions.info.remove(&session);
         cx.persist(json!({ "op": "delete", "kind": "session", "id": session }));
     }
-    cx.state.links.blobs.retain(|_, b| b.expires_ms > now);
+    let expired: Vec<(String, String)> = cx
+        .state
+        .links
+        .blobs
+        .iter()
+        .filter(|(_, b)| b.expires_ms <= now)
+        .map(|(t, b)| (t.clone(), b.link.clone()))
+        .collect();
+    for (transfer, link) in expired {
+        cx.state.links.blobs.remove(&transfer);
+        cx.call_workspace(
+            CallOwner::Links,
+            "blob.drop",
+            json!({ "link": link, "transfer": transfer }),
+        );
+    }
 }
 
 /// A link connection opened: deliver what its outbox holds (E2).
@@ -1051,6 +1303,14 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                 cx.reply(&conn, id, result);
             }
         }
+        Pending::LinkUpdate { conn, id } => {
+            if let Ok(v) = &result {
+                regrant(cx, &v["link"]);
+            }
+            if let Some(id) = id {
+                cx.reply(&conn, id, result);
+            }
+        }
         Pending::Revoke { conn, id, token } => {
             if result.is_ok() {
                 let closing: Vec<String> = cx
@@ -1070,6 +1330,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
             }
         }
         Pending::Chunk { .. } => {}
+        Pending::Cancel { session } => on_idle(cx, &session),
         Pending::Pack(m) => {
             let log = serde_json::to_string(&crate::items::newest(cx.state, &m.session, usize::MAX))
                 .unwrap_or_else(|_| "[]".into());
@@ -1080,10 +1341,40 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
             id,
             link,
             params,
+        } => match result {
+            Ok(u) => {
+                if let Reply::Now(answer) = read_log(cx, &conn, id.as_ref(), &link, params, Some(u))
+                    && let Some(id) = id
+                {
+                    cx.reply(&conn, id, answer);
+                }
+            }
+            Err(e) => {
+                if let Some(id) = id {
+                    cx.reply(&conn, id, Err(e));
+                }
+            }
+        },
+        Pending::Log {
+            conn,
+            id,
+            link,
+            params,
+            unpacked,
         } => {
-            let answer = result.and_then(|u| finish_offer(cx, &link, &params, Some(&u)));
+            let answer = result.and_then(|v| {
+                let log = v["data"].as_str().unwrap_or("[]");
+                finish_offer(cx, &link, &params, unpacked.as_ref(), Some(log))
+            });
             if let Some(id) = id {
                 cx.reply(&conn, id, answer);
+            }
+        }
+        Pending::BlobWrite { transfer } => {
+            if result.is_err()
+                && let Some(b) = cx.state.links.blobs.get_mut(&transfer)
+            {
+                b.failed = true;
             }
         }
         Pending::TransferPack {
@@ -1213,6 +1504,35 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
             }
             Err(e) => fail_move(cx, &m, e),
         },
+    }
+}
+
+/// A link record changed: its connected peer acts with the new grant and offer from its next call
+/// on, and loses subscriptions to what it no longer sees.
+fn regrant(cx: &mut Cx, record: &Value) {
+    let Some(link) = record["id"].as_str() else { return };
+    let new_scopes: Vec<String> = record["grant"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let new_offer = LinkOffer::from_json(&record["offer"]);
+    let mut changed = Vec::new();
+    for (id, c) in cx.state.principals.conns.iter_mut() {
+        if let Peer::Link {
+            link: l,
+            scopes,
+            offer,
+            ..
+        } = &mut c.peer
+            && l == link
+        {
+            *scopes = new_scopes.clone();
+            *offer = new_offer.clone();
+            changed.push(id.clone());
+        }
+    }
+    for conn in changed {
+        crate::subscriptions::drop_unseen(cx, &conn);
     }
 }
 

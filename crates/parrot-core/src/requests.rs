@@ -188,6 +188,7 @@ fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
         .filter(|r| p.session.as_ref().is_none_or(|s| &r.session == s))
         .filter(|r| p.tree.as_ref().is_none_or(|t| r.path.contains(t)))
         .filter(|r| p.status.is_none_or(|s| r.status == s))
+        .filter(|r| crate::principals::sees(cx.state, conn, &r.session))
         .cloned()
         .collect();
     Ok(serde_json::to_value(RequestListResult { requests, next: None }).unwrap_or_default())
@@ -201,7 +202,14 @@ fn answer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Rep
         Ok(p) => p,
         Err(e) => return Reply::Now(Err(invalid(e.to_string()))),
     };
-    let Some(rec) = cx.state.requests.by_id.get(&p.request) else {
+    // A request of a session the caller can't see is not there for it.
+    let Some(rec) = cx
+        .state
+        .requests
+        .by_id
+        .get(&p.request)
+        .filter(|r| crate::principals::sees(cx.state, conn, &r.request.session))
+    else {
         return Reply::Now(Err(RpcError::new(-32002, format!("no request {}", p.request))));
     };
     let same_key = |k: &Option<String>| p.key.is_some() && *k == p.key;

@@ -29,6 +29,9 @@ const LINK_KIND: &str = "link";
 /// How long `parrot link invite` may take when it runs through a carrier.
 const INVITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The feature a runtime announces in its `initialize` to a peer whose SSH key it restricted.
+const RESTRICTED: &str = "x.parrot/restrictedKey";
+
 /// The id of the hub's own `initialize` call to the peer.
 const INIT_ID: &str = "hub:init";
 
@@ -224,11 +227,20 @@ impl LinkHub {
         });
     }
 
+    fn set_containment(&self, link: &str, containment: &str) {
+        self.update(|rs| {
+            if let Some(r) = rs.iter_mut().find(|r| r["id"] == link) {
+                r["containment"] = json!(containment);
+            }
+        });
+    }
+
     /// The `Link` JSON of spec 24.1, without what the hub keeps for itself.
     fn public(record: &Value) -> Value {
         let mut r = record.clone();
         if let Some(o) = r.as_object_mut() {
             o.remove("invite");
+            o.remove("restrictedKey");
         }
         r
     }
@@ -267,6 +279,10 @@ impl LinkHub {
             "status": "unpaired",
             "invite": code.invite,
         });
+        let mut link = link;
+        if p["authorizedKey"].as_bool() == Some(true) {
+            link["restrictedKey"] = json!(true);
+        }
         self.update(|rs| rs.push(link.clone()));
         Ok(json!({ "code": code.encode(), "link": Self::public(&link) }))
     }
@@ -449,10 +465,12 @@ impl LinkHub {
             .as_array()
             .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
+        let offer = parrot_core::LinkOffer::from_json(&record["offer"]);
         let Ok(mut c) = rt
             .connect(Peer::Link {
                 link: link.clone(),
                 scopes,
+                offer,
             })
             .await
         else {
@@ -468,11 +486,18 @@ impl LinkHub {
             mut writer,
             ..
         } = conn;
+        // A peer whose SSH key this runtime restricted to `connect --link` learns it here, so its
+        // ssh link isn't shown as a shell (spec 24.4).
+        let mut features = json!({});
+        if record["restrictedKey"].as_bool() == Some(true) {
+            features[RESTRICTED] = json!({});
+        }
         let init = json!({ "jsonrpc": "2.0", "id": INIT_ID, "method": "initialize", "params": {
             "protocol": [1],
             "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
-            "features": {},
+            "features": features,
         }});
+        let via_ssh = via.as_deref().or(record["via"].as_str()) == Some("ssh");
         let id = c.id.clone();
         let read = async {
             loop {
@@ -497,6 +522,13 @@ impl LinkHub {
                         return;
                     }
                     continue;
+                }
+                if via_ssh
+                    && let Ok(v) = serde_json::from_str::<Value>(&text)
+                    && v["method"] == "initialize"
+                {
+                    let restricted = v["params"]["features"].get(RESTRICTED).is_some();
+                    self.set_containment(&link, if restricted { "restricted" } else { "shell" });
                 }
                 if !rt.incoming(&id, classify(&id, &text)).await {
                     return;

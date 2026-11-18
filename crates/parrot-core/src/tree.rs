@@ -638,7 +638,7 @@ fn list_workspaces(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcE
 /// limited to some sessions sees only theirs (E8), everyone else sees all.
 pub fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
     let Some(me) = session_principal(state, conn) else {
-        if !token_limited(state, conn) {
+        if !crate::principals::limited(state, conn) {
             return true;
         }
         let owner = state
@@ -663,17 +663,6 @@ pub fn visible_workspace(state: &State, conn: &str, workspace: &str) -> bool {
                 .get(s)
                 .is_some_and(|i| i.workspace == workspace)
         })
-}
-
-/// Whether the connection holds a token limited to some sessions.
-pub fn token_limited(state: &State, conn: &str) -> bool {
-    matches!(
-        state.principals.conns.get(conn).map(|c| &c.peer),
-        Some(crate::Peer::Token {
-            sessions: Some(_),
-            ..
-        })
-    )
 }
 
 fn own_workspace(state: &State, me: &str, workspace: &str) -> bool {
@@ -716,7 +705,7 @@ fn create(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
     let p: WorkspaceCreateParams = parse(params)?;
     check(cx.state, conn, Scope::Workspace)?;
     // A new workspace belongs to no session yet, so a session-limited token can't make one (E8).
-    if token_limited(cx.state, conn) {
+    if crate::principals::limited(cx.state, conn) {
         return Err(RpcError::new(-32003, "forbidden").with_data(json!({ "reason": "sessions" })));
     }
     if p.env != cx.state.principals.env {

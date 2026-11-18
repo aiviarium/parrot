@@ -125,9 +125,11 @@ pub async fn run(
     let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
     let workspace_root = workspace_root.unwrap_or_else(|| dir.join("workspaces"));
+    let transfers = dir.join("transfers");
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
             .with_links(backend_hub)
+            .with_transfers(transfers)
             .with_scratch(scratch)
             .with_notifier(notifier)
             .with_drivers(drivers)
