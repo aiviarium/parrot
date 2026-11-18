@@ -3,10 +3,9 @@
 use std::time::Duration;
 
 use parrot_term::io::{SinkEvent, channel};
-use parrot_term::{
-    Cast, Emulator, EmulatorConfig, Input, Key, Mods, PtyCommand, Replay, Session, SessionConfig,
-    SettleReason, Size, serialize,
-};
+#[cfg(unix)]
+use parrot_term::{Cast, PtyCommand, Replay, serialize};
+use parrot_term::{Emulator, EmulatorConfig, Input, Key, Mods, Session, SessionConfig, SettleReason, Size};
 
 const T: Duration = Duration::from_secs(10);
 
@@ -117,6 +116,7 @@ async fn attach_gives_a_snapshot_that_continues_with_live_bytes() {
     assert_eq!(viewer.screen().cursor(), s.cursor());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn pty_session_runs_a_shell_command() {
     let cmd = PtyCommand::new("sh").args([
@@ -133,6 +133,7 @@ async fn pty_session_runs_a_shell_command() {
     tokio::time::timeout(T, session.wait_closed()).await.unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn pty_signal_and_resize() {
     let cmd = PtyCommand::new("sh").args([
@@ -143,11 +144,12 @@ async fn pty_signal_and_resize() {
     session.wait_for_text("ready", T).await.unwrap();
     session.resize(Size::new(12, 60)).await.unwrap();
     session.wait_for_text("winch 12x60", T).await.unwrap();
-    pty.signal(rustix::process::Signal::TERM).unwrap();
+    pty.signal(parrot_term::Signal::Terminate).unwrap();
     let status = tokio::time::timeout(T, pty.wait()).await.unwrap();
     assert!(!status.success());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn recording_replays_to_the_same_screen() {
     let dir = std::env::temp_dir().join(format!("parrot-term-test-{}", std::process::id()));
