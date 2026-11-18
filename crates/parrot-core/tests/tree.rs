@@ -296,7 +296,72 @@ fn a_parent_agent_creates_a_child_in_its_subtree() {
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes[1]["depth"], 1);
     let page = sim.ok(OWNER, "session/tree", json!({ "session": p, "limit": 1 }));
-    assert_eq!(page["next"], "1");
+    assert_eq!(
+        page["next"],
+        p.as_str(),
+        "the cursor is the last session of the page"
+    );
+    // A child that joins between pages doesn't repeat what the first page had.
+    let (late, b2) = sim.new_session("con_agent", child_params(&p, json!({ "title": "Late" })));
+    sim.bring_up(&b2);
+    let rest = sim.ok(
+        OWNER,
+        "session/tree",
+        json!({ "session": p, "cursor": page["next"] }),
+    );
+    let ids: Vec<&str> = rest["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["session"]["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [c.as_str(), late.as_str()]);
+    assert!(rest.get("next").is_none());
+}
+
+#[test]
+fn session_list_pages_by_cursor_without_shifting_when_sessions_change() {
+    let mut sim = Sim::new();
+    let ids: Vec<String> = (0..5).map(|_| sim.root(json!({})).0).collect();
+    let first = sim.ok(OWNER, "session/list", json!({ "limit": 2 }));
+    let seen: Vec<String> = first["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(seen.len(), 2);
+    // A session on a later page changes and moves to the front; the rest stay in order.
+    let moved = ids.iter().find(|i| !seen.contains(i)).unwrap().clone();
+    sim.ok(
+        OWNER,
+        "session/rename",
+        json!({ "session": moved, "title": "Renamed" }),
+    );
+    let mut rest = Vec::new();
+    let mut cursor = first["next"].clone();
+    while let Some(c) = cursor.as_str().map(str::to_string) {
+        let page = sim.ok(OWNER, "session/list", json!({ "limit": 2, "cursor": c }));
+        rest.extend(
+            page["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap().to_string()),
+        );
+        cursor = page.get("next").cloned().unwrap_or(Value::Null);
+    }
+    assert!(
+        rest.iter().all(|r| !seen.contains(r)),
+        "no repeats: {seen:?} then {rest:?}"
+    );
+    assert_eq!(
+        seen.len() + rest.len() + 1,
+        5,
+        "only the renamed one moved ahead: {rest:?}"
+    );
+    let (r, _) = sim.call(OWNER, "session/list", json!({ "cursor": "nonsense" }));
+    assert_eq!(r, Err(-32602));
 }
 
 #[test]

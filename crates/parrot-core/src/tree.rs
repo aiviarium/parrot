@@ -500,22 +500,30 @@ fn tree(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: parrot_proto::session::SessionTreeParams = parse(params)?;
     check_session(cx.state, conn, Scope::Read, &p.session)?;
     let all = subtree_depths(cx.state, &p.session);
-    let offset: usize = match &p.cursor {
-        Some(c) => c.parse().map_err(|_| RpcError::new(-32602, "invalid cursor"))?,
+    // The cursor is the last session of the page before; children that join later don't
+    // shift what follows it.
+    let start = match &p.cursor {
+        Some(c) => {
+            all.iter()
+                .position(|(s, _)| s == c)
+                .ok_or_else(|| RpcError::new(-32602, "invalid cursor: the session left the tree"))?
+                + 1
+        }
         None => 0,
     };
     let limit = p.limit.unwrap_or(100).clamp(1, 1000) as usize;
-    let nodes: Vec<Value> = all
+    let end = (start + limit).min(all.len());
+    let nodes: Vec<Value> = all[start..end]
         .iter()
-        .skip(offset)
-        .take(limit)
         .filter_map(|(s, d)| {
             crate::sessions::summary_json(cx.state, s).map(|v| json!({ "session": v, "depth": d }))
         })
         .collect();
     let mut v = json!({ "nodes": nodes });
-    if offset + limit < all.len() {
-        v["next"] = json!((offset + limit).to_string());
+    if end < all.len()
+        && let Some((last, _)) = all.get(end - 1)
+    {
+        v["next"] = json!(last);
     }
     Ok(v)
 }

@@ -590,20 +590,34 @@ fn streamed_text_is_written_once_its_stream_ends_and_survives_a_crash_mid_stream
             .filter(|e| matches!(e, Effect::Persist { record } if record["op"] == "put" && record["kind"] == "item"))
             .count()
     };
-    let first = a.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "kind": "assistant",
-        "set": { "text": "Hel" }, "streaming": true } }));
+    let first = a.driver(
+        &binding,
+        json!({ "type": "item", "item": { "id": "k1", "kind": "assistant",
+        "set": { "text": "Hel" }, "streaming": true } }),
+    );
     assert_eq!(puts(&first), 1, "the first patch sets a field");
     for part in ["lo", ", wor"] {
-        let effects = a.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "append": { "text": part } } }));
+        let effects = a.driver(
+            &binding,
+            json!({ "type": "item", "item": { "id": "k1", "append": { "text": part } } }),
+        );
         assert_eq!(puts(&effects), 0, "appends of an open stream aren't written");
     }
     // A second item streams and the runtime stops before its stream ends.
-    a.driver(&binding, json!({ "type": "item", "item": { "id": "k2", "kind": "reasoning",
-        "append": { "text": "think" }, "streaming": true } }));
+    a.driver(
+        &binding,
+        json!({ "type": "item", "item": { "id": "k2", "kind": "reasoning",
+        "append": { "text": "think" }, "streaming": true } }),
+    );
     let mut b = restart(&mut a);
     let items = b.ok("session/read", json!({ "session": session }))["items"].clone();
     let text = |kind: &str| {
-        items.as_array().unwrap().iter().find(|i| i["kind"] == kind).map(|i| i["text"].clone())
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["kind"] == kind)
+            .map(|i| i["text"].clone())
     };
     assert_eq!(text("assistant"), Some(json!("Hello, wor")), "{items}");
     assert_eq!(text("reasoning"), Some(json!("think")), "{items}");
@@ -611,8 +625,55 @@ fn streamed_text_is_written_once_its_stream_ends_and_survives_a_crash_mid_stream
     let mut c = Sim::new(0);
     c.connect("con_a");
     let (_, binding) = idle_session(&mut c, json!({}));
-    c.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "kind": "assistant",
-        "set": { "text": "a" }, "streaming": true } }));
-    let end = c.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "append": { "text": "b" }, "streaming": false } }));
+    c.driver(
+        &binding,
+        json!({ "type": "item", "item": { "id": "k1", "kind": "assistant",
+        "set": { "text": "a" }, "streaming": true } }),
+    );
+    let end = c.driver(
+        &binding,
+        json!({ "type": "item", "item": { "id": "k1", "append": { "text": "b" }, "streaming": false } }),
+    );
     assert_eq!(puts(&end), 1, "the end of the stream is written");
+}
+
+#[test]
+fn reads_and_snapshots_cut_long_output_and_item_get_returns_it_whole() {
+    let mut a = Sim::new(0);
+    a.connect("con_a");
+    let (session, binding) = idle_session(&mut a, json!({}));
+    let long = "é".repeat(40_000);
+    a.driver(
+        &binding,
+        json!({ "type": "item", "item": { "id": "k1", "kind": "tool",
+        "set": { "tool": "Bash", "title": "Bash", "input": {}, "status": "ok", "output": long } } }),
+    );
+    let read = a.ok("session/read", json!({ "session": session }));
+    let item = read["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "tool")
+        .unwrap()
+        .clone();
+    let shown = item["output"].as_str().unwrap();
+    assert!(shown.len() <= parrot_core::items::OUTPUT_LIMIT && shown.len() > 60_000);
+    assert_eq!(
+        item["_meta"]["x.parrot/truncated"],
+        long.len(),
+        "{}",
+        item["_meta"]
+    );
+    let sub = a.ok("subscribe", json!({ "target": { "session": session } }));
+    let snap_item = &sub["snapshot"]["sessions"][0]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "tool")
+        .unwrap()
+        .clone();
+    assert_eq!(snap_item["output"].as_str().unwrap().len(), shown.len());
+    let whole = a.ok("item/get", json!({ "session": session, "item": item["id"] }));
+    assert_eq!(whole["item"]["output"].as_str().unwrap(), long);
+    assert!(whole["item"]["_meta"].is_null());
 }

@@ -806,20 +806,35 @@ pub fn list_page(state: &State, conn: &str, p: &SessionListParams) -> Result<Val
     let mut matching = matching;
     let updated = |id: &str| cx.state.sessions.info.get(id).map_or(0, |i| i.updated_ms);
     matching.sort_by(|a, b| updated(&b.id).cmp(&updated(&a.id)).then(a.id.cmp(&b.id)));
-    let offset: usize = match &p.cursor {
-        Some(c) => c.parse().map_err(|_| RpcError::new(-32602, "invalid cursor"))?,
+    // The cursor names the last session of the page before, by when it was updated and its id,
+    // so sessions that change between pages don't shift the rest (10.3).
+    let start = match &p.cursor {
+        Some(c) => {
+            let (at, after) = c
+                .split_once('.')
+                .and_then(|(at, id)| Some((at.parse::<u64>().ok()?, id)))
+                .ok_or_else(|| RpcError::new(-32602, "invalid cursor"))?;
+            matching
+                .iter()
+                .position(|s| {
+                    let u = updated(&s.id);
+                    u < at || (u == at && s.id.as_str() > after)
+                })
+                .unwrap_or(matching.len())
+        }
         None => 0,
     };
     let limit = p.limit.unwrap_or(100).clamp(1, 1000) as usize;
-    let page: Vec<Value> = matching
+    let end = (start + limit).min(matching.len());
+    let page: Vec<Value> = matching[start..end]
         .iter()
-        .skip(offset)
-        .take(limit)
         .filter_map(|s| summary_json(cx.state, &s.id))
         .collect();
     let mut v = json!({ "sessions": page });
-    if offset + limit < matching.len() {
-        v["next"] = json!((offset + limit).to_string());
+    if end < matching.len()
+        && let Some(last) = matching.get(end - 1)
+    {
+        v["next"] = json!(format!("{}.{}", updated(&last.id), last.id));
     }
     Ok(v)
 }
