@@ -18,4 +18,18 @@ pub struct State {
     pub seq: u64,
     /// The next id for calls the core makes to drivers and clients.
     pub next_call: u64,
+    /// Which module waits for each outstanding driver call.
+    pub pending_calls: std::collections::BTreeMap<u64, CallOwner>,
+    /// Updates published during the current input, flushed by `subscriptions::flush`.
+    pub outbox: Vec<(Option<String>, serde_json::Value)>,
+}
+
+/// The module a driver reply goes back to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallOwner {
+    Bindings,
+    Queue,
+    Requests,
+    Options,
+    Actions,
 }

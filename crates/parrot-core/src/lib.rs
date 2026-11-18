@@ -27,12 +27,23 @@ pub mod tasks;
 pub mod tree;
 pub mod wakes;
 
+pub mod directory;
 mod dispatch;
 
 pub use clock::{Clock, Ids};
 pub use effect::Effect;
 pub use input::{BindingId, ConnId, Input, Peer};
-pub use state::State;
+pub use state::{CallOwner, State};
+
+use parrot_proto::rpc::RpcError;
+use serde_json::Value;
+
+/// How a method handler answers: now, or later with `Cx::reply` once a driver has answered.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reply {
+    Now(Result<Value, RpcError>),
+    Later,
+}
 
 /// What a module handler gets: the state, the clock and ids, and the effects to emit.
 pub struct Cx<'a> {
@@ -55,6 +66,35 @@ impl Cx<'_> {
     pub fn next_call(&mut self) -> u64 {
         self.state.next_call += 1;
         self.state.next_call
+    }
+    /// Call a driver method; the reply is routed to `owner`'s `on_reply` with the returned id.
+    pub fn call_driver(&mut self, owner: CallOwner, binding: &str, method: &str, params: Value) -> u64 {
+        let call = self.next_call();
+        self.state.pending_calls.insert(call, owner);
+        self.emit(Effect::DriverCall {
+            binding: binding.to_string(),
+            call,
+            method: method.to_string(),
+            params,
+        });
+        call
+    }
+    /// Answer a request that a handler deferred with `Reply::Later`.
+    pub fn reply(&mut self, conn: &str, id: parrot_proto::rpc::RequestId, result: Result<Value, RpcError>) {
+        self.emit(Effect::Reply {
+            conn: conn.to_string(),
+            id,
+            result,
+        });
+    }
+    /// Queue an update for a session (or the index when `None`). `subscriptions::flush` assigns
+    /// `seq`, persists and fans it out after the input is handled.
+    pub fn publish(&mut self, session: Option<String>, update: Value) {
+        self.state.outbox.push((session, update));
+    }
+    /// Append a store record (format: parrot-serve's backend_impl).
+    pub fn persist(&mut self, record: Value) {
+        self.emit(Effect::Persist { record });
     }
 }
 
