@@ -6,7 +6,8 @@
 //! user's staging survives a checkpoint, and a checkpoint cannot itself show up in `git status`.
 //!
 //! Restoring is for rewind with files (spec 9.4). It writes the checkpoint's files back into the
-//! working tree and removes tracked files the checkpoint does not have.
+//! working tree and removes the files the checkpoint does not have, tracked or not. Ignored files
+//! are left alone, as recording leaves them out.
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -126,8 +127,8 @@ pub fn lookup(workspace: &Path, session: &str, turn: u32) -> Result<Option<Check
 
 /// Writes a checkpoint back into the working tree.
 ///
-/// Tracked files the checkpoint does not have are removed. Untracked files made since the
-/// checkpoint are left alone, because nothing records which of them a turn created.
+/// Files the checkpoint does not have are removed: tracked ones, and untracked ones that aren't
+/// ignored, since recording captured every such file there was. Folders they leave empty go too.
 pub fn restore(workspace: &Path, session: &str, turn: u32) -> Result<Checkpoint, CheckpointError> {
     let checkpoint = lookup(workspace, session, turn)?.ok_or_else(|| CheckpointError::NotFound {
         session: session.to_string(),
@@ -146,12 +147,14 @@ pub fn restore(workspace: &Path, session: &str, turn: u32) -> Result<Checkpoint,
     )?)
     .into_iter()
     .collect();
-    for path in git::split_nul(&git.run(&["ls-files", "-z"])?) {
+    let tracked = git::split_nul(&git.run(&["ls-files", "-z"])?);
+    let untracked = git::split_nul(&git.run(&["ls-files", "-z", "--others", "--exclude-standard"])?);
+    for path in tracked.into_iter().chain(untracked) {
         if keep.contains(&path) {
             continue;
         }
         match std::fs::remove_file(workspace.join(&path)) {
-            Ok(()) => {}
+            Ok(()) => remove_empty_parents(workspace, &path),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(source) => {
                 return Err(CheckpointError::Io {
@@ -164,6 +167,17 @@ pub fn restore(workspace: &Path, session: &str, turn: u32) -> Result<Checkpoint,
 
     run_with(&git, &["checkout-index", "--all", "--force"], &env)?;
     Ok(checkpoint)
+}
+
+/// Removes the folders above `path` that are empty now, up to the workspace.
+fn remove_empty_parents(workspace: &Path, path: &str) {
+    let mut dir = Path::new(path).parent();
+    while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty()) {
+        if std::fs::remove_dir(workspace.join(d)).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
 }
 
 /// Every checkpoint in the workspace, oldest first.
@@ -421,6 +435,24 @@ mod tests {
         assert_eq!(repo.read("README.md"), "at the checkpoint\n");
         assert!(repo.path().join("kept.txt").is_file());
         assert!(!repo.path().join("extra.txt").exists());
+    }
+
+    #[test]
+    fn removes_untracked_files_made_after_the_checkpoint() {
+        let repo = Repo::new();
+        repo.write("README.md", "at the checkpoint\n");
+        repo.write(".gitignore", "build/\n");
+        record(repo.path(), "ses_alpha", 1).unwrap();
+
+        repo.write("notes/new.txt", "made by the turn\n");
+        repo.write("scratch.txt", "also made by the turn\n");
+        repo.write("build/out.bin", "ignored\n");
+
+        restore(repo.path(), "ses_alpha", 1).unwrap();
+        assert!(!repo.path().join("scratch.txt").exists());
+        assert!(!repo.path().join("notes").exists());
+        assert!(repo.path().join("build/out.bin").is_file(), "ignored files stay");
+        assert_eq!(repo.read("README.md"), "at the checkpoint\n");
     }
 
     #[test]

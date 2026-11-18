@@ -95,7 +95,7 @@ impl Client {
         let mut c = Client { tx, rx, next_id: 1 };
         let mut init = json!({ "protocol": [1], "peer": { "kind": "client", "name": "test", "version": "0" }, "features": {} });
         if let Some(s) = act_as {
-            init["actAs"] = json!(s);
+            init["_meta"] = json!({ "x.parrot/actAs": s });
         }
         c.ok("initialize", init).await;
         c

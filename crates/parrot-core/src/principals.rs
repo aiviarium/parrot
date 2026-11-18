@@ -10,6 +10,10 @@ use std::collections::BTreeMap;
 /// Protocol versions this runtime serves.
 pub const SUPPORTED: [u32; 1] = [1];
 
+/// The `initialize` `_meta` key with which the owner acts as one of its sessions, and the feature
+/// that announces it.
+pub const ACT_AS: &str = "x.parrot/actAs";
+
 /// Connections and what each may do.
 #[derive(Debug)]
 pub struct Principals {
@@ -193,8 +197,14 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
     let Some(protocol) = p.protocol.iter().copied().filter(|v| SUPPORTED.contains(v)).max() else {
         return Err(RpcError::new(-32011, "no shared version").with_data(json!({ "supported": SUPPORTED })));
     };
-    // The owner may act as one of its sessions, with that session's grant on its subtree.
-    let act_as = p.extra.get("actAs").and_then(Value::as_str).map(str::to_string);
+    // The owner may act as one of its sessions, with that session's grant on its subtree. It is an
+    // extension, so it is a namespaced `_meta` key (spec 4, 38).
+    let act_as = p
+        .meta
+        .as_ref()
+        .and_then(|m| m.get(ACT_AS))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     if let Some(session) = &act_as {
         let owner = matches!(
             cx.state.principals.conns.get(conn).map(|c| &c.peer),
@@ -235,7 +245,7 @@ fn initialize(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
         "runtime": { "id": cx.state.principals.runtime, "env": cx.state.principals.env },
         "features": {
             "profile.core": {}, "profile.tree": {}, "profile.seed": {}, "profile.link": {}, "profile.remote": {},
-            "profile.desktop": {}, "profile.tui": {},
+            "profile.desktop": {}, "profile.tui": {}, "x.parrot/actAs": {},
         },
         "connection": connection,
     }))

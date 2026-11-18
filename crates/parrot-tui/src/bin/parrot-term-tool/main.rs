@@ -125,14 +125,40 @@ fn markers(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+#[cfg(unix)]
 pub(crate) fn terminal_size() -> Option<Size> {
     let ws = rustix::termios::tcgetwinsize(std::io::stdout()).ok()?;
     (ws.ws_row > 0 && ws.ws_col > 0).then(|| Size::new(ws.ws_row, ws.ws_col))
 }
 
+/// Windows reports no size here; callers fall back to a default.
+#[cfg(not(unix))]
+pub(crate) fn terminal_size() -> Option<Size> {
+    None
+}
+
+#[cfg(unix)]
+type WindowChange = tokio::signal::unix::Signal;
+#[cfg(not(unix))]
+type WindowChange = std::future::Pending<()>;
+
+/// Waits for the next terminal resize. Windows has no resize signal here, so it never fires.
+async fn next_window_change(winch: &mut WindowChange) {
+    #[cfg(unix)]
+    {
+        let _ = winch.recv().await;
+    }
+    #[cfg(not(unix))]
+    {
+        (&mut *winch).await;
+    }
+}
+
 /// Puts stdin into raw mode until dropped.
+#[cfg(unix)]
 pub(crate) struct RawMode(Option<rustix::termios::Termios>);
 
+#[cfg(unix)]
 impl RawMode {
     pub(crate) fn enable() -> Self {
         let stdin = std::io::stdin();
@@ -148,11 +174,23 @@ impl RawMode {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawMode {
     fn drop(&mut self) {
         if let Some(orig) = &self.0 {
             let _ = rustix::termios::tcsetattr(std::io::stdin(), rustix::termios::OptionalActions::Now, orig);
         }
+    }
+}
+
+/// The console on Windows stays as it is; the tool is for reading casts there.
+#[cfg(not(unix))]
+pub(crate) struct RawMode;
+
+#[cfg(not(unix))]
+impl RawMode {
+    pub(crate) fn enable() -> Self {
+        RawMode
     }
 }
 
@@ -228,13 +266,16 @@ fn record(args: &[String]) -> Result<ExitCode, String> {
                 }
             }
         });
+        #[cfg(unix)]
         let mut winch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
             .map_err(|e| e.to_string())?;
+        #[cfg(not(unix))]
+        let mut winch = std::future::pending::<()>();
         let status = loop {
             tokio::select! {
                 status = pty.wait() => break status,
                 Some(data) = in_rx.recv() => { let _ = session.write(&data).await; }
-                _ = winch.recv() => {
+                _ = next_window_change(&mut winch) => {
                     if let Some(s) = terminal_size() {
                         let _ = session.resize(s).await;
                     }

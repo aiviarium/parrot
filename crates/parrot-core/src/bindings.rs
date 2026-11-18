@@ -408,6 +408,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             }
             if *state == SessionState::Idle {
                 crate::tasks::on_idle(cx, &session);
+                crate::budgets::on_idle(cx, &session);
                 crate::seeds::on_idle(cx, &session);
                 queue::on_idle(cx, &session);
                 crate::wakes::pump(cx, &session);
@@ -462,9 +463,18 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 .is_some_and(|b| b.turns.contains_key(&turn.id));
             turn.id = map_key(cx, binding, "trn", &turn.id, None);
             if first {
-                crate::seeds::on_turn(cx, &session, &turn.id);
+                let input = turn.input.as_ref().and_then(|key| {
+                    cx.state
+                        .bindings
+                        .info
+                        .get(binding)
+                        .and_then(|b| b.items.get(key))
+                        .cloned()
+                });
+                crate::seeds::on_turn(cx, &session, &turn.id, input.as_deref());
                 crate::budgets::on_turn(cx, &session);
             }
+            crate::budgets::on_turn_status(cx, &session, &turn.id, turn.status == TurnStatus::Running);
             crate::tasks::on_turn(cx, &session, turn.status, first);
             turn.binding = binding.to_string();
             // Retry and continue read whether a turn runs and what a failed one was given.

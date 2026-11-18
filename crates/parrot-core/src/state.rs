@@ -1,8 +1,8 @@
 //! The core's state, one part per module so modules can be written side by side.
 
 use crate::{
-    actions, bindings, ceilings, functions, items, links, options, principals, queue, requests, seeds,
-    sessions, subscriptions, tasks, tree, usage,
+    actions, bindings, budgets, ceilings, functions, items, links, options, principals, queue, requests,
+    seeds, sessions, subscriptions, tasks, tree, usage,
 };
 
 #[derive(Debug, Default)]
@@ -21,6 +21,7 @@ pub struct State {
     pub tasks: tasks::Tasks,
     pub seeds: seeds::Seeds,
     pub ceilings: ceilings::Ceilings,
+    pub budgets: budgets::Clocks,
     pub links: links::Links,
     pub functions: functions::Functions,
     /// The runtime-wide update sequence (spec 10.1).

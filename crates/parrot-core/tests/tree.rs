@@ -2,8 +2,9 @@
 //! ceilings, budgets, workspaces, rebinds, rewinds and bundles.
 
 use parrot_core::ceilings::{Ceiling, intersect, narrows};
-use parrot_core::clock::{ManualClock, SeqIds};
+use parrot_core::clock::{Clock, ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer, Restore, Stored};
+use parrot_proto::rpc::RpcError;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -97,7 +98,7 @@ impl Sim {
         });
         let mut p = json!({ "protocol": [1], "peer": { "kind": "client", "name": conn, "version": "1" }, "features": {} });
         if let Some(s) = act_as {
-            p["actAs"] = json!(s);
+            p["_meta"] = json!({ "x.parrot/actAs": s });
         }
         self.call(conn, "initialize", p).0.expect("initialize");
     }
@@ -838,11 +839,45 @@ fn a_native_fork_passes_the_ref() {
         &b,
         json!({ "type": "ref", "ref": { "id": "h1", "strength": "strong" } }),
     );
+    sim.turn(&b, "t1", "the source's answer");
     sim.core.state.sessions.agents.get_mut("claude").unwrap()["features"] = json!({ "session.fork": {} });
-    let (f, _) = sim.new_session(OWNER, json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" }, "seed": { "session": s, "require": "exact" } }));
-    let start = start_params(&sim.seen.iter().rev().cloned().collect::<Vec<_>>()).unwrap();
-    assert_eq!(start["fork"]["ref"]["id"], "h1");
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" }, "seed": { "session": s, "require": "exact" } }),
+    );
+    let f = r.unwrap()["session"]["id"].as_str().unwrap().to_string();
+    // The source's binding forks first; the new binding starts from the ref it returns.
+    assert!(start_of(&e).is_none());
+    let (call, fp) = driver_calls(&e, "binding/fork").remove(0);
+    assert_eq!(fp["binding"], b.as_str());
+    let e = sim.handle(Input::DriverReply {
+        binding: b.clone(),
+        call,
+        result: Ok(json!({ "ref": { "id": "fork:h1", "strength": "strong" } })),
+    });
+    let start = start_params(&e).unwrap();
+    assert_eq!(start["resume"]["id"], "fork:h1");
     assert_eq!(sim.get(&f)["binding"]["via"], "fork");
+    assert_eq!(sim.get(&f)["seed"]["via"], "fork");
+
+    // A driver that refuses the fork leaves the new session with the bundle.
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" }, "seed": { "session": s } }),
+    );
+    let g = r.unwrap()["session"]["id"].as_str().unwrap().to_string();
+    let (call, _) = driver_calls(&e, "binding/fork").remove(0);
+    let e = sim.handle(Input::DriverReply {
+        binding: b.clone(),
+        call,
+        result: Err(RpcError::new(-32001, "not at that turn")),
+    });
+    let start = start_params(&e).unwrap();
+    assert!(start.get("resume").is_none(), "{start}");
+    assert_eq!(sim.get(&g)["binding"]["via"], "bundle");
+    assert_eq!(sim.get(&g)["seed"]["via"], "bundle");
 }
 
 #[test]
@@ -875,10 +910,13 @@ fn checkpoints_are_taken_per_turn_and_rewind_restores_them() {
         );
         let (call, cp) = workspace_ops(&e, "checkpoint.record").remove(0);
         assert_eq!(cp["turn"], i);
-        sim.handle(Input::WorkspaceReply {
+        // The prompt waits for its checkpoint.
+        assert!(driver_calls(&e, "binding/prompt").is_empty());
+        let e = sim.handle(Input::WorkspaceReply {
             call,
             result: Ok(json!({})),
         });
+        assert_eq!(driver_calls(&e, "binding/prompt").len(), 1);
         sim.turn(&b, key, &format!("did {i}"));
         let items = sim.ok(OWNER, "session/bundle", json!({ "session": s }));
         turn_ids.push(
@@ -910,6 +948,17 @@ fn checkpoints_are_taken_per_turn_and_rewind_restores_them() {
     assert_eq!(reply(&e, &json!(sim.next_id)).unwrap(), Ok(json!({})));
     sim.bring_up(&nb);
     let (_, e) = sim.call(OWNER, "session/prompt", json!({ "session": s, "text": "redo" }));
+    // Checkpoint refs only grow, so the redone turn doesn't overwrite one a rewind might want.
+    let (call, cp) = workspace_ops(&e, "checkpoint.record").remove(0);
+    assert_eq!(cp["turn"], 2);
+    let e = sim.handle(Input::WorkspaceReply {
+        call,
+        result: Err(RpcError::new(-32004, "disk full")),
+    });
+    assert!(
+        updates_of(&e, "notice").iter().any(|u| u["code"] == "checkpoint"),
+        "a failed checkpoint is reported"
+    );
     let text = driver_calls(&e, "binding/prompt")[0].1["text"]
         .as_str()
         .unwrap()
@@ -1038,4 +1087,160 @@ proptest! {
             prop_assert!(sim.core.state.seeds.rebinding.len() <= 1);
         }
     }
+}
+
+#[test]
+fn seconds_are_counted_from_turn_wall_time_and_enforced() {
+    let mut sim = Sim::new();
+    let (p, _) = parent(&mut sim, json!({ "budget": { "seconds": 100 } }));
+    let (c, b) = sim.new_session(
+        "con_agent",
+        child_params(
+            &p,
+            json!({ "budget": { "seconds": 10 }, "task": { "brief": "x" } }),
+        ),
+    );
+    sim.bring_up(&b);
+    let at = "2026-01-01T00:00:00.000Z";
+    sim.driver(
+        &b,
+        json!({ "type": "state", "state": "running", "background": [] }),
+    );
+    let start = sim.clock.now_ms();
+    let e = sim.driver(&b, json!({ "type": "turn", "turn": { "id": "t1", "status": "running", "continuable": false, "started": at } }));
+    let timers: Vec<u64> = e
+        .iter()
+        .filter_map(|e| match e {
+            Effect::TimerAt { at_ms } => Some(*at_ms),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        timers
+            .iter()
+            .any(|t| (start + 10_000..start + 10_100).contains(t)),
+        "a timer for when the budget runs out: {timers:?}"
+    );
+    // Four seconds in, the running turn has spent four.
+    sim.clock.set(start + 4_200);
+    sim.handle(Input::Tick {
+        now_ms: start + 4_200,
+    });
+    assert_eq!(sim.get(&c)["budget"]["used"]["seconds"], 4);
+    assert_eq!(sim.get(&c)["task"]["status"], "running");
+    // At ten seconds the turn is interrupted and the task fails.
+    sim.clock.set(start + 10_100);
+    let e = sim.handle(Input::Tick {
+        now_ms: start + 10_100,
+    });
+    assert_eq!(
+        driver_calls(&e, "binding/cancel").len(),
+        1,
+        "the turn is interrupted"
+    );
+    assert_eq!(sim.get(&c)["task"]["error"], "budget");
+    // What the turn spent came back to the parent with the allotment.
+    sim.clock.set(start + 10_400);
+    sim.driver(&b, json!({ "type": "turn", "turn": { "id": "t1", "status": "interrupted", "continuable": false, "started": at, "ended": at } }));
+    let pb = sim.get(&p)["budget"].clone();
+    assert!(pb["used"]["seconds"].as_u64().unwrap() >= 10, "{pb}");
+}
+
+#[test]
+fn a_failed_prompt_does_not_shift_checkpoints() {
+    let mut sim = Sim::new();
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "worktree", "repo": "/work/repo" } }),
+    );
+    assert_eq!(r, Err(0));
+    let (call, params) = workspace_ops(&e, "worktree.create").remove(0);
+    let e = sim.handle(Input::WorkspaceReply {
+        call,
+        result: Ok(json!({ "path": params["path"] })),
+    });
+    let s = reply(&e, &json!(sim.next_id)).unwrap().unwrap()["session"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = start_of(&e).unwrap();
+    sim.bring_up(&b);
+    let prompt = |sim: &mut Sim, text: &str| -> u64 {
+        let (_, e) = sim.call(OWNER, "session/prompt", json!({ "session": s, "text": text }));
+        let (call, cp) = workspace_ops(&e, "checkpoint.record").remove(0);
+        let e = sim.handle(Input::WorkspaceReply {
+            call,
+            result: Ok(json!({})),
+        });
+        let _ = cp;
+        driver_calls(&e, "binding/prompt")[0].0
+    };
+    prompt(&mut sim, "first");
+    sim.turn(&b, "t1", "did first");
+    // The second prompt fails before the harness starts a turn.
+    let call = prompt(&mut sim, "lost");
+    sim.handle(Input::DriverReply {
+        binding: b.clone(),
+        call,
+        result: Err(RpcError::new(-32603, "harness crashed")),
+    });
+    prompt(&mut sim, "third");
+    sim.turn(&b, "t3", "did third");
+    let bundle = sim.ok(OWNER, "session/bundle", json!({ "session": s }));
+    let first = bundle["bundle"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["text"] == "did first")
+        .unwrap()["turn"]
+        .clone();
+    let (_, e) = sim.call(
+        OWNER,
+        "session/rewind",
+        json!({ "session": s, "turn": first, "files": true }),
+    );
+    // The checkpoint before "third" (ref 2) holds the state after t1, not the one before "lost".
+    let (_, rp) = workspace_ops(&e, "checkpoint.restore").remove(0);
+    assert_eq!(rp["turn"], 2);
+}
+
+#[test]
+fn a_source_summary_is_asked_of_the_source_harness() {
+    let mut sim = Sim::new();
+    let (s, b) = sim.root(json!({}));
+    sim.turn(&b, "t1", "wrote the parser");
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "codex", "workspace": { "kind": "dir", "path": "/work/demo" },
+            "seed": { "session": s, "summary": "source" } }),
+    );
+    assert_eq!(r, Err(0), "the call waits for the summary");
+    let prompt = driver_calls(&e, "binding/prompt").remove(0).1;
+    assert!(
+        prompt["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Summarize this session")
+    );
+    let e = sim.turn(&b, "t2", "The parser is done; tests are next.");
+    let created = reply(&e, &json!(sim.next_id)).unwrap().unwrap();
+    let f = created["session"]["id"].as_str().unwrap().to_string();
+    let nb = start_of(&e).expect("the new session starts");
+    sim.bring_up(&nb);
+    let (_, e) = sim.call(OWNER, "session/prompt", json!({ "session": f, "text": "go on" }));
+    let text = driver_calls(&e, "binding/prompt")[0].1["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        text.contains("## Summary\nThe parser is done; tests are next."),
+        "{text}"
+    );
+    assert!(text.contains("wrote the parser"), "{text}");
+    assert!(
+        !text.contains("Summarize this session"),
+        "the summary turn is cut: {text}"
+    );
 }

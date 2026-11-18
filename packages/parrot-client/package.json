@@ -1,0 +1,29 @@
+{
+  "name": "@aiviarium/parrot-client",
+  "version": "0.1.0",
+  "description": "Types generated from the Parrot protocol schema, and a JSON-RPC client for a runtime",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aiviarium/parrot",
+    "directory": "packages/parrot-client"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "generate": "bun scripts/generate.ts",
+    "typecheck": "tsc -p .",
+    "test": "bun scripts/generate.ts --check && bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "7.0.2"
+  }
+}

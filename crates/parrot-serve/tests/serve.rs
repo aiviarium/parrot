@@ -1,3 +1,6 @@
+//! The local socket and WebSocket transports. Both tests drive a Unix socket, so they are Unix only.
+#![cfg(unix)]
+
 use futures::{SinkExt, StreamExt};
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Peer};
