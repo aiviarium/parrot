@@ -1,6 +1,18 @@
 //! The opencode driver: the Parrot driver protocol (spec 30) over the opencode HTTP server.
 
+pub mod data;
+pub mod driver;
+pub mod fake;
+pub mod http;
+pub mod mapping;
+pub mod wire;
+
 /// Serves the driver protocol on stdin and stdout (`parrot driver opencode`).
 pub async fn serve_stdio() -> std::io::Result<()> {
-    Err(std::io::Error::other("the opencode driver is not written yet"))
+    driver::serve(
+        driver::Config::from_env(),
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+    )
+    .await
 }

@@ -1,0 +1,6 @@
+// opencode reports its models and providers at runtime; these are the values it falls back to.
+option "model" role="model" label="Model" applies="now" {
+  choice "default" label="Default"
+}
+// The provider picker sets the provider's first enabled model.
+option "provider" role="model" label="Provider" applies="now"
