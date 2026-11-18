@@ -16,11 +16,16 @@ struct Client {
 
 impl Client {
     fn start() -> Client {
-        let config = Config {
+        Client::with(Config {
             env: vec![],
             guard: false,
             command: Some(vec![env!("CARGO_BIN_EXE_fake-t3").into()]),
-        };
+            url: None,
+            token: None,
+        })
+    }
+
+    fn with(config: Config) -> Client {
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
         tokio::spawn(serve(config, r, w));
@@ -73,6 +78,12 @@ impl Client {
     }
 
     async fn bind(&mut self) -> Value {
+        self.bind_with(json!({"session": "s1", "binding": "b1", "agent": "t3:fake", "workspace": std::env::temp_dir().to_string_lossy(), "cwd": std::env::temp_dir().to_string_lossy(),
+                "options": {"title": "Test"}, "control": "native", "deny": []}))
+        .await
+    }
+
+    async fn bind_with(&mut self, params: Value) -> Value {
         let init = self
             .call(
                 "initialize",
@@ -82,13 +93,46 @@ impl Client {
         assert_eq!(init["peer"]["kind"], "driver");
         let agents = self.call("agent/list", json!({})).await;
         assert_eq!(agents["agents"][0]["id"], "t3");
-        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
-        self.call(
-            "binding/start",
-            json!({"session": "s1", "binding": "b1", "agent": "t3:fake", "workspace": cwd, "cwd": cwd,
-                "options": {"title": "Test"}, "control": "native", "deny": []}),
-        )
-        .await
+        self.call("binding/start", params).await
+    }
+}
+
+/// A fake T3 server over HTTP, killed on drop.
+struct HttpFake {
+    child: std::process::Child,
+    url: String,
+}
+
+impl HttpFake {
+    fn start() -> Self {
+        use std::io::BufRead;
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_fake-t3-http"))
+            .arg("--port")
+            .arg("0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("the fake T3 server starts");
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("the server prints its address");
+        HttpFake {
+            child,
+            url: line.trim().to_owned(),
+        }
+    }
+
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for HttpFake {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -118,6 +162,85 @@ async fn a_prompt_sends_reads_and_completes_the_turn() {
     c.wait(|u| u["update"]["type"] == "state" && u["update"]["state"] == "idle")
         .await;
     c.call("binding/stop", json!({"binding": "b1"})).await;
+}
+
+#[tokio::test]
+async fn the_http_mcp_endpoint_serves_the_thread_tools() {
+    let mut http = HttpFake::start();
+    let mut c = Client::with(Config {
+        env: vec![],
+        guard: false,
+        command: None,
+        url: Some(format!("{}/mcp", http.url)),
+        token: None,
+    });
+    let init = c
+        .call(
+            "initialize",
+            json!({"protocol": [1], "peer": {"kind": "runtime", "name": "test", "version": "0"}, "features": {}}),
+        )
+        .await;
+    assert_eq!(init["peer"]["kind"], "driver");
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["version"], "0.1.10");
+    let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let start = c
+        .call(
+            "binding/start",
+            json!({"session": "s1", "binding": "b1", "agent": "t3:fake", "workspace": cwd, "cwd": cwd,
+                "options": {"title": "Test", "model": "fake-model", "mode": "full-access"},
+                "control": "native", "deny": []}),
+        )
+        .await;
+    assert_eq!(start["ref"]["id"], "thread-1");
+    assert_eq!(start["level"], "host");
+    c.call(
+        "binding/prompt",
+        json!({"binding": "b1", "message": "m1", "text": "Say hello", "steer": false}),
+    )
+    .await;
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "Hello there.")
+        .await;
+    c.wait(|u| u["update"]["type"] == "state" && u["update"]["state"] == "idle")
+        .await;
+    http.stop();
+}
+
+#[tokio::test]
+async fn attachments_are_uploaded_then_named_to_t3() {
+    let mut http = HttpFake::start();
+    let mut c = Client::with(Config {
+        env: vec![],
+        guard: false,
+        command: None,
+        url: Some(format!("{}/mcp", http.url)),
+        token: None,
+    });
+    let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    c.bind_with(
+        json!({"session": "s1", "binding": "b1", "agent": "t3:fake", "workspace": cwd, "cwd": cwd,
+            "options": {"title": "Test"}, "control": "native", "deny": []}),
+    )
+    .await;
+    c.call(
+        "binding/prompt",
+        json!({
+            "binding": "b1", "message": "m1", "text": "What is this?", "steer": false,
+            "attachments": [
+                { "name": "shot.png", "type": "image/png", "data": "aGVsbG8=" },
+                { "name": "empty.bin", "type": "application/octet-stream" },
+            ],
+        }),
+    )
+    .await;
+    let notice = c.wait(|u| u["update"]["type"] == "notice").await;
+    assert_eq!(notice["update"]["code"], "attachment_unsupported");
+    assert!(notice["update"]["text"].as_str().unwrap().contains("empty.bin"));
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "Received 1 attachments.")
+        .await;
+    c.wait(|u| u["update"]["type"] == "state" && u["update"]["state"] == "idle")
+        .await;
+    http.stop();
 }
 
 #[tokio::test]
