@@ -10,15 +10,15 @@ Each folder here is a Hatchery package for one agent. The runtime installs the `
 | --- | --- |
 | `<agent>/package.kdl` | The Hatchery manifest: `group aiviarium`, the agent's id, its version, and `targets { parrot { requires { parrot "^0.1" } } }` |
 | `<agent>/parrot/driver.kdl` | How the driver runs, which CLI versions it covers, and its data version |
-| `<agent>/parrot/options.kdl` | Option maps: roles, choices with semantic tags, `dependsOn` rules |
+| `<agent>/parrot/options.kdl` | Option maps with roles, choices with semantic tags, and `dependsOn` rules |
 | `<agent>/parrot/levels.kdl` | Permission levels and the tools each level allows (E4) |
-| `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source wins |
+| `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source is preferred |
 | `<agent>/parrot/profile.kdl` | The TUI profile, for agents with TUI control. This is the live copy |
 | `<agent>/parrot/shims/<dir>/` | Files that replace the ones above for a range of CLI versions |
 | `<agent>/parrot/variants/<os>-<arch>/` | The driver binary for one platform. Built, never committed |
 | `<agent>/parrot/probes/*.kdl` | Probe scenarios. They run against a real CLI to record transcripts, and never in CI |
 
-## driver.kdl
+## The driver file
 
 A driver is a built-in core of the runtime or a program in the egg. The Claude, Codex, pi, opencode and T3 eggs contain a program per platform. The ACP and TUI cores serve data-only eggs.
 
@@ -44,10 +44,10 @@ The runtime marks a session `unverified` when the CLI reports a version outside 
 | `driver "builtin" name=…` | A core built into the runtime: `acp` runs `parrot driver acp`, and `tui` runs the TUI core in the runtime |
 | `driver "command" { … }` | The runtime runs a program from the egg's `parrot` folder |
 | `run "path" args…` | The program when no variant matches, with its arguments. `{os}`, `{arch}` and `{exe}` are filled in |
-| `variant os=… arch=… run=…` | The program for one platform. The first match wins. Either key may be left out |
+| `variant os=… arch=… run=…` | The program for one platform. The first match is used. Either key may be left out |
 | `command "prog" "arg"…` | The CLI command, for the ACP and TUI cores |
 | `transcript "claude"`, `"codex"` or `"jsonl" dir=…` | The transcript the TUI core reads, by format. `dir=` replaces the format's own folder |
-| `mcp "mcp-config"` or `mcp "config-override"` | How the TUI core passes the `parrot` MCP server: `--mcp-config` JSON or `-c` overrides |
+| `mcp "mcp-config"` or `mcp "config-override"` | The form in which the TUI core passes the `parrot` MCP server to the CLI, as `--mcp-config` JSON or `-c` overrides |
 | `cli "name" versions=…` | The agent CLI and the semver range this data covers |
 | `data-version "1"` | The data version, reported as `driver.data` on the agent |
 | `controls "native" "tui"` | How the agent can be driven. The first is the default. `native` when left out |
@@ -150,7 +150,7 @@ A registry with a key refuses an egg whose signature is missing or wrong. Withou
 
 The schemas of `driver.kdl` and the probes are in `spec/schema/driver-data/`, with examples in `spec/examples/driver-data/`.
 
-## How a driver finds its data
+## A driver's data folder
 
 The runtime starts every driver with these variables:
 
@@ -164,7 +164,7 @@ A driver reads its files from `PARROT_DRIVER_DATA`. A driver binary may contain 
 
 ## The data files
 
-These shapes are the minimum. Owners may add fields, but not rename or remove these.
+These fields are the minimum. Owners may add fields, but not rename or remove these.
 
 ```kdl
 // options.kdl

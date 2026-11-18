@@ -130,7 +130,7 @@ mcp "mcp-config"
 
 Either shows up under the egg's own id, such as `gemini`.
 
-The TUI core reads items from the harness's own transcript when `transcript` names one:
+The TUI core reads items from the agent CLI's own transcript when `transcript` names one:
 
 | Node | The TUI core |
 | --- | --- |
