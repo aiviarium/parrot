@@ -484,3 +484,43 @@ async fn a_session_with_a_worktree_moves_to_a_server_and_runs_on_after_the_lapto
         .await;
     assert!(read.to_string().contains("There are two entries."), "{read}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_carrier_egg_carries_a_link() {
+    let server = Serve::start(None);
+    // The laptop has the example carrier egg installed before it starts.
+    let dir = tempfile::tempdir().unwrap();
+    let egg = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eggs/relay");
+    let out = Command::new(PARROT)
+        .args(["eggs", "install", egg.to_str().unwrap(), "--state-dir"])
+        .arg(dir.path().join("state"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let laptop = Serve::start_in(dir, None);
+
+    let mut l = Client::connect(&laptop, "laptop-client").await;
+    l.initialize().await;
+    let carriers = l.ok("carrier/list", json!({})).await;
+    let relay = carriers["carriers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "relay")
+        .unwrap_or_else(|| panic!("no relay carrier: {carriers}"))
+        .clone();
+    assert_eq!(relay["containment"], "restricted", "{relay}");
+    // The egg is a carrier, not an agent.
+    let agents = l.ok("agent/list", json!({})).await;
+    assert!(!agents.to_string().contains("\"relay\""), "{agents}");
+
+    let invite: Value = serde_json::from_str(&server.link(&["invite", "--name", "laptop", "--json"], None)).unwrap();
+    let carrier = json!({ "kind": "relay", "target": { "parrot": PARROT, "socket": server.socket } });
+    laptop.link(
+        &["add", "--name", "server", "--code-stdin", "--carrier", &carrier.to_string()],
+        Some(invite["code"].as_str().unwrap()),
+    );
+    let links = until(&mut l, "link/list", json!({}), "a connected link", |r| r["links"][0]["status"] == "connected").await;
+    assert_eq!(links["links"][0]["carrier"]["kind"], "relay", "{links}");
+    assert_eq!(links["links"][0]["containment"], "restricted", "{links}");
+}

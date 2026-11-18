@@ -94,7 +94,7 @@ pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
 /// The built-in carriers and the registered eggs.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Carriers {
     eggs: HashMap<String, EggCarrier>,
 }

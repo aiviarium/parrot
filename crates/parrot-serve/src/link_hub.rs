@@ -37,7 +37,7 @@ pub struct LinkHub {
     key: Arc<StaticKey>,
     pins: Arc<PinSet>,
     invites: Arc<InviteBook>,
-    carriers: Carriers,
+    carriers: Mutex<Carriers>,
     records: Mutex<Vec<Value>>,
     store: Option<Mutex<parrot_store::Store>>,
     addresses: Mutex<Vec<String>>,
@@ -122,7 +122,7 @@ impl LinkHub {
             key: Arc::new(key),
             pins,
             invites: Arc::new(InviteBook::new()),
-            carriers: Carriers::new(),
+            carriers: Mutex::new(Carriers::new()),
             records: Mutex::new(records),
             store,
             addresses: Mutex::new(Vec::new()),
@@ -135,6 +135,15 @@ impl LinkHub {
     /// This runtime's id, derived from its key.
     pub fn runtime_id(&self) -> String {
         self.key.runtime_id()
+    }
+
+    /// Registers a carrier egg, so a `link/add` can name its kind (spec 24.2).
+    pub fn add_carrier(&self, egg: parrot_link::carrier::EggCarrier) -> Result<(), LinkError> {
+        self.carriers.lock().expect("lock").add_egg(egg)
+    }
+
+    fn carriers(&self) -> Carriers {
+        self.carriers.lock().expect("lock").clone()
     }
 
     /// Addresses put into invite codes, such as the TCP listener's.
@@ -230,7 +239,7 @@ impl LinkHub {
             "link.list" => Ok(json!({
                 "links": self.records.lock().expect("lock").iter().map(Self::public).collect::<Vec<_>>()
             })),
-            "carrier.list" => Ok(json!({ "carriers": self.carriers.list() })),
+            "carrier.list" => Ok(json!({ "carriers": self.carriers().list() })),
             "link.invite" => self.invite(params),
             "link.add" => self.add(params).await,
             "link.update" => self.update_link(params),
@@ -263,17 +272,30 @@ impl LinkHub {
     }
 
     async fn add(self: Arc<Self>, p: Value) -> Result<Value, RpcError> {
-        let name = p["name"].as_str().ok_or_else(|| invalid("name is required"))?;
+        p["name"].as_str().ok_or_else(|| invalid("name is required"))?;
         let carrier: CarrierRef =
             serde_json::from_value(p["carrier"].clone()).map_err(|e| invalid(&format!("carrier: {e}")))?;
         let code = match p["code"].as_str() {
             Some(code) => InviteCode::parse(code).map_err(link_error)?,
-            None => invite_over_carrier(&carrier, name, &p).await?,
+            None => invite_over_carrier(&carrier, p["name"].as_str().unwrap_or_default(), &p).await?,
         };
-        let channel = self.carriers.open(&carrier).await.map_err(link_error)?;
+        let channel = self.carriers().open(&carrier).await.map_err(link_error)?;
+        self.pair_on(&p, carrier, channel, &code).await
+    }
+
+    /// Pairs over a channel that is already open, such as an in-process duplex, and serves the
+    /// link from then on. `carrier` is how the link is dialled again after a drop.
+    pub async fn pair_on(
+        self: Arc<Self>,
+        p: &Value,
+        carrier: CarrierRef,
+        channel: parrot_link::carrier::Channel,
+        code: &InviteCode,
+    ) -> Result<Value, RpcError> {
+        let name = p["name"].as_str().ok_or_else(|| invalid("name is required"))?;
         let conn = Dialer::new(self.key.clone())
             .max_message(channel.max_message)
-            .pair(channel.stream, &code)
+            .pair(channel.stream, code)
             .await
             .map_err(link_error)?;
         self.pins.pin(conn.peer.key);
@@ -348,7 +370,8 @@ impl LinkHub {
                 return;
             };
             self.set_status(&link, "connecting", None);
-            if let Ok((_, channel)) = self.carriers.open_with_fallback(&carrier).await {
+            let carriers = self.carriers();
+            if let Ok((_, channel)) = carriers.open_with_fallback(&carrier).await {
                 let via = channel.kind.clone();
                 match Dialer::new(self.key.clone())
                     .max_message(channel.max_message)

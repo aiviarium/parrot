@@ -1,0 +1,11 @@
+#!/bin/sh
+# A carrier egg: `carrier dial` reads its target as JSON on the first line, answers that it is
+# ready, then its standard input and output are the channel to the peer's link endpoint.
+set -eu
+[ "${1:-}" = dial ] || { echo '{"error":"only dial"}'; exit 1; }
+IFS= read -r target
+field() { printf '%s' "$target" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"; }
+parrot=$(field parrot)
+socket=$(field socket)
+echo '{"ready":true}'
+exec "$parrot" connect --link --socket "$socket"

@@ -5,12 +5,14 @@
 //! | --- | --- |
 //! | [`target`] | The `parrot` target: the fact `parrot=<version>` and the check of a target's files |
 //! | [`driver`] | `driver.kdl` |
+//! | [`carrier`] | `carrier.kdl`, for carrier eggs |
 //! | [`probe`] | Probe scenarios, `probes/*.kdl` |
 //! | [`store`] | Installing into `<state_dir>/eggs`, the compiled-in fallback, and loading |
 //! | [`builtin`] | The in-repo eggs, compiled in |
 //! | [`schema`] | The JSON Schemas of the data files |
 
 pub mod builtin;
+pub mod carrier;
 pub mod driver;
 mod kdlx;
 pub mod probe;

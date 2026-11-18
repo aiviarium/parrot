@@ -145,6 +145,10 @@ impl Eggs {
         match self.installed() {
             Ok(installed) => {
                 for p in installed {
+                    // Carrier eggs are not agents; [`Eggs::carriers`] loads them.
+                    if crate::carrier::is_carrier(&p.dir.join(TARGET)) {
+                        continue;
+                    }
                     let egg = self.loaded(&p.manifest, p.dir.join(TARGET), EggSource::Installed);
                     eggs.insert(egg.agent.clone(), egg);
                 }
@@ -173,6 +177,32 @@ impl Eggs {
             }
         }
         (eggs.into_values().collect(), problems)
+    }
+
+    /// The installed carrier eggs (spec 24.2), each with its `carrier.kdl` or why it is refused.
+    pub fn carriers(&self) -> (Vec<crate::carrier::LoadedCarrier>, Vec<String>) {
+        match self.installed() {
+            Ok(installed) => (
+                installed
+                    .into_iter()
+                    .filter(|p| crate::carrier::is_carrier(&p.dir.join(TARGET)))
+                    .map(|p| {
+                        let data_dir = p.dir.join(TARGET);
+                        let carrier = match self.refusal(&p.manifest) {
+                            Some(why) => Err(why),
+                            None => crate::carrier::read(&data_dir),
+                        };
+                        crate::carrier::LoadedCarrier {
+                            package: p.manifest.name().to_string(),
+                            data_dir,
+                            carrier,
+                        }
+                    })
+                    .collect(),
+                Vec::new(),
+            ),
+            Err(e) => (Vec::new(), vec![format!("cannot read the installed eggs: {e}")]),
+        }
     }
 
     fn loaded(&self, manifest: &Manifest, data_dir: PathBuf, source: EggSource) -> LoadedEgg {
