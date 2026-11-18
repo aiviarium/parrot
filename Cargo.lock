@@ -1724,6 +1724,7 @@ dependencies = [
  "parrot-workspace",
  "rand 0.9.5",
  "rustix",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
