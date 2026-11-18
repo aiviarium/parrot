@@ -5,7 +5,7 @@
 use parrot_core::Core;
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_link::StaticKey;
-use parrot_link::carrier::{Channel, Containment, CarrierRef};
+use parrot_link::carrier::{CarrierRef, Channel, Containment};
 use parrot_link::pairing::InviteCode;
 use parrot_serve::link_hub::LinkHub;
 use parrot_serve::{Runtime, RuntimeBackend, socket};
@@ -92,13 +92,20 @@ impl Client {
 
     async fn ok(&mut self, method: &str, params: Value) -> Value {
         let r = self.call(method, params).await;
-        r.get("result").cloned().unwrap_or_else(|| panic!("{method} failed: {r}"))
+        r.get("result")
+            .cloned()
+            .unwrap_or_else(|| panic!("{method} failed: {r}"))
     }
 }
 
 fn git(dir: &Path, args: &[&str]) {
     let ok = Command::new("git")
-        .args(["-c", "user.name=Made Up", "-c", "user.email=made-up@example.invalid"])
+        .args([
+            "-c",
+            "user.name=Made Up",
+            "-c",
+            "user.email=made-up@example.invalid",
+        ])
         .args(args)
         .current_dir(dir)
         .status()
@@ -116,7 +123,10 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
     // The server invites; the laptop pairs over one end of a duplex, the server accepts the other.
     let mut s = Client::connect(&server).await;
     let invite = s
-        .ok("link/invite", json!({ "name": "laptop", "grant": ["read", "workspace"] }))
+        .ok(
+            "link/invite",
+            json!({ "name": "laptop", "grant": ["read", "workspace"] }),
+        )
         .await;
     let code = InviteCode::parse(invite["code"].as_str().unwrap()).unwrap();
     let (near, far) = tokio::io::duplex(64 * 1024);
@@ -133,7 +143,12 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
     laptop
         .hub
         .clone()
-        .pair_on(&json!({ "name": "server", "grant": ["read"] }), carrier, channel, &code)
+        .pair_on(
+            &json!({ "name": "server", "grant": ["read"] }),
+            carrier,
+            channel,
+            &code,
+        )
         .await
         .unwrap();
 
@@ -159,7 +174,10 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
         .await["runtime"]["env"]
         .clone();
     let created = l
-        .ok("workspace/create", json!({ "env": env, "request": { "kind": "dir", "path": repo } }))
+        .ok(
+            "workspace/create",
+            json!({ "env": env, "request": { "kind": "dir", "path": repo } }),
+        )
         .await;
     let workspace = created["workspace"]["id"].as_str().unwrap().to_string();
 
@@ -167,7 +185,10 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
     let deadline = Instant::now() + Duration::from_secs(20);
     let moved = loop {
         let r = l
-            .call("workspace/transfer", json!({ "workspace": workspace, "to": server_env }))
+            .call(
+                "workspace/transfer",
+                json!({ "workspace": workspace, "to": server_env }),
+            )
             .await;
         if let Some(result) = r.get("result") {
             break result.clone();
@@ -184,7 +205,10 @@ async fn two_runtimes_pair_over_a_duplex_and_transfer_a_workspace() {
 
     // A second transfer of the same workspace is refused rather than mixed into the first.
     let again = l
-        .call("workspace/transfer", json!({ "workspace": workspace, "to": server_env }))
+        .call(
+            "workspace/transfer",
+            json!({ "workspace": workspace, "to": server_env }),
+        )
         .await;
     assert_eq!(again["error"]["code"], -32004, "{again}");
 }
@@ -195,7 +219,9 @@ async fn a_link_without_the_workspace_scope_cannot_send_a_workspace() {
     let laptop = side(dir.path(), "laptop", 3);
     let server = side(dir.path(), "server", 4);
     let mut s = Client::connect(&server).await;
-    let invite = s.ok("link/invite", json!({ "name": "laptop", "grant": ["read"] })).await;
+    let invite = s
+        .ok("link/invite", json!({ "name": "laptop", "grant": ["read"] }))
+        .await;
     let code = InviteCode::parse(invite["code"].as_str().unwrap()).unwrap();
     let (near, far) = tokio::io::duplex(64 * 1024);
     tokio::spawn(server.hub.clone().accept(far));
@@ -214,21 +240,31 @@ async fn a_link_without_the_workspace_scope_cannot_send_a_workspace() {
         .await
         .unwrap();
     let mut l = Client::connect(&laptop).await;
-    let init = json!({ "protocol": [1], "peer": { "kind": "client", "name": "x", "version": "0" }, "features": {} });
-    let server_env = s.ok("initialize", init.clone()).await["runtime"]["env"].as_str().unwrap().to_string();
+    let init =
+        json!({ "protocol": [1], "peer": { "kind": "client", "name": "x", "version": "0" }, "features": {} });
+    let server_env = s.ok("initialize", init.clone()).await["runtime"]["env"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let env = l.ok("initialize", init).await["runtime"]["env"].clone();
     let repo = dir.path().join("laptop").join("demo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "--quiet", "--initial-branch=main"]);
     git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "one"]);
     let created = l
-        .ok("workspace/create", json!({ "env": env, "request": { "kind": "dir", "path": repo } }))
+        .ok(
+            "workspace/create",
+            json!({ "env": env, "request": { "kind": "dir", "path": repo } }),
+        )
         .await;
     let workspace = created["workspace"]["id"].as_str().unwrap().to_string();
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let r = l
-            .call("workspace/transfer", json!({ "workspace": workspace, "to": server_env }))
+            .call(
+                "workspace/transfer",
+                json!({ "workspace": workspace, "to": server_env }),
+            )
             .await;
         // Not found until the peer's environment is known, then refused by the peer's grant.
         if r["error"]["code"] == -32003 {

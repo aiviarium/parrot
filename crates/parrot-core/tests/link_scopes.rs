@@ -44,7 +44,9 @@ impl Sim {
         let result = effects
             .iter()
             .find_map(|e| match e {
-                Effect::Reply { id: rid, result, .. } if *rid == id => Some(result.clone().map_err(|e| e.code)),
+                Effect::Reply { id: rid, result, .. } if *rid == id => {
+                    Some(result.clone().map_err(|e| e.code))
+                }
                 _ => None,
             })
             .unwrap_or(Err(0));
@@ -95,7 +97,11 @@ fn a_link_mints_tokens_only_within_what_it_holds() {
     assert_eq!(r, Err(-32003));
     assert!(token_op(&e).is_none());
     // No sessions: a token for everything here.
-    let (r, _) = sim.call("con_link", "token/create", json!({ "name": "phone", "scopes": ["read"] }));
+    let (r, _) = sim.call(
+        "con_link",
+        "token/create",
+        json!({ "name": "phone", "scopes": ["read"] }),
+    );
     assert_eq!(r, Err(-32003));
     // A session the owner made, not the link.
     let (r, _) = sim.call(

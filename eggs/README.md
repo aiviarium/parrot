@@ -50,7 +50,7 @@ A program can live in a Hatchery variant folder, such as `variants/linux/driver`
 
 ## Carrier eggs
 
-A carrier egg gives links a channel that the built-in carriers can't reach. Its `parrot` folder holds `carrier.kdl` and the program it names, and no `driver.kdl`. The runtime loads installed carrier eggs at start, and `link/add` can name one by its kind.
+A carrier egg gives links a channel of a platform's own, for machines that SSH, a command or TCP can't get to. Its `parrot` folder holds `carrier.kdl` and the program it runs, and no `driver.kdl`. The runtime loads installed carrier eggs at start, and the `carrier.kind` of a `link/add` selects one.
 
 ```kdl
 carrier "relay" title="Relay" max-message=16384 containment="restricted"
@@ -60,7 +60,9 @@ target "{\"type\":\"object\"}"
 
 | Node | Meaning |
 | --- | --- |
-| `carrier "kind"` | The kind a link's carrier names. `title`, `max-message` (at least 4096 bytes), `containment` (`restricted` or `shell`) and `listens` are optional |
+| `carrier "kind"` | The kind that a link's carrier selects. `title`, `max-message`, `containment` and `listens` are optional |
+| `max-message=…` | The largest message on the channel, at least 4096 bytes |
+| `containment=…` | `restricted` or `shell` |
 | `run "path" args…` | The program, relative to the `parrot` folder |
 | `target "json"` | The JSON Schema of the carrier's target |
 

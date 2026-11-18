@@ -402,7 +402,6 @@ fn start_move(
         }
         None => send_offer(cx, m, None, log),
     }
-    let _ = &cx.state.links.pending;
     Ok(Value::Null)
 }
 
@@ -688,12 +687,12 @@ fn finish_offer(
         crate::requests::publish_request(cx, rid);
     }
     let binding = sessions::start_binding(cx, &session, parrot_proto::session::BindingVia::New);
-    if let (Some(b), Some(keys)) = (&binding, params["turnKeys"].as_object()) {
-        if let Some(info) = cx.state.bindings.info.get_mut(b) {
-            for (k, v) in keys {
-                if let Some(v) = v.as_str() {
-                    info.turns.insert(k.clone(), v.to_string());
-                }
+    if let (Some(b), Some(keys)) = (&binding, params["turnKeys"].as_object())
+        && let Some(info) = cx.state.bindings.info.get_mut(b)
+    {
+        for (k, v) in keys {
+            if let Some(v) = v.as_str() {
+                info.turns.insert(k.clone(), v.to_string());
             }
         }
     }
@@ -1110,7 +1109,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
         Pending::Receive {
             conn,
             id,
-            link,
+            link: _,
             workspace,
         } => {
             let answer = result.map(|u| {
@@ -1121,7 +1120,6 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                 };
                 let path = u["path"].as_str().unwrap_or_default().to_string();
                 crate::tree::add_workspace(cx, &workspace, &path, meta);
-                let _ = &link;
                 json!({ "workspace": crate::tree::workspace_json(cx.state, &workspace) })
             });
             if let Some(id) = id {

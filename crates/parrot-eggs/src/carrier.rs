@@ -99,7 +99,11 @@ impl CarrierFile {
         if out.run.is_empty() || path.is_absolute() || path.components().any(|c| c.as_os_str() == "..") {
             problems.push("run needs a path inside the parrot folder".into());
         }
-        if problems.is_empty() { Ok(out) } else { Err(problems) }
+        if problems.is_empty() {
+            Ok(out)
+        } else {
+            Err(problems)
+        }
     }
 }
 
@@ -118,7 +122,8 @@ pub fn is_carrier(data_dir: &Path) -> bool {
 
 /// Reads `carrier.kdl` in a `parrot` folder.
 pub fn read(data_dir: &Path) -> Result<CarrierFile, String> {
-    let text = std::fs::read_to_string(data_dir.join(FILE)).map_err(|e| format!("cannot read {FILE}: {e}"))?;
+    let text =
+        std::fs::read_to_string(data_dir.join(FILE)).map_err(|e| format!("cannot read {FILE}: {e}"))?;
     CarrierFile::parse(&text).map_err(|p| p.join("; "))
 }
 

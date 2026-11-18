@@ -1,8 +1,8 @@
 //! The `link` profile proof (spec 40): two runtimes with their own state and workspace roots
 //! pair over the `command` carrier without a code. A session with a git worktree, an open request
 //! and a queued prompt moves from the first to the second; its workspace arrives through the
-//! link; the first runtime is killed, as when a laptop closes; the session runs its queued prompt
-//! on the second, and a client there answers the request that prompt raises.
+//! link; the first runtime is killed, as when a laptop closes; a client of the second resumes the
+//! queue, the session runs its queued prompt there, and the client answers the request it raises.
 #![cfg(unix)]
 // The helpers are shared in shape with `link_move.rs`; this test uses only some of them.
 #![allow(dead_code)]
@@ -378,9 +378,11 @@ async fn a_session_with_a_worktree_moves_to_a_server_and_runs_on_after_the_lapto
         })
         .await;
     let first_request = l.update(i)["request"]["id"].as_str().unwrap().to_string();
+    // The queue is paused first, so the prompt waits whatever the turn's state is.
+    l.ok("queue/pause", json!({ "session": session })).await;
     l.ok(
         "session/prompt",
-        json!({ "session": session, "text": "run ls again" }),
+        json!({ "session": session, "text": "run ls again", "delivery": "queue" }),
     )
     .await;
     let queued = l.ok("queue/list", json!({ "session": session })).await;
@@ -436,6 +438,16 @@ async fn a_session_with_a_worktree_moves_to_a_server_and_runs_on_after_the_lapto
     // The laptop closes.
     drop(l);
     drop(laptop);
+
+    // The queue arrived as it was: paused, with the prompt in it. A client of the server
+    // resumes it.
+    let arrived_queue = s.ok("queue/list", json!({ "session": session })).await;
+    assert_eq!(arrived_queue["queue"]["paused"], true, "{arrived_queue}");
+    assert_eq!(
+        arrived_queue["queue"]["entries"][0]["text"], "run ls again",
+        "{arrived_queue}"
+    );
+    s.ok("queue/resume", json!({ "session": session })).await;
 
     // The queued prompt runs on the server and raises a request there, which a client of the
     // server answers. The first request belonged to the laptop's harness and came along expired.
@@ -514,13 +526,24 @@ async fn a_carrier_egg_carries_a_link() {
     let agents = l.ok("agent/list", json!({})).await;
     assert!(!agents.to_string().contains("\"relay\""), "{agents}");
 
-    let invite: Value = serde_json::from_str(&server.link(&["invite", "--name", "laptop", "--json"], None)).unwrap();
+    let invite: Value =
+        serde_json::from_str(&server.link(&["invite", "--name", "laptop", "--json"], None)).unwrap();
     let carrier = json!({ "kind": "relay", "target": { "parrot": PARROT, "socket": server.socket } });
     laptop.link(
-        &["add", "--name", "server", "--code-stdin", "--carrier", &carrier.to_string()],
+        &[
+            "add",
+            "--name",
+            "server",
+            "--code-stdin",
+            "--carrier",
+            &carrier.to_string(),
+        ],
         Some(invite["code"].as_str().unwrap()),
     );
-    let links = until(&mut l, "link/list", json!({}), "a connected link", |r| r["links"][0]["status"] == "connected").await;
+    let links = until(&mut l, "link/list", json!({}), "a connected link", |r| {
+        r["links"][0]["status"] == "connected"
+    })
+    .await;
     assert_eq!(links["links"][0]["carrier"]["kind"], "relay", "{links}");
     assert_eq!(links["links"][0]["containment"], "restricted", "{links}");
 }
