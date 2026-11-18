@@ -385,6 +385,11 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             background,
             detail,
         } => {
+            // A binding being replaced, as in a rebind, still reports while it stops; only the
+            // session's current binding sets its state.
+            if crate::directory::binding_of(cx.state, &session).as_deref() != Some(binding) {
+                return;
+            }
             let changed = {
                 let Some(s) = cx.state.sessions.info.get_mut(&session) else {
                     return;
