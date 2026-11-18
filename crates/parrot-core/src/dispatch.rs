@@ -1,5 +1,4 @@
-//! Routes every input to the module that owns it. This file is fixed; modules fill in their
-//! functions.
+//! Routes every input to the module that owns it.
 
 use crate::{
     CallOwner, Cx, Effect, Input, Reply, actions, bindings, options, principals, queue, requests, sessions,
@@ -30,14 +29,22 @@ pub(crate) fn input(cx: &mut Cx, input: Input) {
         }
         Input::ClientReply { .. } => {}
         Input::DriverUpdate { binding, update } => driver_update(cx, &binding, update),
-        Input::DriverReply { call, result, .. } => match cx.state.pending_calls.remove(&call) {
+        Input::DriverReply {
+            binding,
+            call,
+            result,
+        } => match cx.state.pending_calls.remove(&call) {
             Some(CallOwner::Bindings) => bindings::on_reply(cx, call, result),
             Some(CallOwner::Queue) => queue::on_reply(cx, call, result),
             Some(CallOwner::Requests) => requests::on_reply(cx, call, result),
             Some(CallOwner::Options) => options::on_reply(cx, call, result),
             Some(CallOwner::Actions) => actions::on_reply(cx, call, result),
-            None => {}
+            Some(CallOwner::Sessions) => sessions::on_reply(cx, call, result),
+            // The backend sends `binding/start` itself, under a call id the core never issued.
+            None => bindings::start_reply(cx, &binding, result),
         },
+        Input::AgentReply { agent, call, result } => sessions::on_agent_reply(cx, &agent, call, result),
+        Input::Restore(restore) => crate::restore::restore(cx, restore),
         Input::DriverExited { binding, detail } => bindings::exited(cx, &binding, &detail),
         Input::Tick { .. } => {
             requests::tick(cx);

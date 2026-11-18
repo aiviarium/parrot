@@ -27,6 +27,8 @@ pub struct SessionQueue {
     pub entries: VecDeque<Entry>,
     /// A prompt or action was sent and the driver hasn't reported `idle` since.
     pub busy: bool,
+    /// Paused by a restart: the next prompt, action or `session/start` resumes it (spec 34).
+    pub held: bool,
 }
 
 /// One queued prompt, action or wake.
@@ -84,8 +86,115 @@ pub fn is_busy(state: &State, session: &str) -> bool {
 
 fn publish_queue(cx: &mut Cx, session: &str) {
     let q = queue_state(cx.state, session);
-    cx.persist(json!({ "op": "put", "kind": "queue", "id": session, "value": q }));
+    // The stored form also keeps each entry's driver params, so a restart can send it.
+    let mut stored = q.clone();
+    if let (Some(sq), Some(entries)) = (
+        cx.state.queue.by_session.get(session),
+        stored.get_mut("entries").and_then(Value::as_array_mut),
+    ) {
+        for (v, e) in entries.iter_mut().zip(&sq.entries) {
+            v["params"] = e.params.clone();
+        }
+    }
+    cx.persist(json!({ "op": "put", "kind": "queue", "id": session, "value": stored }));
     cx.publish(Some(session.to_string()), json!({ "type": "queue", "queue": q }));
+}
+
+/// Put back a session's queue read from the store. After a restart it stays paused until the
+/// next prompt, action or `session/start` (spec 34).
+pub fn restore(state: &mut State, session: &str, value: &Value) {
+    let entries: VecDeque<Entry> = value
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|es| {
+            es.iter()
+                .filter_map(|e| {
+                    let text = e.get("text")?.as_str()?.to_string();
+                    let message = e.get("message").and_then(Value::as_str).map(str::to_string);
+                    let params = match e.get("params") {
+                        Some(p) if p.is_object() => p.clone(),
+                        _ => json!({ "message": message, "text": text }),
+                    };
+                    Some(Entry {
+                        id: e.get("id")?.as_str()?.to_string(),
+                        message,
+                        text,
+                        origin: e
+                            .get("origin")
+                            .cloned()
+                            .unwrap_or_else(|| json!({ "kind": "runtime" })),
+                        kind: e
+                            .get("kind")
+                            .and_then(|k| serde_json::from_value(k.clone()).ok())
+                            .unwrap_or(QueueEntryKind::Prompt),
+                        params,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let paused = value.get("paused").and_then(Value::as_bool).unwrap_or(false);
+    let held = !paused && !entries.is_empty();
+    state.queue.by_session.insert(
+        session.to_string(),
+        SessionQueue {
+            paused: paused || held,
+            entries,
+            busy: false,
+            held,
+        },
+    );
+}
+
+/// The next prompt, action or `session/start` after a restart resumes a held queue.
+pub fn release(cx: &mut Cx, session: &str) {
+    if let Some(q) = cx.state.queue.by_session.get_mut(session)
+        && q.held
+    {
+        q.held = false;
+        q.paused = false;
+        publish_queue(cx, session);
+    }
+}
+
+/// Note a prompt sent to a harness that hasn't confirmed it yet; a restart before the
+/// confirmation marks its user item `uncertain` (spec 34).
+pub fn inflight_begin(cx: &mut Cx, session: &str, message: &str, text: &str) {
+    cx.persist(json!({ "op": "put", "kind": "inflight", "id": message,
+        "value": { "session": session, "message": message, "text": text } }));
+}
+
+/// The harness answered a prompt, either way.
+pub fn inflight_end(cx: &mut Cx, message: &str) {
+    cx.persist(json!({ "op": "delete", "kind": "inflight", "id": message }));
+}
+
+/// Queue a prompt or action the runtime makes for a stopped session, to send once its binding is
+/// ready. Returns the user item's id for prompts.
+pub fn enqueue(
+    cx: &mut Cx,
+    session: &str,
+    kind: QueueEntryKind,
+    text: String,
+    origin: Value,
+    mut params: Value,
+) -> Option<String> {
+    let message = (kind != QueueEntryKind::Action).then(|| cx.ids.next("msg"));
+    if let Some(m) = &message {
+        params["message"] = json!(m);
+        params["text"] = json!(text);
+    }
+    let entry = Entry {
+        id: cx.ids.next("q"),
+        message: message.clone(),
+        text,
+        origin,
+        kind,
+        params,
+    };
+    user_item(cx, session, &entry, "queued", true);
+    push(cx, session, entry, false);
+    message
 }
 
 fn user_item(cx: &mut Cx, session: &str, entry: &Entry, status: &str, first: bool) {
@@ -142,6 +251,9 @@ fn send(cx: &mut Cx, session: &str, entry: Entry, steer: bool) {
         }
         _ => {
             params["steer"] = json!(steer);
+            if let Some(m) = &entry.message {
+                inflight_begin(cx, session, m, &entry.text);
+            }
             let call = cx.call_driver(CallOwner::Queue, &binding, "binding/prompt", params);
             cx.state.queue.calls.insert(
                 call,
@@ -211,8 +323,9 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
     let result = match method {
         "session/prompt" => prompt(cx, conn, params),
         "session/cancel" => return cancel(cx, conn, id, params),
-        "queue/list" => with_session(cx, conn, params, |cx, s| {
-            Ok(json!({ "queue": queue_state(cx.state, s) }))
+        "queue/list" => parse::<QueueSessionParams>(params).and_then(|p| {
+            check_session(cx.state, conn, Scope::Read, &p.session)?;
+            Ok(json!({ "queue": queue_state(cx.state, &p.session) }))
         }),
         "queue/clear" => with_session(cx, conn, params, |cx, s| {
             let entries: Vec<Entry> = cx
@@ -360,6 +473,7 @@ fn prompt(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
         kind: QueueEntryKind::Prompt,
         params,
     };
+    release(cx, &session);
     if delivery != Delivery::Queue
         && let Some(q) = cx.state.queue.by_session.get_mut(&session)
         && q.paused
@@ -450,6 +564,13 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
     let Some(pending) = cx.state.queue.calls.remove(&call) else {
         return;
     };
+    if let PendingCall::Prompt {
+        entry: Entry { message: Some(m), .. },
+        ..
+    } = &pending
+    {
+        inflight_end(cx, m);
+    }
     match pending {
         PendingCall::Cancel { conn, id, queued, .. } => {
             let interrupted = result

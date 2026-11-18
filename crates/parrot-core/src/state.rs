@@ -32,4 +32,5 @@ pub enum CallOwner {
     Requests,
     Options,
     Actions,
+    Sessions,
 }

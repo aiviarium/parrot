@@ -15,90 +15,60 @@ pub struct Items {
 pub struct SessionItems {
     pub order: Vec<String>,
     pub by_id: BTreeMap<String, Map<String, Value>>,
+    /// The `seq` each item was created at, to restore the order after a restart.
+    pub created: BTreeMap<String, u64>,
 }
 
-/// Apply a patch to the session's projection. A patch for an unknown item without `kind` is
-/// dropped, since the first patch must create the item.
-pub fn apply(state: &mut State, session: &str, patch: &Value) {
-    let Some(p) = patch.as_object() else { return };
-    let Some(id) = p.get("id").and_then(Value::as_str) else {
-        return;
-    };
+/// Apply a patch to the session's projection and return the item as it now stands, or `None`
+/// when the patch removed it or was dropped. A patch for an unknown item without `kind` is
+/// dropped, since the first patch must create the item; so is one `parrot_proto::patch::apply`
+/// refuses. `seq` is the update's sequence number, kept as the item's creation order.
+pub fn apply(state: &mut State, session: &str, patch: &Value, seq: u64) -> Option<Value> {
+    let p = patch.as_object()?;
+    let id = p.get("id").and_then(Value::as_str)?;
     let items = state.items.by_session.entry(session.to_string()).or_default();
     if p.get("removed") == Some(&Value::Bool(true)) {
         items.by_id.remove(id);
+        items.created.remove(id);
         items.order.retain(|i| i != id);
-        return;
+        return None;
     }
+    let mut item = match items.by_id.get(id) {
+        Some(item) => item.clone(),
+        None if p.contains_key("kind") => Map::new(),
+        None => return None,
+    };
+    parrot_proto::patch::apply(&mut item, patch).ok()?;
     if !items.by_id.contains_key(id) {
-        if !p.contains_key("kind") {
-            return;
-        }
         items.order.push(id.to_string());
-        items.by_id.insert(id.to_string(), Map::new());
+        items.created.insert(id.to_string(), seq);
     }
-    let item = items.by_id.get_mut(id).expect("inserted above");
-    apply_patch(item, p);
+    items.by_id.insert(id.to_string(), item.clone());
+    Some(Value::Object(item))
 }
 
-/// The patch rules of spec 12.1: header fields copy, `kind` never changes, `set` before `append`,
-/// `_meta` in `set` merges by key.
-pub fn apply_patch(item: &mut Map<String, Value>, p: &Map<String, Value>) {
-    for f in [
-        "id",
-        "turn",
-        "binding",
-        "parent",
-        "source",
-        "ref",
-        "origin",
-        "streaming",
-    ] {
-        if let Some(v) = p.get(f) {
-            item.insert(f.into(), v.clone());
-        }
+/// Put back an item read from the store, created at `seq`.
+pub fn restore(state: &mut State, session: &str, item: Map<String, Value>, seq: u64) {
+    let Some(id) = item.get("id").and_then(Value::as_str).map(str::to_string) else {
+        return;
+    };
+    let items = state.items.by_session.entry(session.to_string()).or_default();
+    if !items.by_id.contains_key(&id) {
+        items.order.push(id.clone());
     }
-    if let Some(kind) = p.get("kind") {
-        item.entry("kind").or_insert_with(|| kind.clone());
-    }
-    if let Some(Value::Object(set)) = p.get("set") {
-        for (k, v) in set {
-            match (k.as_str(), v) {
-                (_, Value::Null) => {
-                    item.remove(k);
-                }
-                ("_meta", Value::Object(meta)) => {
-                    let slot = item.entry("_meta").or_insert_with(|| Value::Object(Map::new()));
-                    if !slot.is_object() {
-                        *slot = Value::Object(Map::new());
-                    }
-                    let target = slot.as_object_mut().expect("an object");
-                    for (mk, mv) in meta {
-                        if mv.is_null() {
-                            target.remove(mk);
-                        } else {
-                            target.insert(mk.clone(), mv.clone());
-                        }
-                    }
-                }
-                _ => {
-                    item.insert(k.clone(), v.clone());
-                }
-            }
-        }
-    }
-    if let Some(Value::Object(append)) = p.get("append") {
-        for (k, v) in append {
-            let Some(add) = v.as_str() else { continue };
-            match item.get_mut(k) {
-                Some(Value::String(s)) => s.push_str(add),
-                Some(_) => {}
-                None => {
-                    item.insert(k.clone(), Value::String(add.to_string()));
-                }
-            }
-        }
-    }
+    items.created.insert(id.clone(), seq);
+    items.by_id.insert(id, item);
+}
+
+/// When an item was created, as the `seq` of its first patch.
+pub fn created(state: &State, session: &str, item: &str) -> u64 {
+    state
+        .items
+        .by_session
+        .get(session)
+        .and_then(|s| s.created.get(item))
+        .copied()
+        .unwrap_or(0)
 }
 
 /// One item, as the projection holds it.

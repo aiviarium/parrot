@@ -24,6 +24,8 @@ pub struct Actions {
     pub failed_inputs: BTreeMap<String, Vec<String>>,
     /// Outstanding driver calls by call id.
     pub calls: BTreeMap<u64, PendingCall>,
+    /// Per session, the text of a prompt a restart left `uncertain`, which `retry` resends.
+    pub uncertain: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +69,7 @@ fn runtime_action(id: &str, label: &str, description: &str, input: Option<Value>
 }
 
 /// The session's actions, with the runtime's `continue` and `retry` where the harness has none.
-fn actions_of(state: &State, session: &str) -> Vec<Action> {
+pub fn actions_of(state: &State, session: &str) -> Vec<Action> {
     let mut actions = state.actions.by_session.get(session).cloned().unwrap_or_default();
     if !actions.iter().any(|a| a.id == "continue") {
         let input = json!({ "type": "object", "properties": { "note": { "type": "string" } } });
@@ -153,6 +155,15 @@ fn invoke(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
             return Err(forbidden(scope));
         }
     }
+    let active = crate::sessions::active(cx.state, &session);
+    if !active {
+        // An action starts a stopped session (spec 34), which needs `manage` too.
+        if !allows(cx.state, conn, "manage") {
+            return Err(forbidden("manage"));
+        }
+        return Ok(Reply::Now(Ok(start_and_queue(cx, &session, &action, &p)?)));
+    }
+    crate::queue::release(cx, &session);
     let Some(binding) = directory::binding_of(cx.state, &session) else {
         return Err(wrong_state("stopped", "the session has no running binding"));
     };
@@ -165,30 +176,12 @@ fn invoke(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
         if running {
             return Err(wrong_state("running", "the session is running"));
         }
-        let text = match action.id.as_str() {
-            "continue" => {
-                let note = p
-                    .input
-                    .as_ref()
-                    .and_then(|i| i.get("note"))
-                    .and_then(Value::as_str);
-                match note {
-                    Some(n) if !n.is_empty() => format!("Continue.\n{n}"),
-                    _ => "Continue.".to_string(),
-                }
-            }
-            "retry" => match cx.state.actions.failed_inputs.get(&session).map(Vec::as_slice) {
-                Some([only]) => only.clone(),
-                _ => {
-                    return Err(wrong_state(
-                        "idle",
-                        "retry needs a failed turn with exactly one input",
-                    ));
-                }
-            },
-            other => return Err(RpcError::new(-32002, format!("no action {other}"))),
-        };
+        let text = fallback_text(cx.state, &session, &action.id, &p)?;
+        if action.id == "retry" {
+            cx.state.actions.uncertain.remove(&session);
+        }
         let message = cx.ids.next("msg");
+        crate::queue::inflight_begin(cx, &session, &message, &text);
         let params = json!({
             "binding": binding,
             "message": message,
@@ -256,11 +249,98 @@ fn invoke(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
     })
 }
 
+/// The prompt text of the runtime's `continue` and `retry` (spec 33, Appendix E8).
+fn fallback_text(
+    state: &State,
+    session: &str,
+    action: &str,
+    p: &ActionInvokeParams,
+) -> Result<String, RpcError> {
+    match action {
+        "continue" => {
+            let note = p
+                .input
+                .as_ref()
+                .and_then(|i| i.get("note"))
+                .and_then(Value::as_str);
+            Ok(match note {
+                Some(n) if !n.is_empty() => format!("Continue.\n{n}"),
+                _ => "Continue.".to_string(),
+            })
+        }
+        // A prompt a restart left `uncertain` comes first: it was the last thing sent.
+        "retry" => match (
+            state.actions.uncertain.get(session),
+            state.actions.failed_inputs.get(session).map(Vec::as_slice),
+        ) {
+            (Some(text), _) => Ok(text.clone()),
+            (None, Some([only])) => Ok(only.clone()),
+            _ => Err(wrong_state(
+                "idle",
+                "retry needs a failed or uncertain turn with exactly one input",
+            )),
+        },
+        other => Err(RpcError::new(-32002, format!("no action {other}"))),
+    }
+}
+
+/// Start a stopped session's binding and queue the action to run once it is ready.
+fn start_and_queue(
+    cx: &mut Cx,
+    session: &str,
+    action: &Action,
+    p: &ActionInvokeParams,
+) -> Result<Value, RpcError> {
+    use parrot_proto::prompt::QueueEntryKind;
+    let runtime = action.source == Open::Known(ActionSource::Runtime);
+    let entry = if runtime {
+        let text = fallback_text(cx.state, session, &action.id, p)?;
+        if action.id == "retry" {
+            cx.state.actions.uncertain.remove(session);
+        }
+        let origin = json!({ "kind": "runtime", "action": action.id });
+        (
+            QueueEntryKind::Prompt,
+            text,
+            origin.clone(),
+            json!({ "origin": origin }),
+        )
+    } else {
+        let mut params = json!({ "action": action.id });
+        if let Some(i) = &p.input {
+            params["input"] = i.clone();
+        }
+        if let Some(a) = &p.args {
+            params["args"] = json!(a);
+        }
+        let origin = json!({ "kind": "runtime", "action": action.id });
+        (QueueEntryKind::Action, action.id.clone(), origin, params)
+    };
+    crate::queue::release(cx, session);
+    crate::sessions::start_binding(cx, session, parrot_proto::session::BindingVia::New);
+    let message = crate::queue::enqueue(cx, session, entry.0, entry.1, entry.2, entry.3);
+    let mut out = json!({ "status": "queued" });
+    if let Some(m) = message {
+        out["message"] = json!(m);
+    }
+    Ok(out)
+}
+
+/// Put back a session's actions read from the store.
+pub fn restore(state: &mut State, session: &str, value: &Value) {
+    if let Ok(actions) = serde_json::from_value(value.clone()) {
+        state.actions.by_session.insert(session.to_string(), actions);
+    }
+}
+
 /// A driver answered a call this module made with `Cx::call_driver`.
 pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
     let Some(pending) = cx.state.actions.calls.remove(&call) else {
         return;
     };
+    if let Some(m) = &pending.message {
+        crate::queue::inflight_end(cx, m);
+    }
     let Some((conn, id)) = pending.reply_to else {
         return;
     };
@@ -306,6 +386,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
         .actions
         .by_session
         .insert(session.clone(), actions.clone());
+    cx.persist(json!({ "op": "put", "kind": "actions", "id": session, "value": actions }));
     let actions = actions_of(cx.state, &session);
     cx.publish(Some(session), json!({ "type": "actions", "actions": actions }));
 }

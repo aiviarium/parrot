@@ -81,5 +81,18 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
         accumulate(entry.by_turn.entry(turn.to_string()).or_default(), usage);
     }
     let total = entry.total.clone();
+    cx.persist(json!({ "op": "put", "kind": "usage", "id": session, "value": total }));
     cx.publish(Some(session), json!({ "type": "usage", "usage": total }));
+}
+
+/// Put back a session's usage read from the store.
+pub fn restore(state: &mut crate::State, session: &str, value: &Value) {
+    if let Ok(total) = serde_json::from_value(value.clone()) {
+        state
+            .usage
+            .by_session
+            .entry(session.to_string())
+            .or_default()
+            .total = total;
+    }
 }

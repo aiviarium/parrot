@@ -173,9 +173,146 @@ pub fn started(cx: &mut Cx, binding: &str, result: &Value) {
     sessions::changed(cx, &session);
 }
 
-/// A driver answered a call this module made with `Cx::call_driver` (`binding/stop`). The
-/// `binding/start` answer normally never comes here: the backend sends that call itself, so the
-/// start is recorded from the first `state` update instead.
+/// The answer to `binding/start`, which the backend sends itself under a call id of its own.
+/// It comes when the harness is ready for a prompt or has raised a request (Appendix E4).
+pub fn start_reply(cx: &mut Cx, binding: &str, result: Result<Value, RpcError>) {
+    let Some(b) = cx.state.bindings.info.get(binding) else {
+        return;
+    };
+    if b.status != BindingStatus::Starting {
+        return;
+    }
+    let Some(session) = crate::directory::session_of(cx.state, binding) else {
+        return;
+    };
+    let current = crate::directory::binding_of(cx.state, &session).as_deref() == Some(binding);
+    match result {
+        Ok(v) => {
+            started(cx, binding, &v);
+            if !current {
+                return;
+            }
+            let options: Vec<parrot_proto::option::ConfigOption> = v
+                .get("options")
+                .and_then(|o| serde_json::from_value(o.clone()).ok())
+                .unwrap_or_default();
+            if !options.is_empty() {
+                let level = v
+                    .get("level")
+                    .and_then(|l| serde_json::from_value(l.clone()).ok());
+                let network = v.get("network").and_then(Value::as_bool);
+                crate::options::store_with(cx, &session, options, level, network);
+            }
+            if let Some(actions) = v
+                .get("actions")
+                .filter(|a| a.as_array().is_some_and(|a| !a.is_empty()))
+            {
+                let update = DriverUpdate {
+                    binding: binding.to_string(),
+                    subagent: None,
+                    update: Open::Known(DriverUpdateKind::Actions {
+                        actions: serde_json::from_value(actions.clone()).unwrap_or_default(),
+                    }),
+                    extra: Default::default(),
+                };
+                crate::actions::on_update(cx, &update);
+            }
+            let starting =
+                cx.state.sessions.info.get(&session).map(|s| s.state) == Some(SessionState::Starting);
+            if starting {
+                let blocked = crate::requests::open_in(cx.state, &session)
+                    .iter()
+                    .any(|r| r.blocking);
+                let state = if blocked {
+                    SessionState::RequiresAction
+                } else {
+                    SessionState::Idle
+                };
+                if let Some(s) = cx.state.sessions.info.get_mut(&session) {
+                    s.state = state;
+                }
+                cx.publish(
+                    Some(session.clone()),
+                    json!({ "type": "state", "state": state, "background": [] }),
+                );
+                sessions::changed(cx, &session);
+                if state == SessionState::Idle {
+                    queue::on_idle(cx, &session);
+                }
+            }
+        }
+        Err(e) => {
+            if let Some(b) = cx.state.bindings.info.get_mut(binding) {
+                b.status = BindingStatus::Failed;
+                b.stopped_ms = Some(cx.now_ms);
+            }
+            persist(cx, binding);
+            crate::requests::binding_gone(cx, binding);
+            queue::on_exit(cx, &session);
+            if !current {
+                return;
+            }
+            if let Some(s) = cx.state.sessions.info.get_mut(&session) {
+                s.state = SessionState::Stopped;
+                s.background.clear();
+            }
+            let sid = Some(session.clone());
+            cx.publish(
+                sid.clone(),
+                json!({ "type": "state", "state": "stopped", "background": [] }),
+            );
+            cx.publish(
+                sid,
+                json!({ "type": "notice", "level": "error", "text": format!("the agent failed to start: {}", e.message), "code": "start_failed" }),
+            );
+            sessions::changed(cx, &session);
+        }
+    }
+}
+
+/// Put back a binding read from the store. A binding that was starting or running is `stopped`
+/// now: a restart starts nothing by itself (spec 34). Returns whether it was live.
+pub fn restore(state: &mut State, value: &Value, now_ms: u64) -> bool {
+    let str_of = |k: &str| value.get(k).and_then(Value::as_str).map(str::to_string);
+    fn parse<T: serde::de::DeserializeOwned>(value: &Value, k: &str) -> Option<T> {
+        value.get(k).and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+    let ms = |k: &str| {
+        value
+            .get(k)
+            .and_then(Value::as_str)
+            .and_then(crate::requests::parse_rfc3339_ms)
+    };
+    let (Some(id), Some(session), Some(agent)) = (str_of("id"), str_of("session"), str_of("agent")) else {
+        return false;
+    };
+    let status: BindingStatus = parse(value, "status").unwrap_or(BindingStatus::Stopped);
+    let live = matches!(status, BindingStatus::Starting | BindingStatus::Running);
+    let info = BindingInfo {
+        control: parse(value, "control").unwrap_or(Control::Native),
+        reference: parse(value, "ref"),
+        isolation: parse(value, "isolation").unwrap_or(Isolation::None),
+        level: parse(value, "level"),
+        network: value.get("network").and_then(Value::as_bool),
+        status: if live { BindingStatus::Stopped } else { status },
+        via: parse(value, "via").unwrap_or(BindingVia::New),
+        started_ms: ms("started").unwrap_or(0),
+        stopped_ms: if live { Some(now_ms) } else { ms("stopped") },
+        ..Default::default()
+    };
+    state.bindings.by_id.insert(
+        id.clone(),
+        BindingRecord {
+            id: id.clone(),
+            session,
+            agent,
+        },
+    );
+    state.bindings.info.insert(id, info);
+    live
+}
+
+/// A driver answered a call this module made with `Cx::call_driver` (`binding/stop`).
 pub fn on_reply(cx: &mut Cx, _call: u64, result: Result<Value, RpcError>) {
     if let Err(e) = result {
         cx.publish(
@@ -229,9 +366,6 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             background,
             detail,
         } => {
-            if cx.state.bindings.info.get(binding).map(|b| b.status) == Some(BindingStatus::Starting) {
-                started(cx, binding, &Value::Null);
-            }
             let changed = {
                 let Some(s) = cx.state.sessions.info.get_mut(&session) else {
                     return;

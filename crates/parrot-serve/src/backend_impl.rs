@@ -25,6 +25,11 @@
 //! | `intent.finish` | `intent` | `finish` |
 //! | `frame` | `binding`, `idx`, `at`, `dataVersion`, `frame` | `put_frame` |
 //!
+//! Projections the core puts are `agent`, `workspace`, `session`, `binding`, `item` (id
+//! `<session>/<item>`), `options`, `actions`, `usage`, `queue`, `request` and `inflight` (a prompt
+//! the harness hasn't confirmed). [`RuntimeBackend::new`] reads them all back, with the newest
+//! updates of the log, and hands them to the core as `Input::Restore` before anything else.
+//!
 //! `at` is milliseconds since the epoch. The writer maps the core's intent ids to the store's for
 //! the life of the process. A record with an unknown `op` or missing fields is logged to stderr
 //! and dropped.
@@ -90,8 +95,22 @@ pub struct RuntimeBackend {
 }
 
 impl RuntimeBackend {
-    /// A backend that feeds driver traffic into `rt` and writes records to `store`.
+    /// A backend that feeds driver traffic into `rt` and writes records to `store`. What the
+    /// store already holds goes to the runtime first, as `Input::Restore` (spec 34).
     pub fn new(rt: Runtime, store: Store) -> Self {
+        match load(&store) {
+            Ok(restore) => {
+                // The actor hasn't taken anything yet, so its inbox has room.
+                if rt
+                    .tx
+                    .try_send(crate::dispatch::Cmd::Input(Input::Restore(restore)))
+                    .is_err()
+                {
+                    eprintln!("parrot: cannot hand the stored state to the runtime");
+                }
+            }
+            Err(err) => eprintln!("parrot: cannot read the stored state: {err}"),
+        }
         Self::with_sink(Sink::Runtime(rt), store)
     }
 
@@ -225,6 +244,106 @@ impl Backend for RuntimeBackend {
             let _ = writer.send(record);
         }
     }
+
+    fn agent_call(&mut self, agent: String, call: u64, method: String, params: Value) {
+        let rt = self.rt.clone();
+        let cmd = self.resolve(&agent);
+        tokio::spawn(async move {
+            let result = match cmd {
+                Ok(cmd) => ask_driver(&cmd, &method, params).await,
+                Err(detail) => Err(RpcError::new(DRIVER_FAILED, detail)),
+            };
+            let _ = rt.input(Input::AgentReply { agent, call, result }).await;
+        });
+    }
+}
+
+/// How long a driver may take to answer a call made without a binding.
+const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Runs a driver for one call, such as `agent/list`, then stops it.
+async fn ask_driver(cmd: &DriverCommand, method: &str, params: Value) -> Result<Value, RpcError> {
+    let no_env: [(&str, &str); 0] = [];
+    let (mut driver, _updates) = ProcessDriver::spawn(&cmd.program, &cmd.args, no_env).map_err(|e| {
+        RpcError::new(
+            DRIVER_FAILED,
+            format!("cannot start {}: {e}", cmd.program.display()),
+        )
+    })?;
+    let asked = async {
+        driver.call("initialize", initialize_params()).await?;
+        driver.call(method, params).await
+    };
+    let result = match tokio::time::timeout(ASK_TIMEOUT, asked).await {
+        Ok(r) => r,
+        Err(_) => Err(RpcError::new(
+            DRIVER_FAILED,
+            format!("the driver did not answer {method}"),
+        )),
+    };
+    driver.stop().await;
+    result
+}
+
+fn initialize_params() -> Value {
+    json!({
+        "protocol": [1],
+        "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
+        "features": {},
+    })
+}
+
+/// How many stored updates come back for replay after a restart.
+const RESTORE_RECENT: u64 = parrot_core::subscriptions::RECENT as u64;
+
+/// Every kind of projection the core persists.
+const KINDS: [&str; 11] = [
+    "agent",
+    "workspace",
+    "session",
+    "binding",
+    "item",
+    "options",
+    "actions",
+    "usage",
+    "queue",
+    "request",
+    "inflight",
+];
+
+/// Reads what the core needs to continue after a restart.
+fn load(store: &Store) -> parrot_store::Result<parrot_core::Restore> {
+    let head = store.head()?.unwrap_or(0);
+    let mut projections = Vec::new();
+    for kind in KINDS {
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = store.list(kind, cursor.as_deref(), 1000)?;
+            let Some((last, _)) = page.last() else { break };
+            cursor = Some(last.clone());
+            let full = page.len() == 1000;
+            projections.extend(page.into_iter().map(|(id, v)| (kind.to_string(), id, v)));
+            if !full {
+                break;
+            }
+        }
+    }
+    let from = head.saturating_sub(RESTORE_RECENT - 1).max(1);
+    let recent = store
+        .read_from(from, RESTORE_RECENT as usize)?
+        .into_iter()
+        .map(|r| parrot_core::Stored {
+            seq: r.seq,
+            session: r.session,
+            at_ms: r.at_ms,
+            update: r.update,
+        })
+        .collect();
+    Ok(parrot_core::Restore {
+        head,
+        projections,
+        recent,
+    })
 }
 
 /// Owns one binding's driver process until it is stopped or exits.
@@ -258,12 +377,7 @@ async fn run_binding(
         updates: &mut updates,
         open: true,
     };
-    let init = json!({
-        "protocol": [1],
-        "peer": { "kind": "runtime", "name": "parrot", "version": env!("CARGO_PKG_VERSION") },
-        "features": {},
-    });
-    let mut result = link.call(&mut driver, "initialize", init).await;
+    let mut result = link.call(&mut driver, "initialize", initialize_params()).await;
     if result.is_ok() {
         result = link.call(&mut driver, "binding/start", start).await;
     }

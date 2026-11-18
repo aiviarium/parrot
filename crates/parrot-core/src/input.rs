@@ -66,4 +66,32 @@ pub enum Input {
     Tick {
         now_ms: u64,
     },
+    /// A driver's answer to an `Effect::AgentCall`.
+    AgentReply {
+        agent: String,
+        call: u64,
+        result: Result<Value, RpcError>,
+    },
+    /// What the store held at startup, fed in before any connection (spec 34).
+    Restore(Restore),
+}
+
+/// The stored state a runtime starts from.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Restore {
+    /// The highest stored `seq`; the sequence continues after it.
+    pub head: u64,
+    /// Stored projections as `(kind, id, value)`, in the shapes the core persisted them.
+    pub projections: Vec<(String, String, Value)>,
+    /// The newest stored updates, oldest first, so replay reaches across the restart.
+    pub recent: Vec<Stored>,
+}
+
+/// One stored update.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stored {
+    pub seq: u64,
+    pub session: Option<String>,
+    pub at_ms: u64,
+    pub update: Value,
 }

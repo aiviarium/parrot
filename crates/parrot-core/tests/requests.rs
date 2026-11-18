@@ -33,6 +33,13 @@ fn core() -> (Core, ManualClock) {
             agent: "fake".into(),
         },
     );
+    core.state.bindings.info.insert(
+        "bnd_a".into(),
+        parrot_core::bindings::BindingInfo {
+            status: parrot_proto::session::BindingStatus::Running,
+            ..Default::default()
+        },
+    );
     // The tests' clients are owners that have done the handshake, so scope checks pass.
     for conn in ["con_1", "con_2", "con_9"] {
         core.handle(Input::Connected {

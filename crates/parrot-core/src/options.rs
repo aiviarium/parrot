@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::requests::{allows, forbidden, invalid, wrong_state};
-use crate::{CallOwner, Cx, Reply, directory};
+use crate::{CallOwner, Cx, Reply, State, directory};
 use parrot_proto::driver::{BindingOptionsParams, BindingOptionsResult, DriverUpdate, DriverUpdateKind};
 use parrot_proto::open::Open;
 use parrot_proto::option::{
@@ -60,6 +60,7 @@ fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     if !cx.state.sessions.by_id.contains_key(&p.session) {
         return Err(RpcError::new(-32002, format!("no session {}", p.session)));
     }
+    crate::principals::check_session(cx.state, conn, parrot_proto::principal::Scope::Read, &p.session)?;
     let o = cx
         .state
         .options
@@ -68,17 +69,42 @@ fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
         .cloned()
         .unwrap_or_default();
     Ok(serde_json::to_value(OptionListResult {
-        options: o.options,
+        options: options_of(cx.state, &p.session),
         level: o.level,
         network: o.network,
     })
     .unwrap_or_default())
 }
 
+/// A session's options: what its binding last reported, else its agent's defaults with the
+/// values the session was created or configured with (spec 6 `Agent.options`).
+pub fn options_of(state: &State, session: &str) -> Vec<ConfigOption> {
+    if let Some(o) = state.options.by_session.get(session)
+        && !o.options.is_empty()
+    {
+        return o.options.clone();
+    }
+    let agent = state.sessions.by_id.get(session).map(|s| s.agent.clone());
+    let mut options: Vec<ConfigOption> = agent
+        .and_then(|a| state.sessions.agents.get(&a))
+        .and_then(|a| a.get("options"))
+        .and_then(|o| serde_json::from_value(o.clone()).ok())
+        .unwrap_or_default();
+    if let Some(info) = state.sessions.info.get(session) {
+        for o in &mut options {
+            if let Some(v) = info.options.get(&o.id) {
+                o.value = v.clone();
+            }
+        }
+    }
+    options
+}
+
 fn set(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Reply {
     match prepare_set(cx, conn, params) {
         Err(e) => Reply::Now(Err(e)),
-        Ok((session, binding, values, reset)) => {
+        Ok((session, None, values, reset)) => Reply::Now(Ok(set_stopped(cx, &session, values, reset))),
+        Ok((session, Some(binding), values, reset)) => {
             let params = BindingOptionsParams {
                 binding: binding.clone(),
                 values,
@@ -108,7 +134,36 @@ fn set(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Reply 
     }
 }
 
-type Prepared = (String, String, Map<String, Value>, Vec<String>);
+/// Without a running binding, values are kept for the next start, where they apply.
+fn set_stopped(cx: &mut Cx, session: &str, values: Map<String, Value>, reset: Vec<String>) -> Value {
+    let mut options = options_of(cx.state, session);
+    for o in &mut options {
+        if let Some(v) = values.get(&o.id) {
+            o.value = v.clone();
+        }
+    }
+    if let Some(info) = cx.state.sessions.info.get_mut(session) {
+        info.options.extend(values);
+    }
+    let (level, network) = cx
+        .state
+        .options
+        .by_session
+        .get(session)
+        .map(|o| (o.level, o.network))
+        .unwrap_or_default();
+    store_with(cx, session, options.clone(), level, network);
+    crate::sessions::changed(cx, session);
+    serde_json::to_value(OptionSetResult {
+        options,
+        reset,
+        level,
+    })
+    .unwrap_or_default()
+}
+
+/// The session, its running binding (none when stopped), the values to send and the reset ones.
+type Prepared = (String, Option<String>, Map<String, Value>, Vec<String>);
 
 /// Check `option/set` and work out the values to send, with dependent values reset.
 fn prepare_set(cx: &mut Cx, conn: &str, params: Value) -> Result<Prepared, RpcError> {
@@ -119,16 +174,15 @@ fn prepare_set(cx: &mut Cx, conn: &str, params: Value) -> Result<Prepared, RpcEr
     if !cx.state.sessions.by_id.contains_key(&p.session) {
         return Err(RpcError::new(-32002, format!("no session {}", p.session)));
     }
-    let Some(binding) = directory::binding_of(cx.state, &p.session) else {
-        return Err(wrong_state("stopped", "the session has no running binding"));
-    };
-    let options = cx
-        .state
-        .options
-        .by_session
-        .get(&p.session)
-        .map(|o| o.options.clone())
-        .unwrap_or_default();
+    crate::principals::check_session(
+        cx.state,
+        conn,
+        parrot_proto::principal::Scope::Configure,
+        &p.session,
+    )?;
+    let binding =
+        directory::binding_of(cx.state, &p.session).filter(|_| crate::sessions::active(cx.state, &p.session));
+    let options = options_of(cx.state, &p.session);
     let find = |id: &str| options.iter().find(|o| o.id == id);
 
     // The values after the change, to pick each dependent option's schema.
@@ -154,7 +208,7 @@ fn prepare_set(cx: &mut Cx, conn: &str, params: Value) -> Result<Prepared, RpcEr
         let Some(o) = find(k) else {
             return Err(invalid(format!("unknown option {k}")).with_data(json!({ "option": k })));
         };
-        if o.applies == Applies::Start {
+        if o.applies == Applies::Start && binding.is_some() {
             return Err(wrong_state("running", format!("{k} applies only at start")));
         }
         if let Err(why) = validate(&schema_of(o), v) {
@@ -258,17 +312,52 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
 }
 
 fn store(cx: &mut Cx, session: &str, options: Vec<ConfigOption>, level: PermissionLevel, network: bool) {
-    cx.state.options.by_session.insert(
+    store_with(cx, session, options, Some(level), Some(network));
+}
+
+/// Keep, persist and publish a session's options.
+pub fn store_with(
+    cx: &mut Cx,
+    session: &str,
+    options: Vec<ConfigOption>,
+    level: Option<PermissionLevel>,
+    network: Option<bool>,
+) {
+    let o = SessionOptions {
+        options,
+        level,
+        network,
+    };
+    let value = json!({ "options": o.options, "level": o.level, "network": o.network });
+    cx.persist(json!({ "op": "put", "kind": "options", "id": session, "value": value }));
+    let mut u = json!({ "type": "options", "options": o.options });
+    if let Some(l) = level {
+        u["level"] = json!(l);
+    }
+    if let Some(n) = network {
+        u["network"] = json!(n);
+    }
+    cx.state.options.by_session.insert(session.to_string(), o);
+    cx.publish(Some(session.to_string()), u);
+}
+
+/// Put back a session's options read from the store.
+pub fn restore(state: &mut crate::State, session: &str, value: &Value) {
+    let options = value
+        .get("options")
+        .and_then(|o| serde_json::from_value(o.clone()).ok())
+        .unwrap_or_default();
+    let level = value
+        .get("level")
+        .and_then(|l| serde_json::from_value(l.clone()).ok());
+    let network = value.get("network").and_then(Value::as_bool);
+    state.options.by_session.insert(
         session.to_string(),
         SessionOptions {
-            options: options.clone(),
-            level: Some(level),
-            network: Some(network),
+            options,
+            level,
+            network,
         },
-    );
-    cx.publish(
-        Some(session.to_string()),
-        json!({ "type": "options", "options": options, "level": level, "network": network }),
     );
 }
 
