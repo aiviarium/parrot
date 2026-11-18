@@ -30,6 +30,10 @@ pub fn link_socket_path(sock: &Path) -> PathBuf {
 #[cfg(unix)]
 pub type LinkListener = tokio::net::UnixListener;
 
+/// A link endpoint that accepts candidate connections.
+#[cfg(windows)]
+pub type LinkListener = crate::pipe::Listener;
+
 /// A candidate connection, from either end. Only the handshake makes it a link: a Unix socket,
 /// or a named pipe's server or client end.
 pub enum LinkStream {

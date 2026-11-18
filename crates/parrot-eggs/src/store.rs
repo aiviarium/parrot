@@ -329,3 +329,48 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The in-repo data-only egg, whose publish needs no binary.
+    fn acp_egg() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp")
+    }
+
+    #[test]
+    fn a_signed_registry_lists_a_signature_over_the_egg() {
+        let key =
+            crate::signing::parse("ed25519:0707070707070707070707070707070707070707070707070707070707070707")
+                .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let published = publish_folder(&acp_egg(), dir.path(), &ParrotTarget::default(), Some(&key)).unwrap();
+        assert_eq!(published, ["aiviarium/acp 0.1.0"]);
+
+        let index = std::fs::read_to_string(dir.path().join("aiviarium/acp/index.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&index).unwrap();
+        let entry = &json["versions"]["0.1.0"];
+        let signature = entry["signature"].as_str().expect("a signature");
+        let message = hatchery::sign::message(
+            &hatchery::Name::parse("aiviarium/acp").unwrap(),
+            &hatchery::semver::Version::new(0, 1, 0),
+            "acp-0.1.0.egg",
+            entry["sha256"].as_str().expect("a checksum"),
+            &hatchery::Timestamp::parse(entry["published"].as_str().unwrap()).unwrap(),
+        );
+        assert_eq!(
+            hatchery::sign::verify(&key.verifying_key(), &message, signature),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn an_unsigned_registry_lists_no_signature() {
+        let dir = tempfile::tempdir().unwrap();
+        publish_folder(&acp_egg(), dir.path(), &ParrotTarget::default(), None).unwrap();
+        let index = std::fs::read_to_string(dir.path().join("aiviarium/acp/index.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&index).unwrap();
+        assert!(json["versions"]["0.1.0"]["signature"].is_null());
+    }
+}

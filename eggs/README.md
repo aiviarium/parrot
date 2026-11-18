@@ -115,7 +115,7 @@ The runtime installs eggs into `<state_dir>/eggs`. The runtime refuses an egg wh
 | `parrot eggs pack <dir…> --out DIR` | Writes `.egg` files. `--publish DIR` publishes them into a static registry instead, and `--sign-key-env VAR` signs them |
 | `parrot eggs remove aiviarium/claude` | Removes an installed package |
 
-`pack` leaves out a variant whose folder does not exist. `parrot eggs pack eggs --build --publish target/eggs-registry` builds this machine's driver binaries, copies them into their variant folders and packs every egg into `target/eggs-registry`. On another platform, add `--target <triple>`; a release builds once per platform and packs every variant together.
+`pack` leaves out a variant whose folder does not exist. `parrot eggs pack eggs --build --publish target/eggs-registry` builds this machine's driver binaries, copies them into their variant folders and packs every egg into `target/eggs-registry`. On another platform, add `--target <triple>`. A release builds once per platform and packs every variant together.
 
 ## A signed registry
 
@@ -127,7 +127,7 @@ PARROT_EGG_SIGNING_KEY="$(sed -n 1p keys.txt)" \
   parrot eggs pack eggs --publish site/eggs --sign-key-env PARROT_EGG_SIGNING_KEY
 ```
 
-The key travels only in the environment: the command takes the variable's name, not the key. To check eggs against it, give the public key to the registry line in `<state_dir>/hatchery.kdl`:
+The key is only ever in the environment. The command takes the variable's name, never the key. To check eggs against it, give the public key to the registry line in `<state_dir>/hatchery.kdl`:
 
 ```kdl
 registries {

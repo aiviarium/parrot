@@ -36,5 +36,5 @@ not reported twice.
 
 `src/bin/fake-tui.rs` is a scripted TUI with a prompt, a busy line, a tool approval, a trust dialog
 at start, and a question the profile leaves out. `tests/fake/fake-tui.kdl` is its profile. It is a
-Rust binary, so the tests run on every OS. `parrot driver tui` is tested over stdio with it in
+Rust binary. The tests run on every OS. `parrot driver tui` is tested over stdio with it in
 `crates/parrot-cli/tests/tui_stdio.rs`.
