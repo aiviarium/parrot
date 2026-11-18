@@ -230,7 +230,10 @@ pub fn record(cx: &mut Cx, session: &str, status: &str) {
                 .entry(parent.clone())
                 .or_default()
                 .push(cursor);
+            // A wait that returns the change first means no wake entry for it.
+            resolve_waits(cx, false);
             crate::wakes::pump(cx, &parent);
+            return;
         }
     }
     resolve_waits(cx, false);
