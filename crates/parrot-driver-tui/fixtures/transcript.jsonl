@@ -1,0 +1,10 @@
+{"type":"user","uuid":"u-1","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","cwd":"/srv/fake-project","message":{"role":"user","content":"list the files"}}
+{"type":"user","uuid":"u-meta","isMeta":true,"sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"assistant","uuid":"a-1","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"id":"msg_fake_1","role":"assistant","content":[{"type":"thinking","thinking":"The user wants a listing."}],"stop_reason":null}}
+{"type":"assistant","uuid":"a-2","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"id":"msg_fake_1","role":"assistant","content":[{"type":"tool_use","id":"toolu_fake_1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}
+{"type":"user","uuid":"u-2","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_fake_1","content":"a.txt\nb.txt","is_error":false}]}}
+{"type":"assistant","uuid":"a-side","isSidechain":true,"sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"id":"msg_fake_side","role":"assistant","content":[{"type":"text","text":"from a subagent"}],"stop_reason":"end_turn"}}
+{"type":"assistant","uuid":"a-3","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"id":"msg_fake_2","role":"assistant","content":[{"type":"text","text":"Two files: a.txt and b.txt."}],"stop_reason":"end_turn"}}
+{"type":"system","subtype":"turn_duration","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","durationMs":1200}
+{"type":"user","uuid":"u-3","sessionId":"0b0e5b9e-fake-4c1a-9d1e-000000000001","message":{"role":"user","content":[{"type":"text","text":"typed straight into the terminal"}]}}
+not json
