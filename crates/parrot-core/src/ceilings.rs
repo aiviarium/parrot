@@ -244,7 +244,7 @@ pub fn on_request(cx: &mut Cx, request: &str, session: &str) {
 /// Whether some connection could answer a session's requests: a person, not a session principal.
 fn answerable(state: &State, session: &str) -> bool {
     state.principals.conns.iter().any(|(conn, c)| {
-        !matches!(c.peer, crate::Peer::Session { .. })
+        c.session.is_none()
             && crate::principals::allows(state, conn, Scope::Answer)
             && crate::principals::sees(state, conn, session)
     })

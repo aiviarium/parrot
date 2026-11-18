@@ -17,6 +17,7 @@ parrot-core.workspace = true
 parrot-store.workspace = true
 parrot-driver.workspace = true
 parrot-workspace.workspace = true
+parrot-link.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1536,6 +1536,7 @@ dependencies = [
  "futures",
  "parrot-core",
  "parrot-driver",
+ "parrot-link",
  "parrot-proto",
  "parrot-store",
  "parrot-workspace",
