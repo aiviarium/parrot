@@ -59,6 +59,17 @@ pub struct MapState {
     pub providers: Vec<Provider>,
     pub actions: Vec<Action>,
     pub requests: BTreeMap<String, PendingPermission>,
+    /// The level this binding is pinned to, and whether it may reach the network.
+    pub level: PermissionLevel,
+    pub network: bool,
+    /// Tool input streamed before the call, by tool-call id: its name and the text so far.
+    pub tool_inputs: BTreeMap<String, (String, String)>,
+    /// Child sessions of this one, by opencode session id, with the title reported for them.
+    pub subagents: BTreeMap<String, String>,
+    /// Each child session's own mapping, so its events keep their own turns.
+    pub children: std::collections::HashMap<String, Box<MapState>>,
+    /// The assistant message each finished turn ended with, for a fork at that turn.
+    pub turn_messages: BTreeMap<String, String>,
     pub data: DriverData,
     /// Token and cost totals over the whole session.
     usage: Usage,
@@ -80,6 +91,12 @@ impl MapState {
             providers: Vec::new(),
             actions: Vec::new(),
             requests: BTreeMap::new(),
+            level: PermissionLevel::Host,
+            network: true,
+            tool_inputs: BTreeMap::new(),
+            subagents: BTreeMap::new(),
+            children: std::collections::HashMap::new(),
+            turn_messages: BTreeMap::new(),
             data,
             usage: Usage::default(),
             turn_usage: Usage::default(),
@@ -119,13 +136,19 @@ impl MapState {
     }
 
     /// opencode asks before a tool by default and runs commands on the host, so a session counts as
-    /// `host` with network until its permissions say otherwise (spec 15.2).
+    /// `host` with network unless a pin holds it lower (spec 15.2).
     pub fn level(&self) -> PermissionLevel {
-        PermissionLevel::Host
+        self.level
     }
 
     pub fn network(&self) -> bool {
-        true
+        self.network
+    }
+
+    /// Holds the binding to a pinned level and network reach.
+    pub fn pin(&mut self, pin: &parrot_proto::driver::Pin) {
+        self.level = pin.level;
+        self.network = pin.network;
     }
 
     /// The `model` and `provider` options with their current values.
@@ -372,10 +395,16 @@ impl MapState {
             data: event.raw.clone(),
         })];
         let data = &event.data;
+        if let Some(message) = data.get("assistantMessageID").and_then(Value::as_str)
+            && let Some(turn) = self.turn_key()
+        {
+            self.turn_messages.insert(turn, message.to_owned());
+        }
         match event.kind.as_str() {
             "session.created" => {
                 if let Some(id) = data.get("sessionID").and_then(Value::as_str)
                     && self.session_id.as_deref() != Some(id)
+                    && data.get("parentID").is_none()
                 {
                     self.session_id = Some(id.to_owned());
                     out.push(self.update(DriverUpdateKind::Ref {
@@ -383,6 +412,36 @@ impl MapState {
                             id: id.to_owned(),
                             strength: RefStrength::Strong,
                         },
+                    }));
+                }
+                // A child session is a subagent: an item in the parent, then its own updates.
+                if let (Some(parent), Some(id)) = (
+                    data.get("parentID").and_then(Value::as_str),
+                    data.get("sessionID").and_then(Value::as_str),
+                ) && self.session_id.as_deref() == Some(parent)
+                {
+                    let title = data
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Subagent")
+                        .to_owned();
+                    self.subagents.insert(id.to_owned(), title.clone());
+                    self.children
+                        .insert(id.to_owned(), Box::new(MapState::new(self.binding.clone(), self.data.clone())));
+                    let mut set = map_of("key", json!(id));
+                    set.insert("title".into(), json!(title));
+                    set.insert(
+                        "ref".into(),
+                        json!({"id": id, "strength": "strong"}),
+                    );
+                    set.insert("status".into(), json!("running"));
+                    out.push(self.item(ItemPatch {
+                        id: format!("subagent-{id}"),
+                        kind: Some(Open::Known(ItemKind::Subagent)),
+                        turn: self.turn_key(),
+                        source: Some(ItemSource::Native),
+                        set: Some(set),
+                        ..Default::default()
                     }));
                 }
             }
@@ -399,6 +458,64 @@ impl MapState {
             }
             "session.text.ended" | "session.reasoning.ended" => {
                 out.push(self.block_end(data, &event.kind));
+            }
+            "session.tool.input.started" => {
+                if let Some(id) = data.get("id").and_then(Value::as_str) {
+                    let name = data
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_owned();
+                    self.tool_inputs.insert(id.to_owned(), (name.clone(), String::new()));
+                    out.extend(self.ensure_turn(now));
+                    let mut set = map_of("tool", json!(name));
+                    set.insert("title".into(), json!(name));
+                    set.insert("inputText".into(), json!(""));
+                    set.insert("status".into(), json!("running"));
+                    set.insert("caller".into(), json!("model"));
+                    out.push(self.item(ItemPatch {
+                        id: id.to_owned(),
+                        kind: Some(Open::Known(ItemKind::Tool)),
+                        turn: self.turn_key(),
+                        source: Some(ItemSource::Native),
+                        set: Some(set),
+                        streaming: Some(true),
+                        ..Default::default()
+                    }));
+                }
+            }
+            "session.tool.input.delta" => {
+                if let Some(id) = data.get("id").and_then(Value::as_str) {
+                    let delta = data.get("delta").and_then(Value::as_str).unwrap_or_default();
+                    // A delta without a start still has a name to show until the call.
+                    if !self.tool_inputs.contains_key(id) {
+                        self.tool_inputs
+                            .insert(id.to_owned(), ("tool".into(), String::new()));
+                    }
+                    let (name, partial) = self.tool_inputs.get_mut(id).expect("just inserted");
+                    partial.push_str(delta);
+                    let name = name.clone();
+                    let partial = partial.clone();
+                    let mut set = map_of("tool", json!(name));
+                    set.insert("title".into(), json!(name));
+                    set.insert("inputText".into(), json!(clip(&partial)));
+                    set.insert("status".into(), json!("running"));
+                    set.insert("caller".into(), json!("model"));
+                    out.push(self.item(ItemPatch {
+                        id: id.to_owned(),
+                        kind: Some(Open::Known(ItemKind::Tool)),
+                        turn: self.turn_key(),
+                        source: Some(ItemSource::Native),
+                        set: Some(set),
+                        streaming: Some(true),
+                        ..Default::default()
+                    }));
+                }
+            }
+            "session.tool.input.ended" => {
+                if let Some(id) = data.get("id").and_then(Value::as_str) {
+                    self.tool_inputs.remove(id);
+                }
             }
             "session.tool.called" => {
                 out.extend(self.ensure_turn(now));
@@ -515,6 +632,33 @@ impl MapState {
         out
     }
 
+    /// One event that belongs to a child session: its own mapping runs, and every update says
+    /// which subagent it belongs to (spec 30.3).
+    pub fn step_child(&mut self, child: &str, event: &Event, now: &str) -> Vec<DriverUpdate> {
+        let Some(state) = self.children.get_mut(child) else {
+            return vec![];
+        };
+        let mut updates = state.step(event, now);
+        for update in &mut updates {
+            update.subagent = Some(child.to_owned());
+        }
+        updates
+    }
+
+    /// Whether `session` is a child session of this binding.
+    pub fn known_child(&self, session: &str) -> bool {
+        self.children.contains_key(session)
+    }
+
+    /// The assistant message a fork at `at` starts from: that turn's last message, else the
+    /// newest one.
+    pub fn fork_message(&self, at: Option<&str>) -> Option<String> {
+        match at {
+            Some(turn) => self.turn_messages.get(turn).cloned(),
+            None => self.turn_messages.values().last().cloned(),
+        }
+    }
+
     fn block_key(&self, data: &Value) -> String {
         let message = data
             .get("assistantMessageID")
@@ -594,8 +738,10 @@ impl MapState {
         let mut set = map_of("tool", json!(name));
         set.insert("title".into(), json!(describe(&name, &input)));
         set.insert("input".into(), input);
+        set.insert("inputText".into(), Value::Null);
         set.insert("status".into(), json!("running"));
         set.insert("caller".into(), json!("model"));
+        self.tool_inputs.remove(&id);
         self.item(ItemPatch {
             id,
             kind: Some(Open::Known(ItemKind::Tool)),
