@@ -125,14 +125,23 @@ fn markers(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+#[cfg(unix)]
 pub(crate) fn terminal_size() -> Option<Size> {
     let ws = rustix::termios::tcgetwinsize(std::io::stdout()).ok()?;
     (ws.ws_row > 0 && ws.ws_col > 0).then(|| Size::new(ws.ws_row, ws.ws_col))
 }
 
+/// Windows reports no size here; callers fall back to a default.
+#[cfg(not(unix))]
+pub(crate) fn terminal_size() -> Option<Size> {
+    None
+}
+
 /// Puts stdin into raw mode until dropped.
+#[cfg(unix)]
 pub(crate) struct RawMode(Option<rustix::termios::Termios>);
 
+#[cfg(unix)]
 impl RawMode {
     pub(crate) fn enable() -> Self {
         let stdin = std::io::stdin();
@@ -148,11 +157,23 @@ impl RawMode {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawMode {
     fn drop(&mut self) {
         if let Some(orig) = &self.0 {
             let _ = rustix::termios::tcsetattr(std::io::stdin(), rustix::termios::OptionalActions::Now, orig);
         }
+    }
+}
+
+/// The console on Windows stays as it is; the tool is for reading casts there.
+#[cfg(not(unix))]
+pub(crate) struct RawMode;
+
+#[cfg(not(unix))]
+impl RawMode {
+    pub(crate) fn enable() -> Self {
+        RawMode
     }
 }
 
