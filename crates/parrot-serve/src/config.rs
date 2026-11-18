@@ -74,7 +74,7 @@ mod tests {
         assert!(Config::load(dir.path()).unwrap().tui.is_empty());
         std::fs::write(
             dir.path().join(FILE),
-            r#"{"tui":{"fake":{"command":["sh","x.sh"],"profile":"p.toml","size":[12,60]}},
+            r#"{"tui":{"fake":{"command":["sh","x.sh"],"profile":"p.kdl","size":[12,60]}},
                 "notify":["webhook:https://hooks.example.test/a"]}"#,
         )
         .unwrap();

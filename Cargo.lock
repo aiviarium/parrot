@@ -1400,7 +1400,7 @@ dependencies = [
 name = "parrot-driver-claude"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1414,7 +1414,7 @@ dependencies = [
 name = "parrot-driver-codex"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
@@ -1471,7 +1471,7 @@ dependencies = [
 name = "parrot-driver-tui"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",

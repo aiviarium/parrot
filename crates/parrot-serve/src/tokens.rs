@@ -136,12 +136,19 @@ impl TokenStore {
         let text = serde_json::to_string_pretty(&all).expect("JSON serializes");
         let tmp = path.with_extension("json.tmp");
         let write = || -> std::io::Result<()> {
-            std::fs::write(&tmp, text)?;
+            use std::io::Write;
+            let _ = std::fs::remove_file(&tmp);
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            // The file is private from its first byte, not only once it is written.
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
             }
+            let mut file = options.open(&tmp)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
             std::fs::rename(&tmp, path)
         };
         write().map_err(|e| RpcError::new(-32603, format!("cannot write the tokens: {e}")))
@@ -179,10 +186,9 @@ impl TokenStore {
         }
         let bytes: [u8; 32] = rand::random();
         let secret = format!("{SECRET_PREFIX}{}", parrot_link::base32::encode(&bytes));
-        let id = format!(
-            "tok_{}",
-            &parrot_link::base32::encode(&Sha256::digest(bytes))[..26]
-        );
+        // The id is listed and logged, so it is drawn on its own rather than derived from the secret.
+        let id_bytes: [u8; 16] = rand::random();
+        let id = format!("tok_{}", &parrot_link::base32::encode(&id_bytes)[..26]);
         let mut token = json!({ "id": id, "name": name, "scopes": scopes, "created": now() });
         for field in ["sessions", "provides"] {
             if !p[field].is_null() {

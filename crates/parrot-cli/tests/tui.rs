@@ -20,7 +20,7 @@ async fn an_unknown_dialog_is_answered_from_a_client() {
     let t = transcripts.path().to_string_lossy().into_owned();
     let config = json!({ "tui": { "fake-tui": {
         "command": ["sh", fake("fake-tui.sh")],
-        "profile": fake("fake-tui.toml"),
+        "profile": fake("fake-tui.kdl"),
         "env": { "FAKE_TUI_TRANSCRIPT": t },
         "transcript": t,
         "unrecognisedAfterMs": 800,
