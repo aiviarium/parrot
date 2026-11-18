@@ -91,7 +91,7 @@ pub struct RuntimeBackend {
     commands: HashMap<String, DriverCommand>,
     bindings: HashMap<BindingId, mpsc::UnboundedSender<BindingCmd>>,
     next_call: u64,
-    writer: Option<std::sync::mpsc::Sender<Value>>,
+    writer: Option<std::sync::mpsc::Sender<Write>>,
 }
 
 impl RuntimeBackend {
@@ -115,14 +115,21 @@ impl RuntimeBackend {
     }
 
     fn with_sink(rt: Sink, store: Store) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel::<Value>();
+        let (tx, rx) = std::sync::mpsc::channel::<Write>();
         std::thread::Builder::new()
             .name("parrot-store".into())
             .spawn(move || {
                 let mut intents = HashMap::new();
-                for record in rx {
-                    if let Err(err) = write_record(&store, &mut intents, &record) {
-                        eprintln!("parrot: dropped persist record: {err}");
+                for write in rx {
+                    match write {
+                        Write::Record(record) => {
+                            if let Err(err) = write_record(&store, &mut intents, &record) {
+                                eprintln!("parrot: dropped persist record: {err}");
+                            }
+                        }
+                        Write::Sync(done) => {
+                            let _ = done.send(());
+                        }
                     }
                 }
             })
@@ -175,6 +182,13 @@ impl RuntimeBackend {
         self.next_call += 1;
         id
     }
+}
+
+/// What the store thread is asked to do, in order.
+enum Write {
+    Record(Value),
+    /// Answered once every record sent before it is written.
+    Sync(std::sync::mpsc::SyncSender<()>),
 }
 
 impl Drop for RuntimeBackend {
@@ -241,7 +255,15 @@ impl Backend for RuntimeBackend {
 
     fn persist(&mut self, record: Value) {
         if let Some(writer) = &self.writer {
-            let _ = writer.send(record);
+            let _ = writer.send(Write::Record(record));
+        }
+    }
+
+    fn sync(&mut self) {
+        let Some(writer) = &self.writer else { return };
+        let (done, wait) = std::sync::mpsc::sync_channel(1);
+        if writer.send(Write::Sync(done)).is_ok() {
+            let _ = wait.recv();
         }
     }
 

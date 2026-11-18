@@ -136,9 +136,7 @@ async fn run(mut core: Core, mut exec: Executor, mut rx: mpsc::Receiver<Cmd>) ->
             }
             Cmd::Input(input) => input,
         };
-        for effect in core.handle(input) {
-            exec.execute(effect);
-        }
+        exec.execute_all(core.handle(input));
     }
     core
 }
