@@ -23,6 +23,10 @@ pub struct Args {
     /// A runtime WebSocket endpoint, such as `ws://127.0.0.1:7420/parrot`.
     #[arg(long)]
     endpoint: Option<String>,
+    /// A PEM file of the certificates a `wss://` endpoint is checked against, in place of the
+    /// public roots.
+    #[arg(long, requires = "endpoint")]
+    ca_file: Option<PathBuf>,
     /// A file holding the binding's credential; default `PARROT_MCP_TOKEN`.
     #[arg(long)]
     token_file: Option<PathBuf>,
@@ -60,7 +64,13 @@ pub async fn run(args: Args) -> Result<(), String> {
     };
     let (up, notes) = match &args.endpoint {
         Some(url) => {
-            let stream = parrot_mcp::ws::connect(url, token.as_deref())
+            let roots = match &args.ca_file {
+                Some(path) => {
+                    Some(std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?)
+                }
+                None => None,
+            };
+            let stream = parrot_mcp::ws::connect(url, token.as_deref(), roots.as_deref())
                 .await
                 .map_err(|e| format!("cannot connect to {url}: {e}"))?;
             let (r, w) = tokio::io::split(stream);
