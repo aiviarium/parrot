@@ -44,7 +44,7 @@ struct Run {
 struct Fake {
     out: mpsc::UnboundedSender<String>,
     files: PathBuf,
-    session_id: String,
+    session_id: Arc<Mutex<String>>,
     model: Arc<Mutex<String>>,
     thinking: Arc<Mutex<String>>,
     said: Arc<Mutex<Vec<String>>>,
@@ -76,7 +76,7 @@ impl Fake {
         let _ = std::fs::create_dir_all(&self.files);
         let said = self.said.lock().unwrap().clone();
         let _ = std::fs::write(
-            self.files.join(format!("{}.json", self.session_id)),
+            self.files.join(format!("{}.json", self.session_id.lock().unwrap())),
             serde_json::to_string(&said).unwrap_or_default(),
         );
     }
@@ -336,6 +336,27 @@ impl Fake {
                         "errorMessage": arg,
                     }}));
                 }
+                "nested" => {
+                    let id = self.next_id("call");
+                    self.send(json!({"type": "tool_execution_start", "toolCallId": id, "toolName": "task",
+                        "args": {"description": "Review the notes"}}));
+                    self.send(json!({
+                        "type": "tool_execution_end", "toolCallId": id, "toolName": "task",
+                        "result": {
+                            "content": [{"type": "text", "text": "Two notes."}],
+                            "details": {},
+                            "nestedCalls": {
+                                "complete": true,
+                                "calls": [
+                                    {"id": "inner-1", "name": "grep", "arguments": {"pattern": "note"}, "status": "ok", "durationMs": 3},
+                                    {"id": "inner-2", "name": "read", "arguments": {"path": "notes.md"}, "status": "error", "error": "no such file"},
+                                ],
+                            },
+                        },
+                        "isError": false,
+                    }));
+                    self.text("The task looked.", delay, &run).await;
+                }
                 "crash" => {
                     std::process::exit(3);
                 }
@@ -447,6 +468,10 @@ fn split_tool(arg: &str) -> (String, String) {
 /// Serves the fake on stdin and stdout until stdin closes.
 pub async fn run() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version") {
+        println!("0.73.1 (fake-pi)");
+        return Ok(());
+    }
     let flag = |name: &str| {
         args.iter()
             .position(|a| a == name)
@@ -475,7 +500,7 @@ pub async fn run() -> std::io::Result<()> {
     let fake = Fake {
         out,
         files,
-        session_id,
+        session_id: Arc::new(Mutex::new(session_id)),
         model: Arc::new(Mutex::new(
             flag("--model").unwrap_or_else(|| "fake/fake-1".into()),
         )),
@@ -548,7 +573,7 @@ pub async fn run() -> std::io::Result<()> {
                     "model": {"id": name, "name": "Fake 1", "provider": provider},
                     "thinkingLevel": fake.thinking.lock().unwrap().clone(),
                     "isStreaming": false,
-                    "sessionId": fake.session_id,
+                    "sessionId": fake.session_id.lock().unwrap().clone(),
                     "messageCount": fake.said.lock().unwrap().len(),
                 }}));
             }
@@ -575,6 +600,46 @@ pub async fn run() -> std::io::Result<()> {
                 let level = message.get("level").and_then(Value::as_str).unwrap_or("off");
                 *fake.thinking.lock().unwrap() = level.to_owned();
                 fake.reply(&id, "set_thinking_level", json!({"success": true}));
+            }
+            "compact" => {
+                fake.reply(
+                    &id,
+                    "compact",
+                    json!({"success": true, "data": {
+                        "summary": "The context was compacted.",
+                        "firstKeptEntryId": "entry-1",
+                        "tokensBefore": 1200,
+                        "estimatedTokensAfter": 300,
+                        "usage": {"input": 20, "output": 5, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 25},
+                    }}),
+                );
+            }
+            "get_fork_messages" => {
+                let messages: Vec<Value> = fake
+                    .said
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| json!({"entryId": format!("entry-{}", i + 1), "text": text}))
+                    .collect();
+                fake.reply(&id, "get_fork_messages", json!({"success": true, "data": {"messages": messages}}));
+            }
+            "fork" => {
+                let entry = message.get("entryId").and_then(Value::as_str).unwrap_or("entry-1");
+                let index: usize = entry.trim_start_matches("entry-").parse().unwrap_or(1);
+                let text = fake
+                    .said
+                    .lock()
+                    .unwrap()
+                    .get(index.saturating_sub(1))
+                    .cloned()
+                    .unwrap_or_default();
+                let forked = fake.next_id("forked");
+                fake.reply(&id, "fork", json!({"success": true, "data": {"text": text, "cancelled": false}}));
+                // A fork switches to a new session in the same process.
+                *fake.session_id.lock().unwrap() = forked.clone();
+                fake.save();
             }
             other => fake.reply(
                 &id,
