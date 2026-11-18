@@ -3,10 +3,10 @@ kind "tool" {
   prefer "native"
 }
 kind "assistant" {
-  match "turn-position"
+  match "ref"
   prefer "native"
 }
-kind "assistant" {
-  match "ref"
+kind "reasoning" {
+  match "turn-position"
   prefer "native"
 }
