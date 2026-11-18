@@ -1,0 +1,10 @@
+{"fixture": {"scenario": "text-turn", "about": "option/set with no values answers with the session's options and resets nothing."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "client", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"agent": "$agent", "workspace": {"kind": "dir", "path": "$dir"}, "cwd": "$dir"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"session": {"id": "$id:session", "cwd": "$dir", "binding": {"agent": "$agent"}}, "subscription": "$id:sub", "head": "$any"}}}
+{"check": {"projection": {"state": true, "session": "$id:session"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "option/set", "params": {"session": "$id:session", "values": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"options": "$any", "reset": []}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "option/set", "params": {"session": "ses_conform_missing", "values": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "error": {"code": -32002}}}

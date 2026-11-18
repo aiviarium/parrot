@@ -11,6 +11,7 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
+parrot-proto.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 

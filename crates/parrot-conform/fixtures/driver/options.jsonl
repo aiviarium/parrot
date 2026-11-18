@@ -1,0 +1,11 @@
+{"fixture": {"scenario": "text-turn", "about": "binding/options with no values reports the options, level and network without changing them."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "runtime", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1, "peer": {"kind": "driver"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "binding/start", "params": {"session": "ses_conform", "binding": "bnd_conform", "agent": "$agent", "workspace": "$dir", "cwd": "$dir", "options": {}, "control": "native", "deny": []}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"isolation": "$any", "level": "$any", "network": "$any", "options": "$any", "actions": "$any"}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "binding/options", "params": {"binding": "bnd_conform", "values": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"options": "$any", "level": "$any", "network": "$any"}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 9, "method": "binding/stop", "params": {"binding": "bnd_conform"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 9, "result": {}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "stopped"}}

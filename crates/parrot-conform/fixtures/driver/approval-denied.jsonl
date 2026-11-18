@@ -1,0 +1,17 @@
+{"fixture": {"scenario": "bash-denied", "about": "The harness asks to run `ls`; the approval is denied with the choice \"deny\" and the tool fails."}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": [1], "peer": {"kind": "runtime", "name": "parrot-conform", "version": "0"}, "features": {}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"protocol": 1, "peer": {"kind": "driver"}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "method": "binding/start", "params": {"session": "ses_conform", "binding": "bnd_conform", "agent": "$agent", "workspace": "$dir", "cwd": "$dir", "options": {}, "control": "native", "deny": []}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"isolation": "$any", "level": "$any", "network": "$any", "options": "$any", "actions": "$any"}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "idle"}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "method": "binding/prompt", "params": {"binding": "bnd_conform", "message": "msg_conform_1", "text": "Run ls.", "steer": false}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "result": {"disposition": "started"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"binding": "bnd_conform", "update": {"type": "request", "request": {"id": "$id:req", "kind": "approval", "status": "open"}}}}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 4, "method": "binding/answer", "params": {"binding": "bnd_conform", "request": "$id:req", "answer": {"choice": "deny"}}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 4, "result": {}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "method": "update", "params": {"binding": "bnd_conform", "update": {"type": "turn", "turn": {"status": "completed"}}}}}
+{"check": {"projection": {"items": {"kind": "tool"}, "binding": "bnd_conform"}, "expect": [{"status": "error"}]}}
+{"check": {"projection": {"items": {"kind": "assistant"}, "binding": "bnd_conform"}, "expect": [{"text": "I did not run it."}]}}
+{"dir": "in", "msg": {"jsonrpc": "2.0", "id": 9, "method": "binding/stop", "params": {"binding": "bnd_conform"}}}
+{"dir": "out", "msg": {"jsonrpc": "2.0", "id": 9, "result": {}}}
+{"check": {"projection": {"state": true, "binding": "bnd_conform"}, "expect": "stopped"}}
