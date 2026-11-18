@@ -103,12 +103,52 @@ pub struct Message {
     pub role: String,
     #[serde(default)]
     pub content: Value,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub is_error: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<RawUsage>,
+    /// The calls a tool made to other tools, on a tool result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested_calls: Option<Box<NestedCalls>>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// The bounded record of a tool's calls to other tools (`nestedCalls`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NestedCalls {
+    #[serde(default)]
+    pub calls: Vec<NestedCall>,
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NestedCall {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Option<Value>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -422,6 +462,27 @@ pub struct SlashCommand {
     /// `prompt`, `extension` or `skill`.
     #[serde(default)]
     pub source: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// The data of `get_fork_messages`: user messages a fork can start from.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkMessages {
+    #[serde(default)]
+    pub messages: Vec<ForkMessage>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkMessage {
+    #[serde(default)]
+    pub entry_id: String,
+    #[serde(default)]
+    pub text: String,
     #[serde(flatten)]
     pub extra: Extra,
 }

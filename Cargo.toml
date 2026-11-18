@@ -42,7 +42,7 @@ tempfile = "3"
 sha2 = "0.10"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 clap = { version = "4", features = ["derive"] }
-tokio-tungstenite = "0.28"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 rand = "0.9"
 bytes = "1.12.1"
 futures = "0.3.34"

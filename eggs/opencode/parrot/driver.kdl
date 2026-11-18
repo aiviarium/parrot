@@ -1,6 +1,6 @@
 driver "command" {
   run "variants/{os}-{arch}/parrot-driver-opencode{exe}"
 }
-cli "opencode" versions=">=1.0"
+cli "opencode" versions=">=1.19.0, <1.20.0"
 data-version "1"
 controls "native"

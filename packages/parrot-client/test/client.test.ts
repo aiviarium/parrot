@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "node:path"
 import { Client, type Notifications, RpcError } from "../src"
-import { answer } from "./fake"
+import { answer, answers } from "./fake"
 
 let server: ReturnType<typeof Bun.serve> | undefined
 
@@ -68,6 +68,33 @@ describe("Client", () => {
 
       // @ts-expect-error a method outside the table is a type error
       await client.call("missing/method", {}).catch(() => undefined)
+    } finally {
+      client.close()
+    }
+  })
+
+  test("answers a function call the runtime sends, typed from the schema", async () => {
+    const client = Client.overWebSocket(startWebSocket())
+    try {
+      await client.initialize()
+      const stop = client.provide("function/call", (params) => {
+        expect(params.function).toBe("acme.echo")
+        return { output: params.input }
+      })
+      await client.call("function/provide", {
+        functions: [
+          {
+            name: "acme.echo",
+            description: "Echoes its input",
+            input: { type: "object" },
+            effects: ["read"],
+            level: "read",
+          },
+        ],
+      })
+      for (let i = 0; i < 50 && !answers.has(900); i++) await Bun.sleep(10)
+      expect(answers.get(900)).toEqual({ output: { text: "hi" } })
+      stop()
     } finally {
       client.close()
     }

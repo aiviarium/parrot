@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Client, Serve, Setup, fake_claude_env, scenario};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
 
@@ -100,4 +100,35 @@ async fn an_orchestrator_delegates_waits_and_merges_through_mcp() {
     let log = git(&repo, &["log", "--format=%s"]);
     assert!(log.contains("add ses_"), "{log}");
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+
+    // The orchestrator's MCP calls are tool items in its transcript, with the function they
+    // reached (spec 25.1).
+    let read = owner
+        .ok("session/read", json!({ "session": parent_id, "limit": 100 }))
+        .await;
+    let tools: Vec<&Value> = read["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "tool")
+        .collect();
+    let functions: Vec<&str> = tools.iter().filter_map(|t| t["function"].as_str()).collect();
+    assert_eq!(
+        functions,
+        [
+            "parrot.sessions.spawn",
+            "parrot.sessions.spawn",
+            "parrot.tasks.wait",
+            "parrot.sessions.read",
+            "parrot.workspaces.merge",
+            "parrot.workspaces.merge"
+        ],
+        "{read}"
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|t| t["server"] == "parrot" && t["status"] == "ok"),
+        "{read}"
+    );
 }

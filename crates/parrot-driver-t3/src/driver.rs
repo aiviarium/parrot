@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
@@ -32,7 +33,7 @@ pub const MCP_BIN_ENV: &str = "PARROT_T3_MCP";
 pub const MCP_ARGS_ENV: &str = "PARROT_T3_MCP_ARGS";
 
 /// The modes T3 offers for a thread.
-pub const MODES: [&str; 3] = ["approval-required", "auto-accept-edits", "full-access"];
+pub const MODES: [&str; 4] = ["approval-required", "auto-accept-edits", "auto", "full-access"];
 
 /// How the driver reaches T3.
 #[derive(Debug, Clone, Default)]
@@ -43,6 +44,21 @@ pub struct Config {
     pub guard: bool,
     /// A command from the egg's `driver.kdl`.
     pub command: Option<Vec<String>>,
+    /// A T3 server's `/mcp` address, such as `http://127.0.0.1:3773/mcp`.
+    pub url: Option<String>,
+    /// The bearer token the server wants, from the environment only.
+    pub token: Option<String>,
+}
+
+impl Config {
+    /// `PARROT_T3_URL` and `PARROT_T3_TOKEN` for a T3 server; otherwise the stdio command.
+    pub fn from_env() -> Self {
+        Config {
+            url: std::env::var("PARROT_T3_URL").ok().filter(|u| !u.is_empty()),
+            token: std::env::var("PARROT_T3_TOKEN").ok().filter(|t| !t.is_empty()),
+            ..Default::default()
+        }
+    }
 }
 
 struct Binding {
@@ -81,6 +97,7 @@ impl ThreadState {
     fn level(&self) -> (PermissionLevel, bool) {
         match self.mode.as_deref() {
             Some("full-access") => (PermissionLevel::Host, true),
+            Some("auto") => (PermissionLevel::Write, true),
             Some("auto-accept-edits") => (PermissionLevel::Write, false),
             _ => (PermissionLevel::Read, false),
         }
@@ -190,13 +207,14 @@ impl Driver {
         if let Some(mcp) = slot.as_ref() {
             return Ok(mcp.clone());
         }
-        let argv = command_of(options, &self.config)
-            .ok_or_else(|| RpcError::new(-32020, "no T3 MCP command; set PARROT_T3_MCP"))?;
-        let mcp = Mcp::connect(&argv, cwd, &self.config.env, self.config.guard)
-            .await
-            .map_err(|e| RpcError::new(-32020, format!("the T3 MCP server did not start: {e}")))?;
+        let mcp = self.connect(cwd, options).await?;
         *slot = Some(mcp.clone());
         Ok(mcp)
+    }
+
+    /// A server from the options' `t3.url`, else the environment's, else a command over stdio.
+    async fn connect(&self, cwd: &str, options: &Map<String, Value>) -> Result<Arc<Mcp>, RpcError> {
+        connect(&self.config, cwd, options).await
     }
 
     async fn handle(self: &Arc<Self>, method: &str, p: Value) -> Result<Value, RpcError> {
@@ -207,7 +225,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent()],
+                agents: vec![probed(&self.config).await],
                 hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
@@ -223,6 +241,18 @@ impl Driver {
                     if !p.steer {
                         return Err(
                             RpcError::new(-32004, "a turn is running").with_data(json!({"state": "running"}))
+                        );
+                    }
+                    if p.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
+                        self.emit(
+                            &b.id,
+                            vec![DriverUpdateKind::Notice {
+                                level: NoticeLevel::Warning,
+                                text:
+                                    "T3 cannot attach files to a running turn; the attachments were left out."
+                                        .into(),
+                                code: Some("attachment_unsupported".into()),
+                            }],
                         );
                     }
                     let turn = b.state.lock().unwrap().turn.as_ref().map(|t| t.id.clone());
@@ -241,12 +271,7 @@ impl Driver {
                 }
                 let turn = start_turn(&b, &p.message);
                 emit_user(self, &b.id, &p, &turn.id);
-                mcp.call(
-                    "t3_thread_send",
-                    json!({ "threadId": b.thread, "message": p.text, "mode": "auto" }),
-                )
-                .await
-                .map_err(harness)?;
+                self.send_prompt(&b, &mcp, &p).await?;
                 let driver = self.clone();
                 let b2 = b.clone();
                 tokio::spawn(async move {
@@ -352,13 +377,9 @@ impl Driver {
         if let Some(mcp) = slot.as_ref() {
             return Ok(mcp.clone());
         }
-        let argv = command_of(&Map::new(), &self.config)
-            .ok_or_else(|| RpcError::new(-32020, "no T3 MCP command; set PARROT_T3_MCP"))?;
-        let mcp = Mcp::connect(&argv, &cwd, &self.config.env, self.config.guard)
-            .await
-            .map_err(|e| RpcError::new(-32020, format!("the T3 MCP server did not start: {e}")))?;
-        *slot = Some(mcp.clone());
         let _ = b;
+        let mcp = self.connect(&cwd, &Map::new()).await?;
+        *slot = Some(mcp.clone());
         Ok(mcp)
     }
 
@@ -371,19 +392,20 @@ impl Driver {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| start.agent.strip_prefix("t3:").unwrap_or("default").to_owned());
+        let model = start.options.get("model").and_then(Value::as_str);
         let title = start
             .options
             .get("title")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| format!("Parrot session {}", start.session));
-        let mut arguments = json!({ "title": title, "scratch": true, "providerInstanceId": instance });
+        let mut arguments = json!({ "title": title, "scratch": true });
         if let Some(project) = start.options.get("projectId") {
             arguments["projectId"] = project.clone();
             arguments.as_object_mut().map(|m| m.remove("scratch"));
         }
-        if let Some(model) = start.options.get("model") {
-            arguments["modelSelection"] = json!({ "model": model });
+        if let Some(model) = model {
+            arguments["modelSelection"] = json!({ "instanceId": instance, "model": model });
         }
         if let Some(mode) = start.options.get("mode").and_then(Value::as_str) {
             arguments["runtimeMode"] = json!(mode);
@@ -470,6 +492,175 @@ impl Driver {
             }
         }
     }
+
+    /// Sends a prompt, with its context and attachments. T3 takes an attachment only after an
+    /// upload: prepare, post the bytes, then send the message that names it.
+    async fn send_prompt(
+        &self,
+        b: &Binding,
+        mcp: &Arc<Mcp>,
+        p: &BindingPromptParams,
+    ) -> Result<(), RpcError> {
+        let mut text = String::new();
+        for entry in p.context.iter().flatten() {
+            text.push_str(&format!(
+                "<context uri=\"{}\">\n{}\n</context>\n\n",
+                entry.uri, entry.text
+            ));
+        }
+        text.push_str(&p.text);
+        let mut attachments = Vec::new();
+        for attachment in p.attachments.iter().flatten() {
+            let Some(data) = &attachment.data else {
+                self.notice(
+                    b,
+                    format!(
+                        "The attachment {} ({}) was not sent: it carries no data.",
+                        attachment.name, attachment.media_type
+                    ),
+                );
+                continue;
+            };
+            let bytes = decode_base64(data);
+            let size = bytes.len();
+            if size == 0 {
+                self.notice(
+                    b,
+                    format!("The attachment {} was not sent: it is empty.", attachment.name),
+                );
+                continue;
+            }
+            let kind = if attachment.media_type.starts_with("image/") {
+                "image"
+            } else {
+                "file"
+            };
+            let prepared = mcp
+                .call(
+                    "t3_attachment_prepare_upload",
+                    json!({ "upload": {
+                        "type": kind,
+                        "name": attachment.name,
+                        "mimeType": attachment.media_type,
+                        "sizeBytes": size,
+                    }}),
+                )
+                .await;
+            let prepared = match prepared {
+                Ok(value) => value,
+                Err(e) => {
+                    self.notice(
+                        b,
+                        format!(
+                            "The attachment {} was not sent: T3 refused the upload ({e}).",
+                            attachment.name
+                        ),
+                    );
+                    continue;
+                }
+            };
+            let (Some(id), Some(relative)) = (
+                prepared.get("attachmentId").and_then(Value::as_str),
+                prepared.get("relativeUrl").and_then(Value::as_str),
+            ) else {
+                self.notice(
+                    b,
+                    format!(
+                        "The attachment {} was not sent: T3 named no upload.",
+                        attachment.name
+                    ),
+                );
+                continue;
+            };
+            if let Err(e) = mcp.upload(relative, &bytes, &attachment.media_type).await {
+                self.notice(
+                    b,
+                    format!(
+                        "The attachment {} was not sent: the upload failed ({e}).",
+                        attachment.name
+                    ),
+                );
+                continue;
+            }
+            attachments.push(json!({
+                "type": kind,
+                "id": id,
+                "name": attachment.name,
+                "mimeType": attachment.media_type,
+                "sizeBytes": size,
+            }));
+        }
+        if attachments.is_empty() {
+            mcp.call(
+                "t3_thread_send",
+                json!({ "threadId": b.thread, "message": text, "mode": "auto" }),
+            )
+            .await
+            .map_err(harness)?;
+        } else {
+            mcp.call(
+                "t3_thread_send_attachments",
+                json!({ "threadId": b.thread, "message": text, "attachments": attachments }),
+            )
+            .await
+            .map_err(harness)?;
+        }
+        Ok(())
+    }
+
+    fn notice(&self, b: &Binding, text: String) {
+        self.emit(
+            &b.id,
+            vec![DriverUpdateKind::Notice {
+                level: NoticeLevel::Warning,
+                text,
+                code: Some("attachment_unsupported".into()),
+            }],
+        );
+    }
+}
+
+/// A server from the options' `t3.url`, else the environment's, else a command over stdio.
+async fn connect(config: &Config, cwd: &str, options: &Map<String, Value>) -> Result<Arc<Mcp>, RpcError> {
+    let url = options
+        .get("t3.url")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| config.url.clone());
+    if let Some(url) = url {
+        return Mcp::connect_http(&url, config.token.clone())
+            .await
+            .map_err(|e| RpcError::new(-32020, format!("the T3 server did not answer: {e}")));
+    }
+    let argv = command_of(options, config)
+        .ok_or_else(|| RpcError::new(-32020, "no T3 server; set PARROT_T3_URL or PARROT_T3_MCP"))?;
+    Mcp::connect(&argv, cwd, &config.env, config.guard)
+        .await
+        .map_err(|e| RpcError::new(-32020, format!("the T3 MCP server did not start: {e}")))
+}
+/// Base64 as an attachment carries it.
+fn decode_base64(data: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for c in data.bytes() {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => continue,
+        } as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+    out
 }
 
 fn command_of(options: &Map<String, Value>, config: &Config) -> Option<Vec<OsString>> {
@@ -529,6 +720,7 @@ fn options_of(state: &ThreadState) -> Vec<ConfigOption> {
                 "oneOf": [
                     { "const": "approval-required", "title": "Ask before edits" },
                     { "const": "auto-accept-edits", "title": "Accept edits" },
+                    { "const": "auto", "title": "Auto" },
                     { "const": "full-access", "title": "Full access" },
                 ],
             }),
@@ -656,7 +848,7 @@ async fn read_items(b: &Binding, mcp: &Mcp) -> Result<Vec<DriverUpdateKind>, Str
             let status = match item.get("status").and_then(Value::as_str) {
                 Some("completed") => "ok",
                 Some("failed") | Some("error") => "error",
-                Some("cancelled") | Some("interrupted") => "cancelled",
+                Some("cancelled") | Some("interrupted") | Some("rolled_back") => "cancelled",
                 _ => "running",
             };
             out.push(DriverUpdateKind::Item {
@@ -822,6 +1014,8 @@ fn harness(e: String) -> RpcError {
 
 /// The `t3` agent as `agent/list` reports it.
 pub fn agent() -> Agent {
+    let mut features = Map::new();
+    features.insert("attachments".into(), json!({"kinds": ["image", "file"]}));
     Agent {
         id: parrot_proto::driver_data::agent_id("t3"),
         env: String::new(),
@@ -838,7 +1032,7 @@ pub fn agent() -> Agent {
         usable: true,
         detail: None,
         controls: vec![Control::Native],
-        features: Map::new(),
+        features,
         levels: vec![
             PermissionLevel::Read,
             PermissionLevel::Write,
@@ -850,6 +1044,32 @@ pub fn agent() -> Agent {
         meta: None,
         extra: Map::new(),
     }
+}
+
+/// [`agent`] with the version T3 reports in the MCP handshake, when the server answers.
+pub async fn probed(config: &Config) -> Agent {
+    let mut a = agent();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let options = Map::new();
+    let connected = tokio::time::timeout(Duration::from_secs(10), connect(config, &cwd, &options)).await;
+    if let Ok(Ok(mcp)) = connected {
+        a.harness = mcp
+            .server_info()
+            .and_then(|info| {
+                info.get("version")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_owned)
+            })
+            .map(|version| parrot_proto::agent::HarnessInfo {
+                version,
+                verified: true,
+            });
+        mcp.stop().await;
+    }
+    a
 }
 
 /// The current time in RFC 3339, UTC, to the millisecond.

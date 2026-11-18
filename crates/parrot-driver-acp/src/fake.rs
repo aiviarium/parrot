@@ -94,12 +94,18 @@ fn prompt_text(params: &Value) -> String {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
-                    Some("resource") => format!(
-                        "[{}]",
-                        b.pointer("/resource/uri")
-                            .and_then(Value::as_str)
-                            .unwrap_or("resource")
-                    ),
+                    Some("resource") => b
+                        .pointer("/resource/text")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            format!(
+                                "[{}]",
+                                b.pointer("/resource/uri")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("resource")
+                            )
+                        }),
                     Some(other) => format!("[{other}]"),
                     None => String::new(),
                 })
@@ -246,6 +252,48 @@ impl<W: Write + Send + 'static> Shared<W> {
                 "text" => self.stream(&directive.arg, delay, cancelled),
                 "slow" => delay = directive.arg.parse().unwrap_or(0),
                 "think" => self.chunk("agent_thought_chunk", &directive.arg, None),
+                "resource" => {
+                    let message_id = format!("msg_{}", self.messages.fetch_add(1, Ordering::Relaxed) + 1);
+                    self.update(json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": message_id,
+                        "content": {
+                            "type": "resource",
+                            "resource": {
+                                "uri": "file:///notes.md",
+                                "mimeType": "text/markdown",
+                                "text": directive.arg,
+                            },
+                        },
+                    }));
+                }
+                "resource-blob" => {
+                    let message_id = format!("msg_{}", self.messages.fetch_add(1, Ordering::Relaxed) + 1);
+                    self.update(json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": message_id,
+                        "content": {
+                            "type": "resource",
+                            "resource": {
+                                "uri": "file:///greeting.txt",
+                                "mimeType": "text/plain",
+                                "blob": directive.arg,
+                            },
+                        },
+                    }));
+                }
+                "resource-link" => {
+                    let (name, uri) = directive
+                        .arg
+                        .split_once('|')
+                        .unwrap_or(("notes", "file:///notes.md"));
+                    let message_id = format!("msg_{}", self.messages.fetch_add(1, Ordering::Relaxed) + 1);
+                    self.update(json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": message_id,
+                        "content": { "type": "resource_link", "name": name, "uri": uri },
+                    }));
+                }
                 "perm" => {
                     let command = directive.arg;
                     let call = json!({
@@ -380,21 +428,62 @@ pub fn run<R: BufRead, W: Write + Send + 'static>(script: Option<String>, input:
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
         let id = msg.get("id").cloned();
         match method {
-            "initialize" => respond(
-                &shared,
-                id,
-                json!({
-                    "protocolVersion": 1,
-                    "agentCapabilities": {
-                        "loadSession": true,
-                        "promptCapabilities": { "image": true, "embeddedContext": true },
-                        "mcpCapabilities": { "http": true, "sse": false },
-                        "sessionCapabilities": { "resume": {} },
-                    },
-                    "agentInfo": { "name": "fake-acp", "title": "Fake ACP agent", "version": "0.0.0" },
-                    "authMethods": [],
-                }),
-            ),
+            "initialize" => {
+                let version = std::env::var("PARROT_FAKE_ACP_PROTOCOL")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(1);
+                // A resume-capable agent gets `session/resume`; without it, `session/load`.
+                let resume = std::env::var("PARROT_FAKE_ACP_RESUME").ok().as_deref() != Some("0");
+                let session_capabilities = if resume {
+                    json!({ "resume": {} })
+                } else {
+                    json!({})
+                };
+                if version >= 2 {
+                    let asked = params.get("protocolVersion").and_then(Value::as_u64);
+                    if asked != Some(2) || params.get("capabilities").is_none() {
+                        respond_after_error(
+                            &shared,
+                            id,
+                            -32602,
+                            "a version 2 client sends protocolVersion 2 and capabilities".into(),
+                        );
+                        continue;
+                    }
+                    respond(
+                        &shared,
+                        id,
+                        json!({
+                            "protocolVersion": 2,
+                            "capabilities": {
+                                "loadSession": true,
+                                "promptCapabilities": { "image": true, "embeddedContext": true },
+                                "mcpCapabilities": { "http": true, "sse": false },
+                                "sessionCapabilities": session_capabilities.clone(),
+                            },
+                            "info": { "name": "fake-acp", "title": "Fake ACP agent", "version": "0.4.5" },
+                            "authMethods": [],
+                        }),
+                    );
+                } else {
+                    respond(
+                        &shared,
+                        id,
+                        json!({
+                            "protocolVersion": 1,
+                            "agentCapabilities": {
+                                "loadSession": true,
+                                "promptCapabilities": { "image": true, "embeddedContext": true },
+                                "mcpCapabilities": { "http": true, "sse": false },
+                                "sessionCapabilities": session_capabilities.clone(),
+                            },
+                            "agentInfo": { "name": "fake-acp", "title": "Fake ACP agent", "version": "0.0.0" },
+                            "authMethods": [],
+                        }),
+                    );
+                }
+            }
             "session/new" => {
                 let id_value = format!(
                     "fake-session-{}",
@@ -452,6 +541,34 @@ pub fn run<R: BufRead, W: Write + Send + 'static>(script: Option<String>, input:
                         .cloned()
                         .unwrap_or_default(),
                 });
+                // A load replays the stored conversation before it answers.
+                if method == "session/load" {
+                    shared.update(json!({
+                        "sessionUpdate": "user_message_chunk",
+                        "messageId": "replay-user",
+                        "content": { "type": "text", "text": "What is in the notes?" },
+                    }));
+                    shared.update(json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "replay-assistant",
+                        "content": { "type": "text", "text": "Two lines." },
+                    }));
+                    shared.update(json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "replay-tool",
+                        "title": "Read notes.md",
+                        "kind": "read",
+                        "status": "completed",
+                        "content": [{
+                            "type": "resource",
+                            "resource": {
+                                "uri": "file:///notes.md",
+                                "mimeType": "text/plain",
+                                "blob": "aGVsbG8=",
+                            },
+                        }],
+                    }));
+                }
                 respond(
                     &shared,
                     id,

@@ -18,9 +18,15 @@ await client.prompt("ses_1", "hello")
 `src/schema.ts` is generated. Do not edit it. Run `bun run generate` in this package after a change to
 the schema. `bun run test` fails when the file is stale.
 
-It holds every type the schema defines, and two maps: `Methods` with each method's params and result,
-and `Notifications` with each notification's params. `Client.call` and `Client.on` use them, so a
-method, its params and its result are checked by the compiler. `Client.initialize`, `subscribe`,
+It has every type the schema defines, and three maps:
+
+| Map | Holds | Used by |
+| --- | --- | --- |
+| `Methods` | Each method's params and result | `Client.call` |
+| `ClientMethods` | Each request the runtime sends to a client, such as `function/call` | `Client.provide` |
+| `Notifications` | Each notification's params | `Client.on` |
+
+The compiler checks a method, its params and its result. `Client.initialize`, `subscribe`,
 `unsubscribe` and `prompt` stay as shortcuts.
 
 ```ts
@@ -28,6 +34,7 @@ const result = await client.call("session/get", { session: "ses_1" })
 client.on("update", (update) => {
   if (update.update.type === "state") console.log(update.update.state)
 })
+client.provide("function/call", (call) => ({ output: { echoed: call.input } }))
 ```
 
 ## Transports

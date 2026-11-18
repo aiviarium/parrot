@@ -308,6 +308,51 @@ impl Fake {
                     }
                 }
                 "image" => self.text(&session, &message, "I see it.", delay, &abort),
+                "drop-stream" => self.emit("stream.reset", json!({"sessionID": session})),
+                "tool-stream" => {
+                    let id = self.next_id("call");
+                    self.emit(
+                        "session.tool.input.started",
+                        json!({"sessionID": session, "assistantMessageID": message, "id": id,
+                            "tool": "bash"}),
+                    );
+                    for delta in ["{\"command\":", "\"ls\"", "}"] {
+                        self.emit(
+                            "session.tool.input.delta",
+                            json!({"sessionID": session, "assistantMessageID": message, "id": id,
+                                "delta": delta}),
+                        );
+                    }
+                    self.emit(
+                        "session.tool.called",
+                        json!({"sessionID": session, "assistantMessageID": message, "id": id,
+                            "input": {"command": "ls"}, "executed": true, "native": {"tool": "bash"}}),
+                    );
+                    self.tool_end(&session, &message, &id, true, "README.md");
+                    self.text(&session, &message, "It ran.", delay, &abort);
+                }
+                "subagent" => {
+                    let child = self.next_id("child");
+                    self.emit(
+                        "session.created",
+                        json!({"sessionID": child, "parentID": session, "title": arg}),
+                    );
+                    self.emit(
+                        "session.text.started",
+                        json!({"sessionID": child, "assistantMessageID": format!("{child}-msg"), "ordinal": 0}),
+                    );
+                    self.emit(
+                        "session.text.ended",
+                        json!({"sessionID": child, "assistantMessageID": format!("{child}-msg"),
+                            "ordinal": 0, "text": "The child looked."}),
+                    );
+                    self.emit("session.idle", json!({"sessionID": child}));
+                    self.text(&session, &message, "It is done.", delay, &abort);
+                }
+                "permission-config" => {
+                    let output = std::env::var(CONFIG_ENV).unwrap_or_default();
+                    self.tool(&session, &message, "config", json!({}), &output);
+                }
                 "mcp" => {
                     let output = match self.mcp_server() {
                         Some(server) => server.to_string(),
@@ -431,6 +476,10 @@ fn tags(text: &str) -> Vec<(String, String)> {
 /// Serves the fake until it is killed.
 pub async fn run() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version") {
+        println!("1.19.6");
+        return Ok(());
+    }
     let flag = |name: &str| {
         args.iter()
             .position(|a| a == name)
@@ -657,6 +706,31 @@ fn route(fake: &Arc<Fake>, method: &str, path: &str, body: &Value) -> Option<Val
             });
             Some(json!({"data": {"id": source_id("msg", 0), "type": "compaction"}}))
         }
+        ("GET", ["api", "session"]) => Some(json!({"data": [
+            {"id": "ses_history", "title": "Earlier notes", "cost": 0,
+             "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+             "time": {"created": 1_700_000_000_000u64, "updated": 1_700_000_100_000u64},
+             "location": {"directory": "/work/demo"}},
+        ]})),
+        ("GET", ["api", "session", id, "message"]) => {
+            let id = (*id).to_owned();
+            Some(json!({"data": [
+                {"info": {"id": "old-1", "sessionID": id, "role": "user", "time": {"created": 1_700_000_000_000u64}},
+                 "parts": [{"id": "old-part-1", "type": "text", "text": "List the notes"}]},
+                {"info": {"id": "old-2", "sessionID": id, "role": "assistant", "time": {"created": 1_700_000_001_000u64}},
+                 "parts": [
+                     {"id": "old-part-2", "type": "text", "text": "One note."},
+                     {"id": "old-part-3", "type": "tool", "tool": "read", "callID": "old-call",
+                      "state": {"status": "completed", "title": "Read notes.md", "input": {"path": "notes.md"}, "output": "hello"}},
+                 ]},
+            ]}))
+        }
+        ("POST", ["api", "session", _, "fork"]) => {
+            let id = source_id("ses", fake.counter.fetch_add(1, Ordering::Relaxed));
+            Some(json!({"data": {"id": id, "title": "fork", "cost": 0,
+                "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                "time": {"created": 0, "updated": 0}, "location": {"directory": "/"}}}))
+        }
         _ => None,
     }
 }
@@ -686,6 +760,10 @@ async fn stream(fake: Arc<Fake>, mut socket: OwnedWriteHalf) -> std::io::Result<
             .and_then(Value::as_str)
             .unwrap_or("message")
             .to_owned();
+        // A scripted drop says the server closed the stream, as a restart would.
+        if kind == "stream.reset" {
+            break;
+        }
         let frame = format!("event: {kind}\ndata: {event}\n\n");
         let chunk = format!("{:x}\r\n{frame}\r\n", frame.len());
         if socket.write_all(chunk.as_bytes()).await.is_err() {

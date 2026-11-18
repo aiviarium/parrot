@@ -403,16 +403,32 @@ fn is_initialize(v: &Value) -> bool {
     v["type"] == "control_request" && v["request"]["subtype"] == "initialize"
 }
 
+/// A control request that changes a setting: the permission mode or the model.
+fn is_setting(v: &Value) -> bool {
+    v["type"] == "control_request"
+        && matches!(
+            v["request"]["subtype"].as_str(),
+            Some("set_permission_mode" | "set_model")
+        )
+}
+
 struct Run<R, W> {
     input: R,
     output: W,
     vars: Vars,
     args: Vec<String>,
     mcp: Option<Mcp>,
+    /// The `session_id` of the last message written, for the messages `mcp_call` adds.
+    session: String,
+    /// How many `mcp_call` steps ran, for their `tool_use` ids.
+    calls: u32,
 }
 
 impl<R: BufRead, W: Write> Run<R, W> {
     fn write(&mut self, v: &Value) -> std::io::Result<()> {
+        if let Some(id) = v["session_id"].as_str() {
+            self.session = id.to_owned();
+        }
         writeln!(self.output, "{v}")?;
         self.output.flush()
     }
@@ -446,6 +462,13 @@ impl<R: BufRead, W: Write> Run<R, W> {
                 self.write(&initialize_reply(&id))?;
                 continue;
             }
+            // Option changes are answered whenever they come, as the CLI does, unless the
+            // scenario waits for one.
+            if is_setting(&v) && !wants(&v) {
+                let id = v["request_id"].as_str().unwrap_or_default();
+                self.write(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {}}}))?;
+                continue;
+            }
             return Ok(Some(v));
         }
     }
@@ -464,6 +487,8 @@ pub fn run_with_args<R: BufRead, W: Write>(steps: &[Step], input: R, output: W, 
         vars: Vars::default(),
         args,
         mcp: None,
+        session: String::new(),
+        calls: 0,
     };
     let played = play(steps, &mut run).and_then(|code| match code {
         Some(code) => Ok(code),
@@ -548,6 +573,17 @@ fn play<R: BufRead, W: Write>(steps: &[Step], run: &mut Run<R, W>) -> std::io::R
                     run.mcp = Some(Mcp::start(&run.args)?);
                 }
                 let call = run.vars.substitute(call);
+                // The CLI reports the call as a tool_use of `mcp__parrot__<name>`, then its result.
+                run.calls += 1;
+                let tool_id = format!("toolu_fake_mcp_{:02}", run.calls);
+                let session = run.session.clone();
+                run.write(&json!({"type": "assistant", "message": {"id": format!("msg_fake_mcp_{:02}", run.calls),
+                    "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
+                    "content": [{"type": "tool_use", "id": tool_id,
+                        "name": format!("mcp__parrot__{}", call["name"].as_str().unwrap_or_default()),
+                        "input": call["arguments"]}],
+                    "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 1, "output_tokens": 1}},
+                    "parent_tool_use_id": null, "session_id": session, "uuid": format!("a-mcp-{}", run.calls)}))?;
                 let mut tries = 0;
                 let result = loop {
                     tries += 1;
@@ -571,6 +607,11 @@ fn play<R: BufRead, W: Write>(steps: &[Step], run: &mut Run<R, W>) -> std::io::R
                         _ => break result,
                     }
                 };
+                let text = serde_json::to_string(&result).unwrap_or_default();
+                let session = run.session.clone();
+                run.write(&json!({"type": "user", "message": {"role": "user", "content": [{"tool_use_id": tool_id,
+                    "type": "tool_result", "content": text, "is_error": false}]},
+                    "parent_tool_use_id": null, "session_id": session, "uuid": format!("u-mcp-{}", run.calls)}))?;
                 if let Some(name) = save {
                     run.vars.saved.insert(name.clone(), result);
                 }

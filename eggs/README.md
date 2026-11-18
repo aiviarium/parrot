@@ -12,6 +12,7 @@ Each folder here is a Hatchery package for one agent. The runtime installs the `
 | `<agent>/parrot/driver.kdl` | How the driver runs, which CLI versions it covers, and its data version |
 | `<agent>/parrot/options.kdl` | Option maps with roles, choices with semantic tags, and `dependsOn` rules |
 | `<agent>/parrot/levels.kdl` | Permission levels and the tools each level allows (E4) |
+| `<agent>/parrot/limits.kdl` | Numbers the CLI imposes: `tool-timeout` is how many seconds it waits for one tool call. Calls into Parrot and approvals return before it |
 | `<agent>/parrot/correlate.kdl` | How items from several sources match, and which source is preferred |
 | `<agent>/parrot/profile.kdl` | The TUI profile, for agents with TUI control. This is the live copy |
 | `<agent>/parrot/shims/<dir>/` | Files that replace the ones above for a range of CLI versions |
@@ -34,10 +35,13 @@ shim ">=2.1.325" dir="shims/2.1.325"
 ```kdl
 driver "builtin" name="acp"
 command "gemini" "--experimental-acp"
+cli "gemini" versions=">=0.20.0, <0.21.0"
 data-version "1"
 ```
 
-The runtime marks a session `unverified` when the CLI reports a version outside `versions`.
+The runtime marks a session `unverified` when the CLI reports a version outside `versions`. Each
+egg states the release line its data was checked against, such as the pi egg's
+`>=0.73.0, <0.74.0`. The runtime compares only a version the CLI reports.
 
 | Node | Meaning |
 | --- | --- |

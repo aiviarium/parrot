@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 pub use crate::agents::{agents, discover};
 
 /// Sessions by id, plus the workspaces and agents they use.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Sessions {
     /// The records every module reads through `directory`.
     pub by_id: BTreeMap<String, SessionRecord>,
@@ -37,22 +37,6 @@ pub struct Sessions {
     pub calls: BTreeMap<u64, Option<(String, RequestId)>>,
     /// Whether the agents came from installed eggs, so an agent without one is unknown.
     pub eggs_loaded: bool,
-}
-
-impl Default for Sessions {
-    fn default() -> Self {
-        let agents = crate::agents::builtin();
-        Self {
-            by_id: BTreeMap::new(),
-            info: BTreeMap::new(),
-            workspaces: BTreeMap::new(),
-            agents,
-            eggs: BTreeMap::new(),
-            discovery: BTreeMap::new(),
-            calls: BTreeMap::new(),
-            eggs_loaded: false,
-        }
-    }
 }
 
 /// What the core keeps per session; other modules read it through `directory`.
@@ -553,6 +537,13 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
         return Ok(Value::Null);
     }
     let p: SessionNewParams = parse(params)?;
+    // Where work happens is always an explicit choice: given, or carried by the seed.
+    let Some(request) = p.workspace.clone() else {
+        return Err(RpcError::new(
+            -32602,
+            "invalid params: workspace is required unless a seed carries the workspace",
+        ));
+    };
     let mut plan = if p.parent.is_some()
         || p.seed.is_some()
         || p.task.is_some()
@@ -582,7 +573,7 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
     }
     let ceiling = plan.as_ref().map(|p| p.node.ceiling.clone()).unwrap_or_default();
     let fenced = |path: &str| crate::ceilings::check_path(&ceiling, path);
-    let (workspace, path) = match &p.workspace {
+    let (workspace, path) = match &request {
         WorkspaceRequest::Dir { path } => {
             if let Err(e) = fenced(path) {
                 if let Some(plan) = &plan {
@@ -808,20 +799,35 @@ pub fn list_page(state: &State, conn: &str, p: &SessionListParams) -> Result<Val
     let mut matching = matching;
     let updated = |id: &str| cx.state.sessions.info.get(id).map_or(0, |i| i.updated_ms);
     matching.sort_by(|a, b| updated(&b.id).cmp(&updated(&a.id)).then(a.id.cmp(&b.id)));
-    let offset: usize = match &p.cursor {
-        Some(c) => c.parse().map_err(|_| RpcError::new(-32602, "invalid cursor"))?,
+    // The cursor names the last session of the page before, by when it was updated and its id,
+    // so sessions that change between pages don't shift the rest (10.3).
+    let start = match &p.cursor {
+        Some(c) => {
+            let (at, after) = c
+                .split_once('.')
+                .and_then(|(at, id)| Some((at.parse::<u64>().ok()?, id)))
+                .ok_or_else(|| RpcError::new(-32602, "invalid cursor"))?;
+            matching
+                .iter()
+                .position(|s| {
+                    let u = updated(&s.id);
+                    u < at || (u == at && s.id.as_str() > after)
+                })
+                .unwrap_or(matching.len())
+        }
         None => 0,
     };
     let limit = p.limit.unwrap_or(100).clamp(1, 1000) as usize;
-    let page: Vec<Value> = matching
+    let end = (start + limit).min(matching.len());
+    let page: Vec<Value> = matching[start..end]
         .iter()
-        .skip(offset)
-        .take(limit)
         .filter_map(|s| summary_json(cx.state, &s.id))
         .collect();
     let mut v = json!({ "sessions": page });
-    if offset + limit < matching.len() {
-        v["next"] = json!((offset + limit).to_string());
+    if end < matching.len()
+        && let Some(last) = matching.get(end - 1)
+    {
+        v["next"] = json!(format!("{}.{}", updated(&last.id), last.id));
     }
     Ok(v)
 }

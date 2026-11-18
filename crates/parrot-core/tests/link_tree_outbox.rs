@@ -2,6 +2,8 @@
 //! runtime: through the link when it is up, through the link's durable outbox when it is down
 //! (E2). Only the runtime the child moved to may speak for it.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::sessions::SessionRecord;
 use parrot_core::{Core, Effect, Input, LinkOffer, OfferedSessions, Peer};
@@ -17,7 +19,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         let mut sim = Sim {
-            core: Core::new(Box::new(clock), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock), Box::new(SeqIds::default())),
             next: 0,
         };
         sim.connect("con_owner", Peer::Owner);

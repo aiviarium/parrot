@@ -1,5 +1,10 @@
-//! The Agent Client Protocol, version 1, as a client of any ACP agent: JSON-RPC 2.0, one message
-//! per line over the agent's stdio (Appendix A, Appendix C).
+//! The Agent Client Protocol, as a client of any ACP agent: JSON-RPC 2.0, one message per line
+//! over the agent's stdio (Appendix A, Appendix C).
+//!
+//! `initialize` offers version 2 and falls back to version 1 for an agent that answers 1, as the
+//! protocol asks. The v2 draft renames `clientCapabilities`, `clientInfo`, `agentCapabilities` and
+//! `agentInfo` to `capabilities` and `info`; both spellings are sent and read, since an agent
+//! ignores what it does not know.
 //!
 //! Only the parts Parrot reads or writes are named. Every struct keeps unknown fields in
 //! [`Extra`], and every session update is wrapped in [`Open`], so a newer agent's messages survive
@@ -12,23 +17,32 @@ use serde_json::{Map, Value, json};
 /// Fields this crate does not name, kept as they came.
 pub type Extra = Map<String, Value>;
 
-/// The protocol version this client speaks.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The newest protocol version this client speaks. Version 2 is a draft; an agent that answers
+/// 1 is served with the version 1 shapes.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// The version this client falls back to when the agent names no version.
+pub const PROTOCOL_V1: u32 = 1;
 
 /// `initialize` params: Parrot offers no file system and no terminal, because the agent runs on
 /// the same machine and uses its own.
-pub fn initialize_params() -> Value {
+pub fn initialize_params(version: u32) -> Value {
+    let capabilities = json!({
+        "fs": { "readTextFile": false, "writeTextFile": false },
+        "terminal": false,
+    });
+    let info = json!({
+        "name": "parrot",
+        "title": "Parrot",
+        "version": env!("CARGO_PKG_VERSION"),
+    });
     json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "clientCapabilities": {
-            "fs": { "readTextFile": false, "writeTextFile": false },
-            "terminal": false,
-        },
-        "clientInfo": {
-            "name": "parrot",
-            "title": "Parrot",
-            "version": env!("CARGO_PKG_VERSION"),
-        },
+        "protocolVersion": version,
+        // The version 1 names and the version 2 names, so either agent reads its own.
+        "clientCapabilities": capabilities,
+        "clientInfo": info,
+        "capabilities": capabilities,
+        "info": info,
     })
 }
 
@@ -38,14 +52,37 @@ pub fn initialize_params() -> Value {
 pub struct InitializeResult {
     #[serde(default)]
     pub protocol_version: Option<Value>,
-    #[serde(default)]
+    #[serde(default, alias = "capabilities")]
     pub agent_capabilities: AgentCapabilities,
-    #[serde(default)]
+    #[serde(default, alias = "info")]
     pub agent_info: Option<Value>,
     #[serde(default)]
     pub auth_methods: Vec<Value>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+impl InitializeResult {
+    /// The protocol version the agent will speak: its answer, else version 1.
+    pub fn version(&self) -> u32 {
+        match &self.protocol_version {
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(PROTOCOL_V1),
+            Some(Value::String(s)) => s.parse().unwrap_or(PROTOCOL_V1),
+            _ => PROTOCOL_V1,
+        }
+    }
+
+    /// The agent's version for `harness`, when it reports one.
+    pub fn agent_version(&self) -> Option<String> {
+        let info = self.agent_info.as_ref()?;
+        info.get("version")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -443,11 +480,95 @@ pub fn cancelled_outcome() -> Value {
     json!({ "outcome": { "outcome": "cancelled" } })
 }
 
-/// The text of a content block, if it has any.
-pub fn block_text(block: &Value) -> Option<&str> {
-    (block.get("type").and_then(Value::as_str) == Some("text"))
-        .then(|| block.get("text").and_then(Value::as_str))
-        .flatten()
+/// The text of a content block, if the block carries or names any.
+///
+/// A `resource` block is decoded: its `text` as it is, or its base64 `blob` when the media type is
+/// textual. A binary resource becomes a short description instead of its bytes. A `resource_link`
+/// becomes the name and URI it names.
+pub fn block_text(block: &Value) -> Option<String> {
+    match block.get("type").and_then(Value::as_str)? {
+        "text" => block.get("text").and_then(Value::as_str).map(str::to_owned),
+        "resource" => Some(resource_text(block.get("resource")?)),
+        "resource_link" => {
+            let name = block.get("name").and_then(Value::as_str);
+            let uri = block.get("uri").and_then(Value::as_str);
+            match (name, uri) {
+                (Some(name), Some(uri)) => Some(format!("{name}: {uri}")),
+                (Some(name), None) => Some(name.to_owned()),
+                (None, Some(uri)) => Some(uri.to_owned()),
+                (None, None) => None,
+            }
+        }
+        "image" => Some(image_text("image", block)),
+        "audio" => Some(image_text("audio", block)),
+        _ => None,
+    }
+}
+
+/// The text an embedded resource carries, or a description of it when it carries bytes.
+fn resource_text(resource: &Value) -> String {
+    let uri = resource.get("uri").and_then(Value::as_str);
+    if let Some(text) = resource.get("text").and_then(Value::as_str) {
+        return text.to_owned();
+    }
+    let mime = resource
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    match resource.get("blob").and_then(Value::as_str) {
+        Some(blob) if mime.starts_with("text/") || mime == "application/json" => decode_base64(blob),
+        Some(blob) => format!(
+            "[{} resource{}: {} bytes]",
+            mime,
+            uri.map(|u| format!(" {u}")).unwrap_or_default(),
+            decoded_len(blob)
+        ),
+        None => uri.unwrap_or("[resource]").to_owned(),
+    }
+}
+
+fn image_text(kind: &str, block: &Value) -> String {
+    let mime = block
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    let bytes = block
+        .get("data")
+        .and_then(Value::as_str)
+        .map(decoded_len)
+        .unwrap_or(0);
+    format!("[{kind} {mime}: {bytes} bytes]")
+}
+
+/// How many bytes a base64 string holds, without decoding it.
+fn decoded_len(data: &str) -> usize {
+    let padding = data.bytes().rev().take_while(|b| *b == b'=').count();
+    data.len() / 4 * 3 - padding.min(2)
+}
+
+/// Decodes base64 for an embedded resource; invalid input is kept as it came.
+pub fn decode_base64(data: &str) -> String {
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for c in data.bytes() {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => continue,
+        } as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Drops the values that carry secrets before a raw message goes into a `frame` update: bearer

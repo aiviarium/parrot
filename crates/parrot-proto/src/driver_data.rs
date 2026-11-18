@@ -646,6 +646,35 @@ fn glob(pattern: &str, name: &str) -> bool {
     }
 }
 
+// ---- limits.kdl ----
+
+/// `limits.kdl`: numbers the harness imposes (spec 31, 27.2).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct LimitsFile {
+    /// `tool-timeout 60`: how many seconds the harness waits for one tool call, MCP calls
+    /// included. Calls into Parrot return before it, less a margin.
+    #[serde(default)]
+    pub tool_timeout: Vec<u64>,
+}
+
+impl LimitsFile {
+    /// The tool-call timeout in seconds, if the file gives one.
+    pub fn tool_timeout(&self) -> Option<u64> {
+        self.tool_timeout.first().copied()
+    }
+}
+
+/// How long a call into Parrot may block, in milliseconds: the harness's tool-call timeout less
+/// a tenth of it (at least 5 seconds), and never more than `cap_ms` (spec 27.2).
+pub fn call_limit_ms(tool_timeout_s: Option<u64>, cap_ms: u64) -> u64 {
+    let Some(timeout) = tool_timeout_s.map(|s| s.saturating_mul(1000)) else {
+        return cap_ms;
+    };
+    let margin = (timeout / 10).max(5_000);
+    timeout.saturating_sub(margin).clamp(1_000, cap_ms)
+}
+
 // ---- correlate.kdl ----
 
 /// `correlate.kdl`: per item kind, how items of two sources match and which source wins
@@ -768,6 +797,7 @@ pub fn schemas() -> Vec<(&'static str, Value)> {
         ("options", crate::schema::schema_for::<OptionsFile>()),
         ("levels", crate::schema::schema_for::<LevelsFile>()),
         ("correlate", crate::schema::schema_for::<CorrelateFile>()),
+        ("limits", crate::schema::schema_for::<LimitsFile>()),
     ]
 }
 
@@ -931,5 +961,11 @@ map level="read" { when mode="plan"; when mode="default"; }"#,
         parse::<OptionsFile>("options.kdl", &read("options.kdl")).unwrap();
         parse::<LevelsFile>("levels.kdl", &read("levels.kdl")).unwrap();
         parse::<CorrelateFile>("correlate.kdl", &read("correlate.kdl")).unwrap();
+        let limits = parse::<LimitsFile>("limits.kdl", &read("limits.kdl")).unwrap();
+        assert_eq!(limits.tool_timeout(), Some(60));
+        assert_eq!(call_limit_ms(Some(60), 170_000), 54_000);
+        assert_eq!(call_limit_ms(Some(20), 170_000), 15_000);
+        assert_eq!(call_limit_ms(Some(100_000), 170_000), 170_000);
+        assert_eq!(call_limit_ms(None, 170_000), 170_000);
     }
 }

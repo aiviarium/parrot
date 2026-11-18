@@ -268,6 +268,18 @@ async fn a_killed_runtime_comes_back_with_nothing_running() {
     let requests = b.ok("request/list", json!({ "session": session })).await;
     assert_eq!(requests["requests"][0]["status"], "expired", "{requests}");
 
+    // The turn the crash cut off ended as `interrupted` when the store was read back (E7).
+    let from = b.seen.len();
+    b.ok(
+        "subscribe",
+        json!({ "target": { "session": session }, "replayFrom": seq_before.to_string() }),
+    )
+    .await;
+    b.wait_update(from, "the interrupted turn", |u| {
+        u["type"] == "turn" && u["turn"]["status"] == "interrupted" && u["turn"]["continuable"] == true
+    })
+    .await;
+
     // Nothing starts by itself: a while later the session is still stopped.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let got = b.ok("session/get", json!({ "session": session })).await;

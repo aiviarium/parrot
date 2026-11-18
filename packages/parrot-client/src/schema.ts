@@ -639,6 +639,117 @@ export interface ForbiddenData {
   reason: string
 }
 
+/** `function/call`, from a client to the runtime and from the runtime to the providing client. */
+export interface FunctionCallParams {
+  function: string
+  env?: string | null
+  input: unknown
+  /** The session the call is for; the runtime sets it on calls it forwards. */
+  session?: string | null
+  key?: string | null
+  /** Seconds to wait for an approval, capped by the harness's tool-call timeout (27.2). */
+  timeout?: number | null
+}
+
+export type FunctionContent =
+  | {
+      type: "text"
+      text: string
+    }
+  | {
+      type: "image"
+      data: string
+      mime: string
+    }
+  | {
+      type: "resource"
+      uri: string
+    }
+
+export interface FunctionDescribeParams {
+  names: string[]
+  env?: string | null
+}
+
+export interface FunctionDescribeResult {
+  functions: FunctionInfo[]
+  /** The functions as TypeScript declarations. */
+  declarations: string
+}
+
+export interface FunctionError {
+  code: string
+  message: string
+}
+
+export interface FunctionExample {
+  input: unknown
+  output?: unknown
+}
+
+/** A function with its provider: `runtime`, a connection id or a link id. */
+export interface FunctionInfo {
+  /** Namespaced, dot-separated; `parrot.` is reserved for this spec (27.1). */
+  name: string
+  description: string
+  input: unknown
+  output?: unknown
+  effects: Effect[]
+  /** The lowest permission level that allows a call without asking (E5). */
+  level: PermissionLevel
+  examples?: FunctionExample[] | null
+  env?: string | null
+  /** Listed directly to harnesses (26). */
+  pinned?: boolean | null
+  provider?: string | null
+}
+
+export interface FunctionListParams {
+  session?: string | null
+  cursor?: string | null
+}
+
+export interface FunctionListResult {
+  functions: FunctionInfo[]
+  next?: string | null
+}
+
+export interface FunctionProvideParams {
+  functions: FunctionSpec[]
+}
+
+/**
+ * The result of `function/call`, from the runtime to a client and from a provider to the
+ * runtime.
+ */
+export interface FunctionResult {
+  output?: unknown
+  content?: FunctionContent[] | null
+  error?: FunctionError | null
+}
+
+export interface FunctionSearchParams {
+  session?: string | null
+  query: string
+  limit?: number | null
+}
+
+/** A function a provider offers. */
+export interface FunctionSpec {
+  /** Namespaced, dot-separated; `parrot.` is reserved for this spec (27.1). */
+  name: string
+  description: string
+  input: unknown
+  output?: unknown
+  effects: Effect[]
+  /** The lowest permission level that allows a call without asking (E5). */
+  level: PermissionLevel
+  examples?: FunctionExample[] | null
+  env?: string | null
+  /** Listed directly to harnesses (26). */
+  pinned?: boolean | null
+}
+
 /** Fields every item kind has. */
 export interface HandoffItem {
   id: string
@@ -830,6 +941,15 @@ export interface LevelsFile {
   map?: LevelMap[]
   /** Arguments that pin the harness's settings sources under a ceiling. */
   pin?: PinArgs[]
+}
+
+/** `limits.kdl`: numbers the harness imposes (spec 31, 27.2). */
+export interface LimitsFile {
+  /**
+   * `tool-timeout 60`: how many seconds the harness waits for one tool call, MCP calls
+   * included. Calls into Parrot return before it, less a margin.
+   */
+  "tool-timeout"?: number[]
 }
 
 export interface Link {
@@ -1357,6 +1477,21 @@ export interface SessionBindingResult {
   binding: Binding
 }
 
+export interface SessionBundleParams {
+  session: string
+  /** A turn id; the latest when left out. */
+  at?: string | null
+  /** `none` or `source`; `source` asks the source to summarize itself and needs `delegate`. */
+  summary?: string | null
+}
+
+export interface SessionBundleResult {
+  /** The `ContextBundle` (23.2). */
+  bundle: unknown
+  /** The bundle as Markdown (Appendix D). */
+  rendered: string
+}
+
 export interface SessionCancelParams {
   session: string
   tree?: boolean | null
@@ -1371,6 +1506,17 @@ export interface SessionCancelResult {
 export interface SessionCommitParams {
   session: string
   key: string
+}
+
+/** `session/configure` (Appendix E8): `delegate` on a subtree, `manage` on a root. */
+export interface SessionConfigureParams {
+  session: string
+  /** A `Ceiling` (22). */
+  ceiling?: unknown
+  budget?: Budget | null
+  /** A `Wake` (20). */
+  wake?: unknown
+  onParentEnd?: OnParentEnd | null
 }
 
 export interface SessionDiscoverParams {
@@ -1410,7 +1556,8 @@ export interface SessionListResult {
 export interface SessionNewParams {
   agent: string
   env?: string | null
-  workspace: WorkspaceRequest
+  /** Required, unless a `seed` that carries the workspace gives one (23.1). */
+  workspace?: WorkspaceRequest | null
   cwd?: string | null
   options?: Record<string, unknown> | null
   title?: string | null
@@ -1656,8 +1803,61 @@ export type Target =
       index: boolean
     }
 
+export interface TaskAssignParams {
+  session: string
+  task: TaskRequest
+  key?: string | null
+}
+
+/** The result of `task/assign`: the session's new `Task`. */
+export interface TaskAssignResult {
+  task: unknown
+}
+
+export interface TaskChange {
+  session: string
+  /** The session's `Task` as it is now. */
+  task: unknown
+}
+
+export interface TaskFailParams {
+  session: string
+  error: string
+}
+
+export interface TaskFinishParams {
+  session: string
+  /** Structured when the task has a `result` schema, else `{ text }`. */
+  output: unknown
+}
+
+/** `TaskRequest` (19). */
+export interface TaskRequest {
+  /** The child's first prompt. */
+  brief: string
+  title?: string | null
+  /** A JSON Schema the output must match. */
+  result?: unknown
+  /** `finish` or `idle`. */
+  completeOn?: string | null
+}
+
 /** A task's status as summaries carry it. `interrupted` comes from Appendix E7. */
 export type TaskStatus = "running" | "awaiting" | "completed" | "failed" | "cancelled" | "interrupted"
+
+export interface TaskWaitParams {
+  sessions: string[]
+  /** A cursor from an earlier call; the first call leaves it out. */
+  since?: string | null
+  /** Seconds, capped by the harness's tool-call timeout (20.1). */
+  timeout?: number | null
+}
+
+export interface TaskWaitResult {
+  changes: TaskChange[]
+  cursor: string
+  timedOut: boolean
+}
 
 /** An `assistant` item; `text` is Markdown. */
 export interface TextItem {
@@ -1670,6 +1870,42 @@ export interface TextItem {
   origin?: Origin | null
   _meta?: Record<string, unknown> | null
   text: string
+}
+
+/** A client token for WebSocket connections (spec 3.4, Appendix E8). */
+export interface Token {
+  id: string
+  name: string
+  scopes: Scope[]
+  /** Limits the token to these sessions' subtrees. */
+  sessions?: string[] | null
+  /** Patterns of the functions the token may provide. */
+  provides?: string[] | null
+  expires?: string | null
+  created: string
+  lastUsed?: string | null
+}
+
+export interface TokenCreateParams {
+  name: string
+  scopes: Scope[]
+  sessions?: string[] | null
+  provides?: string[] | null
+  expires?: string | null
+}
+
+export interface TokenCreateResult {
+  token: Token
+  /** Shown once. */
+  secret: string
+}
+
+export interface TokenListResult {
+  tokens: Token[]
+}
+
+export interface TokenRevokeParams {
+  token: string
 }
 
 /** `input` excludes cache reads. */
@@ -1809,6 +2045,10 @@ export type Update =
       type: "deleted"
       kind: DeletedKind
       id: string
+    }
+  | {
+      type: "functions"
+      pinned: string[]
     }
 
 /** Params of the `update` notification. */
@@ -2007,6 +2247,11 @@ export interface Methods {
   "blob/put": { params: BlobPutParams; result: Empty }
   "carrier/list": { params: CarrierListParams; result: CarrierListResult }
   "env/list": { params: Empty; result: EnvListResult }
+  "function/call": { params: FunctionCallParams; result: FunctionResult }
+  "function/describe": { params: FunctionDescribeParams; result: FunctionDescribeResult }
+  "function/list": { params: FunctionListParams; result: FunctionListResult }
+  "function/provide": { params: FunctionProvideParams; result: Empty }
+  "function/search": { params: FunctionSearchParams; result: FunctionListResult }
   "history/discover": { params: SessionDiscoverParams; result: HistoryDiscoverResult }
   "history/read": { params: HistoryReadParams; result: HistoryReadResult }
   initialize: { params: InitializeParams; result: InitializeResult }
@@ -2028,16 +2273,21 @@ export interface Methods {
   "queue/resume": { params: QueueSessionParams; result: Empty }
   "request/answer": { params: RequestAnswerParams; result: Empty }
   "request/list": { params: RequestListParams; result: RequestListResult }
+  "session/adopt": { params: SessionAdoptParams; result: SessionNewResult }
   "session/archive": { params: SessionArchiveParams; result: Empty }
+  "session/bundle": { params: SessionBundleParams; result: SessionBundleResult }
   "session/cancel": { params: SessionCancelParams; result: SessionCancelResult }
   "session/commit": { params: SessionCommitParams; result: SessionOfferResult }
+  "session/configure": { params: SessionConfigureParams; result: Empty }
   "session/delete": { params: SessionRef; result: Empty }
+  "session/discover": { params: SessionDiscoverParams; result: SessionDiscoverResult }
   "session/get": { params: SessionRef; result: SessionGetResult }
   "session/keys": { params: SessionRef; result: Empty }
   "session/list": { params: SessionListParams; result: SessionListResult }
   "session/new": { params: SessionNewParams; result: SessionNewResult }
   "session/offer": { params: SessionOfferParams; result: SessionOfferResult }
   "session/prompt": { params: SessionPromptParams; result: SessionPromptResult }
+  "session/read": { params: SessionReadParams; result: SessionReadResult }
   "session/rebind": { params: SessionRebindParams; result: SessionBindingResult }
   "session/rename": { params: SessionRenameParams; result: Empty }
   "session/rewind": { params: SessionRewindParams; result: Empty }
@@ -2046,6 +2296,13 @@ export interface Methods {
   "session/stop": { params: SessionStopParams; result: Empty }
   "session/tree": { params: SessionTreeParams; result: SessionTreeResult }
   subscribe: { params: SubscribeParams; result: SubscribeResult }
+  "task/assign": { params: TaskAssignParams; result: TaskAssignResult }
+  "task/fail": { params: TaskFailParams; result: Empty }
+  "task/finish": { params: TaskFinishParams; result: Empty }
+  "task/wait": { params: TaskWaitParams; result: TaskWaitResult }
+  "token/create": { params: TokenCreateParams; result: TokenCreateResult }
+  "token/list": { params: Empty; result: TokenListResult }
+  "token/revoke": { params: TokenRevokeParams; result: Empty }
   unsubscribe: { params: UnsubscribeParams; result: Empty }
   "workspace/create": { params: WorkspaceCreateParams; result: WorkspaceResult }
   "workspace/list": { params: WorkspaceListParams; result: WorkspaceListResult }
@@ -2054,6 +2311,11 @@ export interface Methods {
   "workspace/remove": { params: WorkspaceRemoveParams; result: Empty }
   "workspace/status": { params: WorkspaceStatusParams; result: WorkspaceStatusResult }
   "workspace/transfer": { params: WorkspaceTransferParams; result: WorkspaceResult }
+}
+
+/** The requests a runtime sends to a client: calls of the functions it provides (spec 25.2). */
+export interface ClientMethods {
+  "function/call": { params: FunctionCallParams; result: FunctionResult }
 }
 
 /** The notifications a peer sends (spec 36). */

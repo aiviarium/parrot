@@ -405,6 +405,74 @@ async fn a_claude_session_hands_off_to_codex_with_a_bundle() {
 }
 
 #[tokio::test]
+async fn session_rebind_hands_a_claude_session_to_codex_and_keeps_its_id() {
+    let serve = Serve::start("Second answer.");
+    let mut c = Client::connect(&serve).await;
+    let work = serve.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let s = id_of(
+        &c.ok(
+            "session/new",
+            json!({ "agent": "claude", "workspace": { "kind": "dir", "path": work.to_str().unwrap() } }),
+        )
+        .await,
+    );
+    let first = c
+        .until(&s, "the Claude binding to run", |s| s["state"] == "idle")
+        .await;
+    let old = first["binding"]["id"].as_str().unwrap().to_string();
+    c.turn(&s, "say hello").await;
+
+    let from = c.seen.len();
+    c.ok("session/rebind", json!({ "session": s, "agent": "codex" }))
+        .await;
+    let handoff = c
+        .wait_update(from, &s, "the handoff item", |u| {
+            u["type"] == "item" && u["item"]["kind"] == "handoff"
+        })
+        .await;
+    assert_eq!(handoff["item"]["set"]["status"], "ok", "{handoff}");
+    assert_eq!(handoff["item"]["set"]["from"], old.as_str(), "{handoff}");
+    let after = c
+        .until(&s, "the Codex binding to run", |s| {
+            s["binding"]["agent"] == "codex" && s["binding"]["status"] == "running"
+        })
+        .await;
+    assert_eq!(after["id"], s.as_str(), "the session keeps its id");
+    assert_eq!(after["binding"]["via"], "bundle", "{after}");
+    assert_eq!(after["binding"]["pending"], "bundle", "{after}");
+    assert_eq!(after["bindings"].as_array().unwrap().len(), 2, "{after}");
+    let old_binding = c.until(&s, "the Claude binding to stop", |_| true).await;
+    assert_ne!(old_binding["binding"]["id"], old.as_str());
+
+    // The next prompt reaches Codex behind the bundle of the Claude history.
+    c.turn(&s, "Carry on.").await;
+    let deadline = Instant::now() + WAIT;
+    let sent = loop {
+        let log = serve.read("codex-in.jsonl");
+        if let Some(start) = log
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|m| m["method"] == "turn/start")
+        {
+            break start["params"]["input"][0]["text"].as_str().unwrap().to_string();
+        }
+        assert!(Instant::now() < deadline, "Codex got no turn: {log}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(sent.starts_with("# Continuing an earlier session"), "{sent}");
+    assert!(
+        sent.contains("say hello") && sent.contains("Hello there."),
+        "{sent}"
+    );
+    assert!(sent.trim_end().ends_with("Carry on."), "{sent}");
+    let done = c
+        .until(&s, "the pending bundle to be used", |s| s["state"] == "idle")
+        .await;
+    assert!(done["binding"].get("pending").is_none(), "{done}");
+}
+
+#[tokio::test]
 async fn a_rewind_restores_files_from_a_checkpoint() {
     let serve = Serve::start("Second answer.");
     let mut c = Client::connect(&serve).await;

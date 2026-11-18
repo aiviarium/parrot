@@ -180,7 +180,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent(&self.config.data)],
+                agents: vec![probed(&self.config).await],
                 hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
@@ -451,18 +451,85 @@ impl Driver {
         }
     }
 
+    /// The ACP handshake: version 2 first, version 1 for an agent that refuses it. Returns the
+    /// agent's answer and the version it will speak.
+    async fn initialize(&self, b: &Arc<Binding>) -> Result<(wire::InitializeResult, u32), RpcError> {
+        let asked = wire::PROTOCOL_VERSION;
+        let first = b
+            .request(
+                "initialize",
+                wire::initialize_params(asked),
+                Some(REQUEST_TIMEOUT),
+            )
+            .await;
+        let value = match first {
+            Ok(value) => value,
+            Err(e) if asked > wire::PROTOCOL_V1 && e.to_ascii_lowercase().contains("version") => b
+                .request(
+                    "initialize",
+                    wire::initialize_params(wire::PROTOCOL_V1),
+                    Some(REQUEST_TIMEOUT),
+                )
+                .await
+                .map_err(|e| RpcError::new(-32020, format!("the agent did not initialize: {e}")))?,
+            Err(e) => {
+                return Err(RpcError::new(
+                    -32020,
+                    format!("the agent did not initialize: {e}"),
+                ));
+            }
+        };
+        let init: wire::InitializeResult = serde_json::from_value(value).unwrap_or_default();
+        let version = init.version();
+        Ok((init, version))
+    }
+
+    /// Starts the agent once for its version, for `agent/list`. The handshake is the only place
+    /// an ACP agent reports a version (spec 6).
+    async fn probe_harness(&self) -> Option<String> {
+        let argv = self.command(&Map::new());
+        let (program, args) = argv.split_first()?;
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args)
+            .envs(self.config.env.iter().cloned())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().ok()?;
+        let mut stdin = child.stdin.take()?;
+        let stdout = child.stdout.take()?;
+        let line = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": wire::initialize_params(wire::PROTOCOL_VERSION),
+        })
+        .to_string()
+            + "\n";
+        let probe = async {
+            stdin.write_all(line.as_bytes()).await.ok()?;
+            stdin.flush().await.ok()?;
+            let mut lines = BufReader::new(stdout).lines();
+            let answer = lines.next_line().await.ok()??;
+            let msg: Value = serde_json::from_str(&answer).ok()?;
+            let init: wire::InitializeResult = serde_json::from_value(msg.get("result")?.clone()).ok()?;
+            init.agent_version()
+        };
+        tokio::time::timeout(Duration::from_secs(5), probe)
+            .await
+            .ok()
+            .flatten()
+    }
+
     async fn open_binding(
         &self,
         b: &Arc<Binding>,
         start: &BindingStart,
     ) -> Result<(BindingStartResult, Vec<DriverUpdate>), RpcError> {
-        let init = b
-            .request("initialize", wire::initialize_params(), Some(REQUEST_TIMEOUT))
-            .await
-            .map_err(|e| RpcError::new(-32020, format!("the agent did not initialize: {e}")))?;
-        let init: wire::InitializeResult = serde_json::from_value(init).unwrap_or_default();
-        let capabilities = Capabilities::from_initialize(&init);
         let mut updates = Vec::new();
+        let (init, version) = self.initialize(b).await?;
+        let capabilities = Capabilities::from_initialize(&init);
         if !init.auth_methods.is_empty() {
             updates.push(b.notice(
                 "warning",
@@ -502,13 +569,15 @@ impl Driver {
             .await
             .map_err(|e| RpcError::new(-32020, format!("the agent did not open a session: {e}")));
         if replaying {
-            b.state.lock().unwrap().replaying = false;
+            let finished = b.state.lock().unwrap().replay_finish();
+            updates.extend(finished);
         }
         let opened = opened?;
         let result: SessionResult = serde_json::from_value(opened).unwrap_or_default();
         {
             let mut state = b.state.lock().unwrap();
             state.capabilities = capabilities.clone();
+            state.protocol = version;
             if let Some(reference) = &start.resume {
                 state.session_id = Some(reference.id.clone());
             }
@@ -827,7 +896,7 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
                 let updates = {
                     let mut state = b.state.lock().unwrap();
                     if state.replaying {
-                        Vec::new()
+                        state.replay(&update)
                     } else {
                         state.step(&update, &now())
                     }
@@ -864,11 +933,35 @@ fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUp
     }
 }
 
+/// [`agent`] with the version the agent reports in its `initialize` handshake, when it answers.
+pub async fn probed(config: &Config) -> Agent {
+    let mut a = agent(&config.data);
+    if let Some(version) = probe_version(config).await {
+        a.harness = Some(parrot_proto::agent::HarnessInfo {
+            version,
+            verified: true,
+        });
+    }
+    a
+}
+
+/// The agent's version from one `initialize` exchange, with the command from the egg or the
+/// environment.
+async fn probe_version(config: &Config) -> Option<String> {
+    let driver = Driver {
+        config: config.clone(),
+        out: mpsc::unbounded_channel().0,
+        bindings: Mutex::default(),
+    };
+    driver.probe_harness().await
+}
+
 /// The `acp` agent as `agent/list` reports it.
 pub fn agent(data: &Data) -> Agent {
     let mut features = Map::new();
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
+    features.insert("attachments".into(), json!({"kinds": ["image", "file"]}));
     features.insert("usage".into(), json!({"context": true, "cost": true}));
     let mut levels = data.mode_levels();
     if levels.is_empty() {

@@ -27,6 +27,8 @@ pub struct Seeds {
     pub summarizing: BTreeMap<String, Vec<SummaryJob>>,
     /// Finished summaries a re-run `session/new` picks up, by token.
     pub summaries: BTreeMap<String, String>,
+    /// Stopped sources started only to fork or summarize; they stop again once that is done.
+    pub woken: std::collections::BTreeSet<String>,
 }
 
 /// `summary: "source"`: a turn on the source asks its harness for a summary (spec 23.2).
@@ -98,6 +100,10 @@ pub enum AfterStart {
     Source { source: String, action: String },
     /// A rebind's new binding: stop the old one once it runs (E6).
     Rebind { session: String },
+    /// A stopped source started to fork from: `binding/fork` goes out once it runs.
+    Fork { session: String, plan: Box<SeedPlan> },
+    /// A stopped source started to summarize itself; its summary prompt is queued.
+    Summary { source: String },
 }
 
 /// Where a native fork is taken: the source's live binding and the driver's turn key.
@@ -171,26 +177,58 @@ fn has_feature(state: &State, agent: &str, feature: &str) -> bool {
         .is_some_and(|f| f.get(feature).is_some())
 }
 
-/// The live binding of `session` and the driver key of `turn` on it, for `binding/fork`.
+/// Where to fork `session` for `binding/fork`: its live binding, or an empty binding for a
+/// stopped source whose harness session can be resumed to fork from; and the driver key of
+/// `turn`, from whichever of the session's bindings ran it.
 fn fork_from(state: &State, session: &str, turn: Option<&str>) -> Option<ForkFrom> {
-    if !crate::sessions::active(state, session) {
-        return None;
-    }
-    let binding = crate::directory::binding_of(state, session)?;
+    let binding = if crate::sessions::active(state, session) {
+        crate::directory::binding_of(state, session)?
+    } else {
+        current_ref(state, session)?;
+        String::new()
+    };
     let at = match turn {
-        Some(t) => Some(
-            state
-                .bindings
-                .info
-                .get(&binding)?
-                .turns
-                .iter()
-                .find(|(_, id)| id.as_str() == t)
-                .map(|(key, _)| key.clone())?,
-        ),
+        Some(t) => {
+            let info = state.sessions.info.get(session)?;
+            Some(info.bindings.iter().rev().find_map(|b| {
+                state
+                    .bindings
+                    .info
+                    .get(b)?
+                    .turns
+                    .iter()
+                    .find(|(_, id)| id.as_str() == t)
+                    .map(|(key, _)| key.clone())
+            })?)
+        }
         None => None,
     };
     Some(ForkFrom { binding, at })
+}
+
+/// Start a stopped session's binding for the runtime's own use: resumed, with its queue left as
+/// it was. `then` runs once it is ready.
+fn wake(cx: &mut Cx, session: &str, then: AfterStart) -> bool {
+    let Some(binding) = crate::sessions::start_binding(cx, session, BindingVia::Resume) else {
+        return false;
+    };
+    cx.state.seeds.woken.insert(session.to_string());
+    cx.state.seeds.after_start.insert(binding, then);
+    true
+}
+
+/// A woken session has done what it was started for: it stops again.
+fn sleep_again(cx: &mut Cx, session: &str) {
+    let busy = cx.state.seeds.summarizing.contains_key(session)
+        || cx
+            .state
+            .seeds
+            .after_start
+            .values()
+            .any(|a| matches!(a, AfterStart::Fork { plan, .. } if plan.source == session));
+    if !busy && cx.state.seeds.woken.remove(session) {
+        crate::sessions::stop_session(cx, session);
+    }
 }
 
 fn current_ref(state: &State, session: &str) -> Option<Value> {
@@ -480,11 +518,13 @@ fn summarize(
     at: Option<String>,
     then: AfterSummary,
 ) -> Result<(), RpcError> {
-    if !crate::sessions::active(cx.state, source) {
-        return Err(
-            RpcError::new(-32004, "the source must be running to summarize itself")
-                .with_data(json!({ "state": "stopped" })),
-        );
+    let stopped = !crate::sessions::active(cx.state, source);
+    if stopped && current_ref(cx.state, source).is_none() {
+        return Err(RpcError::new(
+            -32004,
+            "a stopped source needs a harness session to resume to summarize itself",
+        )
+        .with_data(json!({ "state": "stopped" })));
     }
     let before = at.or_else(|| cx.state.seeds.turns.get(source).and_then(|t| t.last().cloned()));
     let message = crate::queue::enqueue(
@@ -508,6 +548,21 @@ fn summarize(
             id: id.cloned(),
             then,
         });
+    if stopped
+        && !cx.state.seeds.woken.contains(source)
+        && !wake(
+            cx,
+            source,
+            AfterStart::Summary {
+                source: source.to_string(),
+            },
+        )
+    {
+        cx.state.seeds.summarizing.remove(source);
+        return Err(
+            RpcError::new(-32004, "the source could not be started").with_data(json!({ "state": "stopped" }))
+        );
+    }
     crate::queue::dispatch(cx, source);
     Ok(())
 }
@@ -580,6 +635,7 @@ fn finish_summaries(cx: &mut Cx, session: &str) {
     if !waiting.is_empty() {
         cx.state.seeds.summarizing.insert(session.to_string(), waiting);
     }
+    sleep_again(cx, session);
 }
 
 /// `session/new` with `summary: "source"`: the session is made once the source has summarized.
@@ -844,6 +900,34 @@ pub fn on_started(cx: &mut Cx, session: &str, binding: &str, ok: bool) {
                 _ => {}
             }
         }
+        AfterStart::Fork { session: s, mut plan } => {
+            if !ok || !cx.state.sessions.by_id.contains_key(&s) {
+                cx.state.seeds.woken.remove(&plan.source);
+                fall_back(cx, &s, plan.bundle.clone());
+                if let Some(b) = crate::sessions::start_binding(cx, &s, BindingVia::New) {
+                    after_seed(cx, &b, &plan);
+                }
+                crate::sessions::changed(cx, &s);
+                return;
+            }
+            if let Some(from) = plan.fork.as_mut() {
+                from.binding = binding.to_string();
+            }
+            start_seeded(cx, &s, &plan);
+        }
+        AfterStart::Summary { source } => {
+            if ok {
+                crate::queue::dispatch(cx, &source);
+                return;
+            }
+            cx.state.seeds.woken.remove(&source);
+            for job in cx.state.seeds.summarizing.remove(&source).unwrap_or_default() {
+                if let Some(id) = job.id {
+                    let e = RpcError::new(-32020, "the source could not be started to summarize itself");
+                    cx.reply(&job.conn, id, Err(e));
+                }
+            }
+        }
         AfterStart::Rebind { session: s } => {
             let Some(r) = cx.state.seeds.rebinding.remove(&s) else {
                 return;
@@ -902,6 +986,19 @@ pub fn on_started(cx: &mut Cx, session: &str, binding: &str, ok: bool) {
 /// source's binding for a native fork.
 pub fn start_seeded(cx: &mut Cx, session: &str, plan: &SeedPlan) {
     match &plan.fork {
+        // The source is stopped: it is resumed to fork from, then stops again.
+        Some(from) if from.binding.is_empty() => {
+            let then = AfterStart::Fork {
+                session: session.to_string(),
+                plan: Box::new(plan.clone()),
+            };
+            if !wake(cx, &plan.source, then) {
+                fall_back(cx, session, plan.bundle.clone());
+                if let Some(b) = crate::sessions::start_binding(cx, session, BindingVia::New) {
+                    after_seed(cx, &b, plan);
+                }
+            }
+        }
         Some(from) => {
             let mut params = json!({ "binding": from.binding });
             if let Some(at) = &from.at {
@@ -1171,6 +1268,7 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
                 after_seed(cx, &b, &plan);
             }
             crate::sessions::changed(cx, &session);
+            sleep_again(cx, &plan.source);
         }
         SeedCall::ForkRewind { session, old } => {
             let reference = result.ok().and_then(|r| r.get("ref").cloned());

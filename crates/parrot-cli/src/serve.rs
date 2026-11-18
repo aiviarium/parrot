@@ -117,6 +117,13 @@ pub async fn run(
     );
     let mut notifier = parrot_serve::notify::Notifier::new(targets);
     notifier.url = config.notify_url.clone();
+    if let Some(ca) = &config.notify_ca {
+        let pem =
+            std::fs::read(dir.join(ca)).map_err(|e| format!("cannot read notifyCa {}: {e}", ca.display()))?;
+        notifier
+            .trust(&pem)
+            .map_err(|e| format!("notifyCa {}: {e}", ca.display()))?;
+    }
     let tui = config.tui.clone();
     let tokens = Arc::new(
         parrot_serve::tokens::TokenStore::with_store(

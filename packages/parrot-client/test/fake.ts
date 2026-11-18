@@ -1,6 +1,9 @@
 // A tiny runtime for the tests: it answers the handshake and the calls the client has helpers for,
 // and sends one `update` notification after `subscribe`.
 
+/** The answers the client sent to requests of this runtime, by id. */
+export const answers = new Map<unknown, unknown>()
+
 export function answer(text: string): string[] {
   let message: Record<string, unknown>
   try {
@@ -9,7 +12,21 @@ export function answer(text: string): string[] {
     return [failure(null, -32700, "parse error")]
   }
   const id = message.id ?? null
+  if (message.method === undefined) {
+    answers.set(id, message.result ?? message.error)
+    return []
+  }
   switch (message.method) {
+    case "function/provide":
+      return [
+        success(id, {}),
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 900,
+          method: "function/call",
+          params: { function: "acme.echo", input: { text: "hi" }, session: "ses_made-up" },
+        }),
+      ]
     case "initialize":
       return [
         success(id, {

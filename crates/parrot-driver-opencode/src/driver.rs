@@ -14,8 +14,9 @@ use parrot_proto::action::ActionStatus;
 use parrot_proto::agent::{Agent, AgentDriver, AgentListResult, AuthStatus, Control, DriverKind};
 use parrot_proto::driver::{
     BindingActionParams, BindingActionResult, BindingAnswerParams, BindingCancelParams, BindingCancelResult,
-    BindingDisposition, BindingOptionsParams, BindingOptionsResult, BindingPromptParams, BindingPromptResult,
-    BindingRef, BindingStart, BindingStartResult, DriverUpdate, DriverUpdateKind,
+    BindingDisposition, BindingForkParams, BindingForkResult, BindingOptionsParams, BindingOptionsResult,
+    BindingPromptParams, BindingPromptResult, BindingRef, BindingStart, BindingStartResult, DriverUpdate,
+    DriverUpdateKind, HistoryDiscoverParams, HistoryReadParams, McpInjection, Pin,
 };
 use parrot_proto::open::Open;
 use parrot_proto::option::{CompletionValue, OptionCompleteResult, PermissionLevel};
@@ -29,6 +30,7 @@ use tokio::process::{Child, ChildStdout};
 use tokio::sync::{Notify, mpsc};
 
 use crate::data::{DriverData, Sources};
+use crate::history;
 use crate::http::Client;
 use crate::mapping::MapState;
 use crate::wire::{self};
@@ -217,7 +219,7 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent(&self.config.data)],
+                agents: vec![probed(&self.config.data, &self.config.bin).await],
                 hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
@@ -395,6 +397,62 @@ impl Driver {
                 }
                 Ok(json!({}))
             }
+            "binding/fork" => {
+                let p: BindingForkParams = params(p)?;
+                let b = self.binding(&p.binding)?;
+                let (session, message) = {
+                    let state = b.state.lock().unwrap();
+                    let session = state
+                        .session_id
+                        .clone()
+                        .ok_or_else(|| RpcError::new(-32004, "the session has no opencode id yet"))?;
+                    let message = state
+                        .fork_message(p.at.as_deref())
+                        .ok_or_else(|| RpcError::new(-32004, "the session has no turn to fork at"))?;
+                    (session, message)
+                };
+                let answer = b
+                    .client
+                    .request(
+                        "POST",
+                        &format!("/api/session/{session}/fork"),
+                        Some(&json!({"messageID": message})),
+                    )
+                    .await
+                    .map_err(|e| RpcError::new(-32020, format!("opencode refused the fork: {e}")))?;
+                let id = answer
+                    .pointer("/data/id")
+                    .or_else(|| answer.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::new(-32020, "opencode named no forked session"))?
+                    .to_owned();
+                Ok(to_value(&BindingForkResult {
+                    reference: parrot_proto::session::Ref {
+                        id,
+                        strength: parrot_proto::session::RefStrength::Strong,
+                    },
+                }))
+            }
+            "history/discover" => {
+                let p: HistoryDiscoverParams = params(p)?;
+                let root = history::storage_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                Ok(to_value(&history::discover(&root, &p)))
+            }
+            "history/read" => {
+                let p: HistoryReadParams = params(p)?;
+                let root = history::storage_root().ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                if history::find(&root, &p.reference.id).is_none() {
+                    return Err(RpcError::new(
+                        -32602,
+                        format!("no stored session for {}", p.reference.id),
+                    ));
+                }
+                Ok(to_value(&history::read(
+                    &root,
+                    &p.reference.id,
+                    p.cursor.as_deref(),
+                )))
+            }
             _ => Err(RpcError::new(-32601, format!("method not found: {method}"))),
         }
     }
@@ -455,6 +513,9 @@ impl Driver {
 
     async fn start(self: &Arc<Self>, start: BindingStart) -> Result<Value, RpcError> {
         let mut state = MapState::new(start.binding.clone(), self.config.data.clone());
+        if let Some(pin) = &start.pin {
+            state.pin(pin);
+        }
         if let Some(r) = &start.resume {
             state.session_id = Some(r.id.clone());
         }
@@ -485,11 +546,11 @@ impl Driver {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
+        if let Some(config) = session_config(start.mcp.as_ref(), start.pin.as_ref()) {
+            cmd.env(CONFIG_ENV, config);
+        }
         if let Some(mcp) = &start.mcp {
             cmd.env(MCP_TOKEN_ENV, &mcp.token);
-            if let Some(config) = mcp_config(mcp) {
-                cmd.env(CONFIG_ENV, config);
-            }
         }
         let mut child = cmd
             .spawn()
@@ -671,28 +732,76 @@ async fn listen(stdout: ChildStdout) -> Result<(String, impl std::future::Future
     Ok((authority, drain))
 }
 
-/// Reads the event stream until it ends, then reports opencode as lost unless it is stopping.
+/// Reads the event stream until the binding stops, reconnecting when the server drops it. A
+/// binding stays lost only when the stream cannot be opened again.
 async fn read_events(driver: Arc<Driver>, b: Arc<Binding>, mut events: crate::http::EventStream) {
-    while let Some(value) = events.next_event().await {
-        let Some(event) = wire::event(&value) else {
-            continue;
-        };
-        let raised = event.kind == "permission.asked";
-        let updates = b.state.lock().unwrap().step(&event, &now());
-        driver.emit(updates);
-        if raised {
-            b.raised.notify_one();
+    loop {
+        while let Some(value) = events.next_event().await {
+            let Some(event) = wire::event(&value) else {
+                continue;
+            };
+            let raised = event.kind == "permission.asked";
+            let updates = {
+                let mut state = b.state.lock().unwrap();
+                let child = event
+                    .data
+                    .get("sessionID")
+                    .and_then(Value::as_str)
+                    .filter(|s| state.known_child(s))
+                    .map(str::to_owned);
+                match child {
+                    Some(child) => state.step_child(&child, &event, &now()),
+                    None => state.step(&event, &now()),
+                }
+            };
+            driver.emit(updates);
+            if raised {
+                b.raised.notify_one();
+            }
+        }
+        if b.stopping.load(Ordering::Relaxed) {
+            return;
+        }
+        match reconnect(&driver, &b).await {
+            Some(next) => events = next,
+            None => return,
         }
     }
-    if !b.stopping.load(Ordering::Relaxed) {
-        let updates = b.state.lock().unwrap().exited(&now());
-        driver.emit(updates);
-        driver.emit(vec![state_update(
-            &b.id,
-            State::Lost,
-            Some("opencode exited".into()),
-        )]);
-        driver.bindings.lock().unwrap().remove(&b.id);
+}
+
+/// Opens the event stream again, telling the binding each time it has to. `None` when the
+/// server stays away or the binding is stopping.
+async fn reconnect(driver: &Driver, b: &Binding) -> Option<crate::http::EventStream> {
+    let mut wait = Duration::from_millis(100);
+    loop {
+        if b.stopping.load(Ordering::Relaxed) {
+            return None;
+        }
+        match b.client.events().await {
+            Ok(events) => {
+                driver.emit(vec![b.state.lock().unwrap().notice_update(
+                    parrot_proto::subscribe::NoticeLevel::Info,
+                    "opencode's event stream dropped; the driver reconnected.".into(),
+                    "stream_reset",
+                )]);
+                return Some(events);
+            }
+            Err(e) => {
+                if wait >= Duration::from_secs(5) {
+                    let updates = b.state.lock().unwrap().exited(&now());
+                    driver.emit(updates);
+                    driver.emit(vec![state_update(
+                        &b.id,
+                        State::Lost,
+                        Some(format!("opencode's event stream did not come back: {e}")),
+                    )]);
+                    driver.bindings.lock().unwrap().remove(&b.id);
+                    return None;
+                }
+                tokio::time::sleep(wait).await;
+                wait *= 2;
+            }
+        }
     }
 }
 
@@ -750,10 +859,51 @@ fn compose(p: &BindingPromptParams, state: &MapState) -> (String, Vec<Value>, Ve
     (parts.join("\n\n"), files, notices)
 }
 
-/// The inline config opencode reads from `OPENCODE_CONFIG_CONTENT`, with the token left to the
-/// environment so it never appears in the config or in argv.
-fn mcp_config(mcp: &parrot_proto::driver::McpInjection) -> Option<String> {
-    let server = match (&mcp.url, &mcp.command) {
+/// The inline config opencode reads from `OPENCODE_CONFIG_CONTENT`: the permission rules a pin
+/// sets (spec 15.2), and the MCP server with the token left to the environment so it never
+/// appears in the config or in argv.
+fn session_config(mcp: Option<&McpInjection>, pin: Option<&Pin>) -> Option<String> {
+    let mut config = Map::new();
+    if let Some(permission) = pin.and_then(permission_config) {
+        config.insert("permission".into(), permission);
+    }
+    if let Some(mcp) = mcp
+        && let Some(server) = mcp_server(mcp)
+    {
+        config.insert("mcp".into(), json!({"servers": {"parrot": server}}));
+    }
+    (!config.is_empty()).then(|| Value::Object(config).to_string())
+}
+
+/// The permission rules that hold opencode to a pinned level and network. `None` leaves
+/// opencode's own default, which asks before a tool and reaches the network.
+fn permission_config(pin: &Pin) -> Option<Value> {
+    use parrot_proto::option::PermissionLevel;
+    if pin.level == PermissionLevel::Host && pin.network {
+        return None;
+    }
+    let mut rules = Map::new();
+    rules.insert("*".into(), json!("deny"));
+    for tool in ["read", "glob", "grep", "list"] {
+        rules.insert(tool.into(), json!("allow"));
+    }
+    if matches!(pin.level, PermissionLevel::Write | PermissionLevel::Host) {
+        rules.insert("edit".into(), json!("allow"));
+    }
+    if pin.level == PermissionLevel::Host {
+        for tool in ["bash", "task"] {
+            rules.insert(tool.into(), json!("allow"));
+        }
+    }
+    let network = if pin.network { "allow" } else { "deny" };
+    for tool in ["webfetch", "websearch"] {
+        rules.insert(tool.into(), json!(network));
+    }
+    Some(Value::Object(rules))
+}
+
+fn mcp_server(mcp: &McpInjection) -> Option<Value> {
+    Some(match (&mcp.url, &mcp.command) {
         (Some(url), _) => json!({
             "type": "remote",
             "url": url,
@@ -765,8 +915,7 @@ fn mcp_config(mcp: &parrot_proto::driver::McpInjection) -> Option<String> {
             "environment": {MCP_TOKEN_ENV: format!("{{env:{MCP_TOKEN_ENV}}}")},
         }),
         _ => return None,
-    };
-    Some(json!({"mcp": {"servers": {"parrot": server}}}).to_string())
+    })
 }
 
 /// A port nothing listens on now, for the server to take.
@@ -788,12 +937,30 @@ fn state_update(binding: &str, state: State, detail: Option<String>) -> DriverUp
     }
 }
 
+/// [`agent`] with the version the installed `opencode` prints, when it answers.
+pub async fn probed(data: &DriverData, bin: &std::ffi::OsStr) -> Agent {
+    let mut a = agent(data);
+    if let Some(version) = parrot_driver::probe::version(bin).await {
+        a.harness = Some(parrot_proto::agent::HarnessInfo {
+            version,
+            verified: true,
+        });
+    }
+    a
+}
+
 /// The `opencode` agent as `agent/list` reports it.
 pub fn agent(data: &DriverData) -> Agent {
     let mut features = Map::new();
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
     features.insert("session.steer".into(), json!({"when": "next_step"}));
+    features.insert("session.history".into(), json!({}));
+    features.insert("session.fork".into(), json!({"at": ["turn"]}));
+    features.insert(
+        "session.subagents".into(),
+        json!({"prompt": false, "cancel": false}),
+    );
     features.insert("attachments".into(), json!({"kinds": ["image", "file"]}));
     features.insert("functions.mcp".into(), json!({}));
     features.insert(

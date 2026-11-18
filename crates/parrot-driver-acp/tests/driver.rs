@@ -19,15 +19,25 @@ struct Client {
 
 impl Client {
     fn start(scenario: Option<&str>) -> Client {
+        Self::start_with(scenario, vec![])
+    }
+
+    fn start_with(scenario: Option<&str>, env: Vec<(String, String)>) -> Client {
         let path = scenario.map(|name| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("fixtures/scenarios")
                 .join(format!("{name}.jsonl"))
         });
         let config = Config {
-            env: vec![],
+            env: env.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
             guard: false,
-            data: data::load_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp/parrot")),
+            data: {
+                let mut data =
+                    data::load_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp/parrot"));
+                // The probe in `agent/list` starts the fake once for its version.
+                data.command = Some(vec![env!("CARGO_BIN_EXE_fake-acp").into()]);
+                data
+            },
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
@@ -90,6 +100,10 @@ impl Client {
     }
 
     async fn bind(&mut self) -> Value {
+        self.bind_with(json!({})).await
+    }
+
+    async fn bind_with(&mut self, extra: Value) -> Value {
         let init = self
             .call(
                 "initialize",
@@ -105,12 +119,12 @@ impl Client {
             command.push(json!("--scenario"));
             command.push(json!(scenario));
         }
-        self.call(
-            "binding/start",
-            json!({"session": "s1", "binding": "b1", "agent": "acp", "workspace": cwd, "cwd": cwd,
-                "options": {"command": command}, "control": "native", "deny": []}),
-        )
-        .await
+        let mut params = json!({"session": "s1", "binding": "b1", "agent": "acp", "workspace": cwd, "cwd": cwd,
+            "options": {"command": command}, "control": "native", "deny": []});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            params[k] = v;
+        }
+        self.call("binding/start", params).await
     }
 
     async fn prompt(&mut self, text: &str) {
@@ -277,6 +291,123 @@ async fn an_image_attachment_becomes_an_acp_image_block() {
     let prompt = &frame["update"]["data"]["params"]["prompt"];
     assert_eq!(prompt[0]["mimeType"], "image/png");
     assert_eq!(prompt[1]["type"], "text");
+}
+
+#[tokio::test]
+async fn a_version_two_agent_negotiates_and_the_turn_runs() {
+    let mut c = Client::start_with(
+        Some("text-turn"),
+        vec![("PARROT_FAKE_ACP_PROTOCOL".into(), "2".into())],
+    );
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["version"], "0.4.5");
+    let start = c.bind().await;
+    assert_eq!(start["level"], "read");
+    assert!(
+        start["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["id"] == "model")
+    );
+    let r = c.wait(|u| u["update"]["type"] == "ref").await;
+    assert_eq!(r["update"]["ref"]["id"], "fake-session-1");
+    c.prompt("Say hello").await;
+    let a = c.wait(|u| u["update"]["item"]["set"]["text"] == "Hello ").await;
+    assert_eq!(a["update"]["item"]["kind"], "assistant");
+    c.wait(is_state("idle")).await;
+    c.call("binding/stop", json!({"binding": "b1"})).await;
+}
+
+#[tokio::test]
+async fn a_version_one_agent_is_asked_again_with_version_one() {
+    // The fake answers neither shape when the first ask is version 2: it wants version 1.
+    let mut c = Client::start_with(
+        Some("text-turn"),
+        vec![("PARROT_FAKE_ACP_PROTOCOL".into(), "1".into())],
+    );
+    let start = c.bind().await;
+    assert_eq!(start["level"], "read");
+    c.prompt("Say hello").await;
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "Hello ").await;
+}
+
+#[tokio::test]
+async fn a_load_replays_the_stored_conversation_as_items() {
+    let mut c = Client::start_with(None, vec![("PARROT_FAKE_ACP_RESUME".into(), "0".into())]);
+    let start = c
+        .bind_with(json!({"resume": {"id": "fake-session-9", "strength": "strong"}}))
+        .await;
+    assert_eq!(start["ref"]["id"], "fake-session-9");
+    let user = c
+        .wait(|u| u["update"]["item"]["set"]["text"] == "What is in the notes?")
+        .await;
+    assert_eq!(user["update"]["item"]["kind"], "user");
+    assert_eq!(user["binding"], "b1");
+    let reply = c
+        .wait(|u| u["update"]["item"]["set"]["text"] == "Two lines.")
+        .await;
+    assert_eq!(reply["update"]["item"]["kind"], "assistant");
+    let tool = c
+        .wait(|u| u["update"]["type"] == "item" && u["update"]["item"]["id"] == "replay-tool")
+        .await;
+    // The tool's embedded resource is decoded from its base64 blob.
+    assert_eq!(tool["update"]["item"]["set"]["output"], "hello");
+    c.wait(|u| {
+        u["update"]["item"]["id"] == "replay-assistant:assistant" && u["update"]["item"]["streaming"] == false
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn embedded_resources_and_links_become_text() {
+    let mut c = Client::start(None);
+    c.bind().await;
+    c.prompt("[[resource:A note from the agent.]] [[resource-blob:aGVsbG8=]] [[resource-link:notes|file:///notes.md]]")
+        .await;
+    let note = c
+        .wait(|u| u["update"]["item"]["set"]["text"] == "A note from the agent.")
+        .await;
+    assert_eq!(note["update"]["item"]["kind"], "assistant");
+    let blob = c.wait(|u| u["update"]["item"]["set"]["text"] == "hello").await;
+    assert_eq!(blob["update"]["item"]["kind"], "assistant");
+    let link = c
+        .wait(|u| u["update"]["item"]["set"]["text"] == "notes: file:///notes.md")
+        .await;
+    assert_eq!(link["update"]["item"]["kind"], "assistant");
+}
+
+#[tokio::test]
+async fn an_attachment_becomes_a_resource_with_blob_or_text() {
+    let mut c = Client::start(None);
+    c.bind().await;
+    c.call(
+        "binding/prompt",
+        json!({
+            "binding": "b1", "message": "m1", "text": "Look", "steer": false,
+            "attachments": [
+                { "name": "notes.txt", "type": "text/plain", "data": "aGVsbG8=" },
+                { "name": "shot.png", "type": "image/png", "data": "aGVsbG8=" },
+            ],
+        }),
+    )
+    .await;
+    let frame = c
+        .wait(|u| {
+            u["update"]["type"] == "frame"
+                && u["update"]["data"]["params"]["prompt"]
+                    .as_array()
+                    .is_some_and(|p| p.iter().any(|b| b["type"] == "resource"))
+        })
+        .await;
+    let prompt = frame["update"]["data"]["params"]["prompt"].as_array().unwrap();
+    let text = prompt.iter().find(|b| b["type"] == "resource").unwrap();
+    assert_eq!(text["resource"]["text"], "hello");
+    let image = prompt
+        .iter()
+        .find(|b| b["type"] == "image")
+        .expect("the image keeps its block");
+    assert_eq!(image["mimeType"], "image/png");
 }
 
 #[tokio::test]

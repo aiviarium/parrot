@@ -38,11 +38,18 @@ impl Client {
     }
 
     async fn read(&mut self) -> Value {
-        let line = tokio::time::timeout(Duration::from_secs(20), self.lines.next_line())
-            .await
-            .expect("the driver answers in time")
-            .unwrap()
-            .expect("the driver is still running");
+        let line = match tokio::time::timeout(Duration::from_secs(20), self.lines.next_line()).await {
+            Ok(line) => line.unwrap().expect("the driver is still running"),
+            Err(_) => panic!(
+                "the driver answers in time; seen {}\n{}",
+                self.seen,
+                self.updates
+                    .iter()
+                    .map(|u| u.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        };
         serde_json::from_str(&line).unwrap()
     }
 
@@ -118,6 +125,160 @@ fn is_state(state: &'static str) -> impl Fn(&Value) -> bool {
 
 fn ended(status: &'static str) -> impl Fn(&Value) -> bool {
     move |u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] == status
+}
+
+#[tokio::test]
+async fn the_event_stream_reconnects_after_a_drop() {
+    let mut c = Client::start();
+    c.bind().await;
+    c.prompt("[[drop-stream]] [[sleep:200]] [[text:After the drop.]]")
+        .await;
+    let notice = c.wait(|u| u["update"]["type"] == "notice").await;
+    assert_eq!(notice["update"]["code"], "stream_reset");
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "After the drop.")
+        .await;
+    c.wait(ended("completed")).await;
+    c.wait(is_state("idle")).await;
+}
+
+#[tokio::test]
+async fn tool_input_streams_before_the_call() {
+    let mut c = Client::start();
+    c.bind().await;
+    c.prompt("[[tool-stream]]").await;
+    let partial = c
+        .wait(|u| {
+            u["update"]["item"]["kind"] == "tool"
+                && u["update"]["item"]["set"]["inputText"] == "{\"command\":\"ls\"}"
+        })
+        .await;
+    assert_eq!(partial["update"]["item"]["set"]["tool"], "bash");
+    assert_eq!(partial["update"]["item"]["streaming"], true);
+    let called = c
+        .wait(|u| {
+            u["update"]["item"]["set"]["input"]["command"] == "ls"
+                && u["update"]["item"]["set"]["inputText"] == Value::Null
+        })
+        .await;
+    let id = called["update"]["item"]["id"].as_str().unwrap().to_owned();
+    c.wait(|u| u["update"]["item"]["id"] == id && u["update"]["item"]["set"]["status"] == "ok")
+        .await;
+}
+
+#[tokio::test]
+async fn a_pinned_level_holds_opencode_to_it() {
+    let mut c = Client::start();
+    let start = c
+        .bind_with(json!({"pin": {"level": "read", "network": false}}))
+        .await;
+    assert_eq!(start["level"], "read");
+    assert_eq!(start["network"], false);
+    c.prompt("[[permission-config]]").await;
+    let tool = c.wait(|u| u["update"]["item"]["set"]["output"].is_string()).await;
+    let config: Value =
+        serde_json::from_str(tool["update"]["item"]["set"]["output"].as_str().unwrap()).unwrap();
+    assert_eq!(config["permission"]["*"], "deny");
+    assert_eq!(config["permission"]["read"], "allow");
+    assert_eq!(config["permission"]["webfetch"], "deny");
+    assert_eq!(config["permission"]["websearch"], "deny");
+}
+
+#[tokio::test]
+async fn a_child_session_is_a_subagent_with_its_own_updates() {
+    let mut c = Client::start();
+    c.bind().await;
+    c.prompt("[[subagent:Reviewer]]").await;
+    let agent = c.wait(|u| u["update"]["item"]["kind"] == "subagent").await;
+    assert_eq!(agent["update"]["item"]["set"]["title"], "Reviewer");
+    assert_eq!(agent["update"]["item"]["set"]["status"], "running");
+    let child = agent["update"]["item"]["set"]["key"].as_str().unwrap().to_owned();
+    let text = c
+        .wait(|u| {
+            u["subagent"] == child.as_str() && u["update"]["item"]["set"]["text"] == "The child looked."
+        })
+        .await;
+    assert_eq!(text["update"]["item"]["kind"], "assistant");
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "It is done.")
+        .await;
+}
+
+#[tokio::test]
+async fn a_fork_names_a_new_session_and_a_start_resumes_it() {
+    let mut c = Client::start();
+    c.bind().await;
+    c.prompt("[[text:First.]]").await;
+    c.wait(|u| u["update"]["item"]["set"]["text"] == "First.").await;
+    c.wait(ended("completed")).await;
+    let forked = c
+        .call("binding/fork", json!({"binding": "b1", "at": "turn-1"}))
+        .await;
+    let id = forked["ref"]["id"].as_str().unwrap().to_owned();
+    assert!(id.starts_with("ses_"), "the fork names its session: {id}");
+    assert_eq!(forked["ref"]["strength"], "strong");
+    let start = c
+        .bind_with(json!({"session": "s2", "binding": "b2", "resume": {"id": id, "strength": "strong"}}))
+        .await;
+    assert_eq!(start["ref"]["id"], id);
+    c.call("binding/stop", json!({"binding": "b2"})).await;
+}
+
+#[tokio::test]
+async fn history_reads_opencode_stored_sessions() {
+    let dir = tempfile::tempdir().expect("a scratch folder");
+    let storage = dir.path().join("opencode/storage");
+    std::fs::create_dir_all(storage.join("session/proj-1")).unwrap();
+    std::fs::create_dir_all(storage.join("project")).unwrap();
+    std::fs::create_dir_all(storage.join("message/ses-old")).unwrap();
+    std::fs::create_dir_all(storage.join("part/msg-old")).unwrap();
+    std::fs::write(
+        storage.join("project/proj-1.json"),
+        r#"{"id":"proj-1","worktree":"/work/demo"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        storage.join("session/proj-1/ses-old.json"),
+        r#"{"id":"ses-old","projectID":"proj-1","title":"Earlier notes","time":{"created":1000,"updated":2000}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        storage.join("message/ses-old/msg-old.json"),
+        r#"{"id":"msg-old","sessionID":"ses-old","role":"assistant","time":{"created":1100}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        storage.join("part/msg-old/part-old.json"),
+        r#"{"id":"part-old","messageID":"msg-old","type":"text","text":"One note."}"#,
+    )
+    .unwrap();
+    let mut c = Client::start();
+    c.call(
+        "initialize",
+        json!({"protocol": [1], "peer": {"kind": "runtime", "name": "test", "version": "0"}, "features": {}}),
+    )
+    .await;
+    unsafe { std::env::set_var("XDG_DATA_HOME", dir.path()) };
+    let found = c
+        .call(
+            "history/discover",
+            json!({"agent": "opencode", "cwd": "/work/demo"}),
+        )
+        .await;
+    let read = c
+        .call(
+            "history/read",
+            json!({"agent": "opencode", "ref": {"id": "ses-old", "strength": "strong"}}),
+        )
+        .await;
+    unsafe { std::env::remove_var("XDG_DATA_HOME") };
+    assert_eq!(found["found"][0]["ref"]["id"], "ses-old");
+    assert_eq!(found["found"][0]["title"], "Earlier notes");
+    assert!(
+        read["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["update"]["item"]["set"]["text"] == "One note.")
+    );
 }
 
 #[tokio::test]

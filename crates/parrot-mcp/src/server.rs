@@ -13,6 +13,7 @@ use crate::catalog::{self, Access, Catalog, Entry};
 use crate::rules;
 use crate::session_functions::{self, Context};
 use crate::upstream::Upstream;
+use crate::validate;
 
 /// MCP protocol versions this server speaks, newest first.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -294,6 +295,10 @@ async fn on_note(state: &State, note: Notification) {
         return;
     }
     let update = &note.params["update"];
+    // The runtime says when pinned functions are provided or removed.
+    if update["type"] == "functions" {
+        return relist(state).await;
+    }
     if update["type"] != "session" || update["session"]["id"] != state.cx.session.as_str() {
         return;
     }
@@ -305,6 +310,11 @@ async fn on_note(state: &State, note: Notification) {
         }
         access.task = session.get("task").is_some_and(|t| t.is_object());
     }
+    relist(state).await;
+}
+
+/// Rebuilds the listing and tells the harness when it changed.
+async fn relist(state: &State) {
     if refresh(state).await {
         send(
             state,
@@ -320,10 +330,18 @@ async fn tools_call(state: &State, params: Value) -> Result<Value, RpcError> {
         Some(v @ Value::Object(_)) => v.clone(),
         Some(_) => return Err(RpcError::new(-32602, "arguments must be an object")),
     };
-    let entry = state.catalog.read().await.get(name).map(|t| t.entry.clone());
-    let Some(entry) = entry else {
+    let tool = state
+        .catalog
+        .read()
+        .await
+        .get(name)
+        .map(|t| (t.entry.clone(), t.json["inputSchema"].clone()));
+    let Some((entry, schema)) = tool else {
         return Err(RpcError::new(-32602, format!("unknown tool: {name}")));
     };
+    if let Err(problem) = validate::check(&schema, &args) {
+        return Ok(rules::invalid_input(problem));
+    }
     Ok(match entry {
         Entry::Session(sf) => session_functions::call(sf, &state.cx, args).await,
         Entry::Pinned { function, env } => {
@@ -342,6 +360,22 @@ async fn tools_call(state: &State, params: Value) -> Result<Value, RpcError> {
             };
             let mut input = args.get("input").cloned().unwrap_or(json!({}));
             let key = args["key"].as_str().map(str::to_string);
+            // A function this server lists is checked here too; others are checked by the runtime.
+            let listed = match session_functions::find(function) {
+                Some(sf) => Some(sf.input_schema()),
+                None => state
+                    .catalog
+                    .read()
+                    .await
+                    .get(&catalog::mcp_name(function))
+                    .filter(|t| matches!(t.entry, Entry::Pinned { .. }))
+                    .map(|t| t.json["inputSchema"].clone()),
+            };
+            if let Some(schema) = listed
+                && let Err(problem) = validate::check(&schema, &input)
+            {
+                return Ok(rules::invalid_input(problem));
+            }
             if let Some(sf) = session_functions::find(function) {
                 let available = sf.available(&*state.access.read().await);
                 if !available {

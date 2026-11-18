@@ -12,6 +12,30 @@ use crate::{Cx, actions, bindings, items, options, queue, requests, sessions, us
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
+/// Every kind of projection the core persists, for a backend to read back before
+/// `Input::Restore`. A kind missing here is lost at a restart.
+pub const KINDS: &[&str] = &[
+    "agent",
+    "workspace",
+    "session",
+    "binding",
+    "item",
+    "tree",
+    "seed",
+    "options",
+    "actions",
+    "usage",
+    "queue",
+    "request",
+    "approval",
+    "inflight",
+    "failed",
+    "turn",
+    "moved",
+    "outbox",
+    "arrived",
+];
+
 /// Apply what the store held. Meant as the first input of a runtime.
 pub fn restore(cx: &mut Cx, r: Restore) {
     cx.state.seq = cx.state.seq.max(r.head);
@@ -53,19 +77,28 @@ pub fn restore(cx: &mut Cx, r: Restore) {
             stopped.push(id);
         }
     }
-    let mut stored_items: Vec<(u64, String, Map<String, Value>)> = take("item")
-        .into_iter()
-        .filter_map(|(_, v)| {
-            let session = v.get("session")?.as_str()?.to_string();
-            let created = v.get("created").and_then(Value::as_u64).unwrap_or(0);
-            let item = v.get("item")?.as_object()?.clone();
-            Some((created, session, item))
-        })
-        .collect();
+    let mut stored_items: Vec<(u64, String, Map<String, Value>)> = Vec::new();
+    // The `seq` each stored item was written at; later patches are replayed from the log.
+    let mut written: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for (_, v) in take("item") {
+        let (Some(session), Some(item)) = (
+            v.get("session").and_then(Value::as_str),
+            v.get("item").and_then(Value::as_object),
+        ) else {
+            continue;
+        };
+        let created = v.get("created").and_then(Value::as_u64).unwrap_or(0);
+        let at = v.get("at").and_then(Value::as_u64).unwrap_or(u64::MAX);
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            written.insert((session.to_string(), id.to_string()), at);
+        }
+        stored_items.push((created, session.to_string(), item.clone()));
+    }
     stored_items.sort_by_key(|(created, _, _)| *created);
     for (created, session, item) in stored_items {
         items::restore(cx.state, &session, item, created);
     }
+    replay_streams(cx.state, &written);
     for (id, value) in take("tree") {
         crate::tree::restore(cx.state, &id, &value);
     }
@@ -90,6 +123,15 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     }
     for (id, value) in take("request") {
         requests::restore(cx, &id, &value);
+    }
+    for (session, value) in take("failed") {
+        actions::restore_failed(cx.state, &session, &value);
+    }
+    for (id, value) in take("approval") {
+        crate::functions::restore_approval(cx, &id, &value);
+    }
+    for (id, value) in take("turn") {
+        interrupted(cx, &id, &value);
     }
     for (message, value) in take("inflight") {
         uncertain(cx, &message, &value);
@@ -157,5 +199,45 @@ fn uncertain(cx: &mut Cx, message: &str, value: &Value) {
             Some(session.to_string()),
             json!({ "type": "item", "item": { "id": message, "set": { "status": "uncertain" } } }),
         );
+    }
+}
+
+/// A turn that was running when the runtime stopped. Its harness is gone, so it ends as
+/// `interrupted` and can be continued (Appendix E7).
+fn interrupted(cx: &mut Cx, id: &str, value: &Value) {
+    cx.persist(json!({ "op": "delete", "kind": "turn", "id": id }));
+    let Some(session) = value.get("session").and_then(Value::as_str) else {
+        return;
+    };
+    if !cx.state.sessions.by_id.contains_key(session) {
+        return;
+    }
+    let mut turn = value.get("turn").cloned().unwrap_or_else(|| json!({ "id": id }));
+    turn["status"] = json!("interrupted");
+    turn["stop"] = json!("cancelled");
+    turn["continuable"] = json!(true);
+    turn["ended"] = json!(sessions::timestamp(cx.now_ms));
+    cx.publish(Some(session.to_string()), json!({ "type": "turn", "turn": turn }));
+}
+
+/// Patches of streams that were still open at the restart: the projection was last written
+/// before them, so they come from the log (spec 35). An item never written is rebuilt from its
+/// patches; patches of an item whose first patch is older than the log are dropped.
+fn replay_streams(state: &mut crate::State, written: &BTreeMap<(String, String), u64>) {
+    let late: Vec<(String, Value, u64)> = state
+        .subscriptions
+        .recent
+        .iter()
+        .filter(|l| l.update.get("type").and_then(Value::as_str) == Some("item"))
+        .filter_map(|l| {
+            let session = l.session.clone()?;
+            let patch = l.update.get("item")?.clone();
+            let id = patch.get("id")?.as_str()?.to_string();
+            let newer = written.get(&(session.clone(), id)).is_none_or(|at| l.seq > *at);
+            newer.then_some((session, patch, l.seq))
+        })
+        .collect();
+    for (session, patch, seq) in late {
+        items::apply(state, &session, &patch, seq);
     }
 }

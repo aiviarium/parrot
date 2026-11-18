@@ -332,3 +332,25 @@ fn patterns_match_partially() {
     assert_eq!(steps.len(), 1);
     assert!(parse_scenario("{\"dance\":1}").is_err());
 }
+
+#[test]
+fn a_permission_mode_change_mid_turn_is_answered() {
+    let mut fake = Fake::start("text-turn.jsonl");
+    fake.initialize();
+    fake.send(ClaudeInMsg::ControlRequest(ControlRequest::new(
+        "mode-1",
+        ControlRequestBody::SetPermissionMode {
+            mode: Open::Known(PermissionMode::AcceptEdits),
+            extra: Extra::new(),
+        },
+    )));
+    let Open::Known(ClaudeOutMsg::ControlResponse(r)) = fake.recv() else {
+        panic!("no answer to set_permission_mode")
+    };
+    assert_eq!(r.request_id(), Some("mode-1"));
+    // The scenario goes on as before.
+    fake.send(ClaudeInMsg::User(User::prompt("Say hello")));
+    let msgs = fake.until(is_result);
+    assert_eq!(streamed_text(&msgs), "Hello there.");
+    assert_eq!(fake.finish(), 0);
+}

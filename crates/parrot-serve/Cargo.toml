@@ -37,3 +37,5 @@ rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# A local HTTPS server for the push test; ureq already brings this rustls with ring.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

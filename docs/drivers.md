@@ -55,6 +55,30 @@ starts its CLI so that the CLI stops when the driver stops: a Rust driver can ca
 On Windows a bare command name may resolve to the `.ps1` shim a package manager installed. Parrot
 runs such a script through `pwsh` or Windows PowerShell, because the OS cannot start it directly.
 
+## CLI versions
+
+The egg's `cli "name" versions="…"` says which CLI versions its data covers. When a driver reports
+a version, the runtime compares it with that range and marks the agent unverified when it falls
+outside.
+
+A driver reads the version where the CLI reports one:
+
+| Agent | Where the version comes from |
+| --- | --- |
+| ACP | `agentInfo.version` or `info.version` in the `initialize` answer |
+| T3 | `serverInfo.version` in the MCP `initialize` answer |
+| pi | the first version `pi --version` prints |
+| opencode | the first version `opencode --version` prints |
+
+The ranges in `eggs/` state the release line the data was checked against, such as
+`>=0.73.0, <0.74.0` for pi. A newer CLI runs with the newest data and unverified.
+
+## Prompts and attachments
+
+The prompt holds text, context entries and attachments. The driver sends the parts its CLI takes,
+and for each part it drops it sends a `notice` update with the code `attachment_unsupported` and
+text that says which attachment and why.
+
 ## The egg
 
 A package folder contains the manifest and a `parrot` folder:
@@ -130,7 +154,7 @@ mcp "mcp-config"
 
 Either shows up under the egg's own id, such as `gemini`.
 
-The TUI core reads items from the agent CLI's own transcript when `transcript` names one:
+The TUI core reads items from the CLI's own transcript when `transcript` names one:
 
 | Node | The TUI core |
 | --- | --- |
