@@ -88,6 +88,8 @@ pub struct MapState {
     pub turn: Option<TurnState>,
     pub turns: u64,
     pub session_id: Option<String>,
+    /// The ACP version negotiated in `initialize`: 2, or 1 for an agent that answered 1.
+    pub protocol: u32,
     pub mode: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -109,8 +111,12 @@ pub struct MapState {
     tool_titles: HashMap<String, String>,
     /// The agent's `sessionId` from a permission request that came first.
     session_hint: Option<String>,
-    /// While `session/load` replays history: its updates are in the log already.
+    /// While `session/load` replays history: its updates become items, not turns.
     pub replaying: bool,
+    /// The item each replay chunk streams into, by `user`, `assistant` or `reasoning`.
+    replay_current: HashMap<&'static str, String>,
+    /// The text replayed so far, by item id.
+    replay_text: HashMap<String, String>,
     unnamed: u64,
     data: Data,
 }
@@ -381,14 +387,19 @@ impl MapState {
         }
         if self.capabilities.embedded_context {
             if let Some(data) = &attachment.data {
-                blocks.push(json!({
-                    "type": "resource",
-                    "resource": {
-                        "uri": attachment.uri.clone().unwrap_or_else(|| format!("file:///{}", attachment.name)),
-                        "text": decode_base64(data),
-                        "mimeType": attachment.media_type,
-                    },
-                }));
+                // Text goes in as text; bytes go in as the base64 blob the agent expects.
+                let textual = attachment.media_type.starts_with("text/")
+                    || attachment.media_type == "application/json";
+                let mut resource = json!({
+                    "uri": attachment.uri.clone().unwrap_or_else(|| format!("file:///{}", attachment.name)),
+                    "mimeType": attachment.media_type,
+                });
+                if textual {
+                    resource["text"] = json!(wire::decode_base64(data));
+                } else {
+                    resource["blob"] = json!(data);
+                }
+                blocks.push(json!({ "type": "resource", "resource": resource }));
                 return;
             }
             if let Some(uri) = &attachment.uri {
@@ -469,11 +480,116 @@ impl MapState {
         format!("{prefix}-{}", self.unnamed)
     }
 
+    /// One `session/update` the agent sends while `session/load` replays history: the stored
+    /// conversation as items, with no turn (E4). Chunked text accumulates under the item id the
+    /// agent gave the message.
+    pub fn replay(&mut self, update: &SessionUpdate) -> Vec<DriverUpdate> {
+        let Open::Known(update) = update else {
+            return vec![];
+        };
+        match update {
+            SessionUpdateBody::UserMessageChunk(chunk) => {
+                self.replay_chunk("user", ItemKind::User, chunk)
+            }
+            SessionUpdateBody::AgentMessageChunk(chunk) => {
+                self.replay_chunk("assistant", ItemKind::Assistant, chunk)
+            }
+            SessionUpdateBody::AgentThoughtChunk(chunk) => {
+                self.replay_chunk("reasoning", ItemKind::Reasoning, chunk)
+            }
+            SessionUpdateBody::ToolCall(call) => self.tool_call(call),
+            SessionUpdateBody::ToolCallUpdate(call) => self.tool_call_update(call),
+            SessionUpdateBody::Plan(plan) => {
+                let entries: Vec<Value> = plan
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        json!({
+                            "text": e.content,
+                            "status": plan_status(e.status.as_deref()),
+                        })
+                    })
+                    .collect();
+                let text = plan
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        let mark = if plan_status(e.status.as_deref()) == "done" {
+                            "x"
+                        } else {
+                            " "
+                        };
+                        format!("- [{mark}] {}", e.content)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let mut set = Map::new();
+                set.insert("entries".into(), Value::Array(entries));
+                set.insert("text".into(), json!(text));
+                vec![self.item(parrot_proto::item::ItemPatch {
+                    id: "acp-history-plan".into(),
+                    kind: Some(Open::Known(ItemKind::Plan)),
+                    set: Some(set),
+                    ..Default::default()
+                })]
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Ends a `session/load` replay: the item each message was streaming into is finished.
+    pub fn replay_finish(&mut self) -> Vec<DriverUpdate> {
+        let mut out = Vec::new();
+        for id in self.replay_text.keys().cloned().collect::<Vec<_>>() {
+            out.push(self.item(parrot_proto::item::ItemPatch {
+                id,
+                streaming: Some(false),
+                ..Default::default()
+            }));
+        }
+        self.replay_text.clear();
+        self.replay_current.clear();
+        self.replaying = false;
+        out
+    }
+
+    fn replay_chunk(
+        &mut self,
+        kind: &'static str,
+        item_kind: ItemKind,
+        chunk: &ContentChunk,
+    ) -> Vec<DriverUpdate> {
+        let Some(text) = wire::block_text(&chunk.content) else {
+            return vec![];
+        };
+        let id = match &chunk.message_id {
+            Some(message) => format!("{message}:{kind}"),
+            None => {
+                if let Some(id) = self.replay_current.get(kind) {
+                    id.clone()
+                } else {
+                    self.unnamed += 1;
+                    let id = format!("acp-history-{kind}-{}", self.unnamed);
+                    self.replay_current.insert(kind, id.clone());
+                    id
+                }
+            }
+        };
+        self.replay_current.insert(kind, id.clone());
+        let stored = self.replay_text.entry(id.clone()).or_default();
+        stored.push_str(&text);
+        let text = stored.clone();
+        vec![self.item(parrot_proto::item::ItemPatch {
+            id,
+            kind: Some(Open::Known(item_kind)),
+            set: Some(map_of("text", json!(text))),
+            streaming: Some(true),
+            ..Default::default()
+        })]
+    }
+
     /// One `session/update` notification.
     pub fn step(&mut self, update: &SessionUpdate, now: &str) -> Vec<DriverUpdate> {
-        if self.replaying {
-            return vec![];
-        }
         let Open::Known(update) = update else {
             return vec![];
         };
@@ -624,7 +740,7 @@ impl MapState {
         };
         if self.current.get(kind) == Some(&id) {
             let mut append = BTreeMap::new();
-            append.insert("text".to_owned(), text.to_owned());
+            append.insert("text".to_owned(), text);
             return vec![self.item(parrot_proto::item::ItemPatch {
                 id,
                 append: Some(append),
@@ -676,6 +792,9 @@ impl MapState {
         );
         set.insert("status".into(), json!(tool_status(call.status.as_deref())));
         set.insert("caller".into(), json!("model"));
+        if let Some(output) = output_of(call) {
+            set.insert("output".into(), json!(output));
+        }
         vec![self.item(parrot_proto::item::ItemPatch {
             id,
             kind: Some(Open::Known(ItemKind::Tool)),
@@ -957,6 +1076,12 @@ fn raw_key(raw: &Value) -> String {
     }
 }
 
+fn map_of(key: &str, value: Value) -> Map<String, Value> {
+    let mut m = Map::new();
+    m.insert(key.to_owned(), value);
+    m
+}
+
 fn select_option(
     id: &str,
     role: Option<OptionRole>,
@@ -1052,15 +1177,9 @@ fn output_of(call: &ToolCall) -> Option<String> {
     for block in call.content.iter().flatten() {
         match block.get("type").and_then(Value::as_str) {
             Some("content") => {
-                if let Some(text) = block.pointer("/content/text").and_then(Value::as_str) {
-                    parts.push(text.to_owned());
-                } else if let Some(text) = block.get("text").and_then(Value::as_str) {
-                    parts.push(text.to_owned());
-                }
-            }
-            Some("text") => {
-                if let Some(text) = block.get("text").and_then(Value::as_str) {
-                    parts.push(text.to_owned());
+                let inner = block.get("content").unwrap_or(block);
+                if let Some(text) = wire::block_text(inner) {
+                    parts.push(text);
                 }
             }
             Some("diff") => {
@@ -1068,7 +1187,11 @@ fn output_of(call: &ToolCall) -> Option<String> {
                 let text = block.get("newText").and_then(Value::as_str).unwrap_or("");
                 parts.push(format!("{path}\n{text}"));
             }
-            _ => {}
+            _ => {
+                if let Some(text) = wire::block_text(block) {
+                    parts.push(text);
+                }
+            }
         }
     }
     if parts.is_empty() {
@@ -1092,31 +1215,6 @@ fn output_of(call: &ToolCall) -> Option<String> {
         text.push_str("\n…");
     }
     Some(text)
-}
-
-/// Decodes base64 for an embedded resource; invalid input is kept as it came.
-fn decode_base64(data: &str) -> String {
-    let mut out = Vec::new();
-    let mut buffer = 0u32;
-    let mut bits = 0u32;
-    for c in data.bytes() {
-        let value = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => continue,
-        } as u32;
-        buffer = (buffer << 6) | value;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((buffer >> bits) & 0xff) as u8);
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
