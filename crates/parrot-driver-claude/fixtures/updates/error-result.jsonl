@@ -1,0 +1,17 @@
+{"binding":"b1","update":{"type":"state","state":"running","background":[]}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"running","continuable":false,"input":"m1","started":"2026-01-01T00:00:00.000Z"}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"m1","kind":"user","turn":"turn-1","set":{"text":"Say hello","status":"sent","message":"m1"}}}}
+{"binding":"b1","update":{"type":"ref","ref":{"id":"sess-fake-0001","strength":"strong"}}}
+{"binding":"b1","update":{"type":"options","options":[{"id":"model","role":"model","label":"Model","schema":{"type":"string"},"value":"claude-sonnet-5-5","applies":"now"},{"id":"permissionMode","role":"mode","label":"Permission mode","schema":{"type":"string","enum":["default","acceptEdits","plan","bypassPermissions","dontAsk"]},"value":"default","applies":"now"}],"level":"read","network":false}}
+{"binding":"b1","update":{"type":"actions","actions":[{"id":"review","name":"/review","label":"review","scope":"session","when":["idle"],"effects":["turn"],"source":"harness"},{"id":"compact","name":"/compact","label":"compact","scope":"session","when":["idle"],"effects":["turn"],"source":"harness"}]}}
+{"binding":"b1","update":{"type":"notice","level":"warning","text":"API retry 1 of 10: overloaded_error","code":"api_retry"}}
+{"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_05:final:0","kind":"assistant","turn":"turn-1","set":{"text":"API Error: 529 Overloaded"},"streaming":false}}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"failed","stop":"error","continuable":false,"input":"m1","started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","error":{"code":"success","message":"API Error: 529 Overloaded","retryable":true},"usage":{"tokens":{"input":0,"output":0},"cost":{"amount":0.0,"currency":"USD"}}}}}
+{"binding":"b1","update":{"type":"usage","usage":{"tokens":{"input":0,"output":0},"cost":{"amount":0.0,"currency":"USD"}}}}
+{"binding":"b1","update":{"type":"state","state":"idle","background":[]}}
+{"binding":"b1","update":{"type":"state","state":"running","background":[]}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-2","status":"running","continuable":false,"input":"m2","started":"2026-01-01T00:00:00.000Z"}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"m2","kind":"user","turn":"turn-2","set":{"text":"Say hello","status":"sent","message":"m2"}}}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-2","status":"completed","stop":"turn_limit","continuable":true,"input":"m2","started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","usage":{"tokens":{"input":0,"output":0},"cost":{"amount":0.0,"currency":"USD"}}}}}
+{"binding":"b1","update":{"type":"usage","usage":{"tokens":{"input":0,"output":0},"cost":{"amount":0.0,"currency":"USD"}}}}
+{"binding":"b1","update":{"type":"state","state":"idle","background":[]}}

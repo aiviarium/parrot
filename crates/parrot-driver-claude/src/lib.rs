@@ -5,10 +5,12 @@ pub mod fake;
 pub mod mapping;
 pub mod wire;
 
-/// Serves the Claude driver on standard input and output (`parrot driver claude`).
+/// Serves the Claude Code driver on stdin and stdout until stdin closes (`parrot driver claude`).
 pub async fn serve_stdio() -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "the claude driver is not served on stdio yet",
-    ))
+    driver::serve(
+        driver::Config::from_env(),
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+    )
+    .await
 }
