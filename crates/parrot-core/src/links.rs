@@ -39,6 +39,8 @@ pub struct Links {
     pub commits: BTreeMap<String, Value>,
     /// Messages for peers that are down, delivered when the link connects again (E2).
     pub outbox: BTreeMap<String, Vec<(String, Value)>>,
+    /// The stored ids of each link's outbox entries, deleted once delivered.
+    pub outbox_ids: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -495,6 +497,40 @@ pub fn connected(cx: &mut Cx, conn: &str, link: &str) {
             params,
         });
     }
+    for id in cx.state.links.outbox_ids.remove(link).unwrap_or_default() {
+        cx.persist(json!({ "op": "delete", "kind": "outbox", "id": id }));
+    }
+}
+
+/// Puts back what links persisted, after a restart (spec 34): redirects of moved sessions and
+/// undelivered outbox entries.
+pub fn restore(cx: &mut Cx, kind: &str, id: &str, value: &Value) {
+    match kind {
+        "moved" => {
+            if let Some(runtime) = value["runtime"].as_str() {
+                cx.state.links.moved.insert(id.to_string(), runtime.to_string());
+            }
+        }
+        "outbox" => {
+            let (Some(link), Some(method)) = (value["link"].as_str(), value["method"].as_str()) else {
+                return;
+            };
+            let entry = (method.to_string(), value["params"].clone());
+            cx.state
+                .links
+                .outbox
+                .entry(link.to_string())
+                .or_default()
+                .push(entry);
+            cx.state
+                .links
+                .outbox_ids
+                .entry(link.to_string())
+                .or_default()
+                .push(id.to_string());
+        }
+        _ => {}
+    }
 }
 
 /// A link connection closed.
@@ -513,10 +549,17 @@ pub fn notify_peer(cx: &mut Cx, link: &str, method: &str, mut params: Value) {
         }),
         None => {
             let entry = (method.to_string(), params);
-            cx.persist(
-                json!({ "op": "put", "kind": "outbox", "id": format!("{link}/{}", cx.now_ms),
-                "value": { "link": link, "method": entry.0, "params": entry.1 } }),
-            );
+            let n = cx.state.links.outbox.get(link).map_or(0, Vec::len);
+            // Zero-padded so stored entries list in the order they were sent.
+            let id = format!("{link}/{:016}-{n:06}", cx.now_ms);
+            cx.persist(json!({ "op": "put", "kind": "outbox", "id": id,
+                "value": { "link": link, "method": entry.0, "params": entry.1 } }));
+            cx.state
+                .links
+                .outbox_ids
+                .entry(link.to_string())
+                .or_default()
+                .push(id);
             cx.state
                 .links
                 .outbox

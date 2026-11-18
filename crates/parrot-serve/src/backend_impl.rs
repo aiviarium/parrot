@@ -236,7 +236,7 @@ impl Backend for RuntimeBackend {
         let rt = self.rt.clone();
         let how = if start["control"] == "tui" {
             match self.tui.get(&agent) {
-                Some(a) => crate::tui::driver_config(&agent, a).map(Launch::Tui),
+                Some(a) => crate::tui::driver_config(&agent, a).map(|c| Launch::Tui(Box::new(c))),
                 None => Err(format!("agent {agent} has no TUI profile")),
             }
         } else {
@@ -422,7 +422,7 @@ fn initialize_params() -> Value {
 const RESTORE_RECENT: u64 = parrot_core::subscriptions::RECENT as u64;
 
 /// Every kind of projection the core persists.
-const KINDS: [&str; 11] = [
+const KINDS: [&str; 13] = [
     "agent",
     "workspace",
     "session",
@@ -434,6 +434,8 @@ const KINDS: [&str; 11] = [
     "queue",
     "request",
     "inflight",
+    "moved",
+    "outbox",
 ];
 
 /// Reads what the core needs to continue after a restart.
@@ -474,7 +476,7 @@ fn load(store: &Store) -> parrot_store::Result<parrot_core::Restore> {
 /// How a binding's driver runs.
 enum Launch {
     Process(DriverCommand),
-    Tui(parrot_driver_tui::Config),
+    Tui(Box<parrot_driver_tui::Config>),
 }
 
 /// A running driver: a child process, or TUI control in this process.
@@ -529,7 +531,7 @@ async fn run_binding(
         Launch::Tui(config) => {
             let (tx, rx) = mpsc::unbounded_channel();
             let d = parrot_driver_tui::TuiDriver::new(
-                config,
+                *config,
                 parrot_driver::traits::DriverContext { updates: tx },
             );
             Ok((AnyDriver::Tui(d, binding.clone()), rx))

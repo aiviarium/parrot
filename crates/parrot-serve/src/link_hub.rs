@@ -38,7 +38,14 @@ pub struct LinkHub {
     addresses: Mutex<Vec<String>>,
     rt: OnceLock<Runtime>,
     live: Mutex<HashMap<String, Arc<Notify>>>,
+    /// Handshakes not yet authenticated; more than [`MAX_HANDSHAKES`] at once are refused.
+    handshakes: Arc<tokio::sync::Semaphore>,
 }
+
+/// How many inbound handshakes may run at once, so unauthenticated peers can't exhaust the runtime.
+pub const MAX_HANDSHAKES: usize = 16;
+/// How long an inbound handshake may take.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -80,6 +87,7 @@ impl LinkHub {
             addresses: Mutex::new(Vec::new()),
             rt: OnceLock::new(),
             live: Mutex::new(HashMap::new()),
+            handshakes: Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES)),
         })
     }
 
@@ -316,8 +324,14 @@ impl LinkHub {
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
+        // Over the cap the stream is dropped before any work is done for it.
+        let Ok(permit) = self.handshakes.clone().try_acquire_owned() else {
+            return;
+        };
         let listener = Listener::new(self.key.clone(), self.pins.clone(), self.invites.clone());
-        let Ok(conn) = listener.accept(stream).await else {
+        let accepted = tokio::time::timeout(HANDSHAKE_TIMEOUT, listener.accept(stream)).await;
+        drop(permit);
+        let Ok(Ok(conn)) = accepted else {
             return;
         };
         let link = match &conn.paired {
