@@ -2,6 +2,7 @@
 // Turns the committed JSON Schema into TypeScript types. Run with `--check` in CI to fail when the
 // schema moved and the types in src/schema.ts were not generated again.
 
+import { spawnSync } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -90,7 +91,8 @@ function typeOf(spec: Schema | undefined, indent: string): string {
           const value = properties[key]
           const doc = docFor((value as Record<string, unknown> | undefined)?.description, `${indent}  `)
           const optional = required.has(key) ? "" : "?"
-          return `${doc}${indent}  ${key}${optional}: ${typeOf(value, `${indent}  `)}`
+          const name = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key)
+          return `${doc}${indent}  ${name}${optional}: ${typeOf(value, `${indent}  `)}`
         })
         return `{\n${lines.join("\n")}\n${indent}}`
       }
@@ -105,6 +107,44 @@ function typeOf(spec: Schema | undefined, indent: string): string {
   }
 }
 
+function entries(key: string): [string, Record<string, Schema>][] {
+  const table = (schema[key] ?? {}) as Record<string, Record<string, Schema>>
+  return Object.keys(table)
+    .sort()
+    .map((name) => [name, table[name]] as [string, Record<string, Schema>])
+}
+
+/** The `Methods` map: each method's params and result, read from `x-methods`. */
+function methods(): string[] {
+  const lines = entries("x-methods").map(
+    ([name, method]) =>
+      `  ${JSON.stringify(name)}: { params: ${typeOf(method.params, "  ")}; result: ${typeOf(method.result, "  ")} }`,
+  )
+  if (lines.length === 0) return []
+  return [
+    "/** The methods a client calls, from spec 39 and Appendix E8. */",
+    "export interface Methods {",
+    ...lines,
+    "}",
+    "",
+  ]
+}
+
+/** The `Notifications` map: each notification's params, read from `x-notifications`. */
+function notifications(): string[] {
+  const lines = entries("x-notifications").map(
+    ([name, params]) => `  ${JSON.stringify(name)}: ${typeOf(params, "  ")}`,
+  )
+  if (lines.length === 0) return []
+  return [
+    "/** The notifications a peer sends (spec 36). */",
+    "export interface Notifications {",
+    ...lines,
+    "}",
+    "",
+  ]
+}
+
 function emit(): string {
   const out: string[] = [
     "// Generated from spec/schema/parrot.schema.json by scripts/generate.ts. Do not edit.",
@@ -117,16 +157,27 @@ function emit(): string {
     if (def === true || def === false) {
       out.push(`export type ${name} = ${typeOf(def, "")}`)
     } else if (def.type === "object" && !def.$ref && !def.anyOf && !def.oneOf) {
-      out.push(`export interface ${name} ${typeOf(def, "")}`)
+      const body = typeOf(def, "")
+      out.push(body.startsWith("{") ? `export interface ${name} ${body}` : `export type ${name} = ${body}`)
     } else {
       out.push(`export type ${name} = ${typeOf(def, "")}`)
     }
     out.push("")
   }
+  out.push(...methods())
+  out.push(...notifications())
   return `${out.join("\n").trimEnd()}\n`
 }
 
-const output = emit()
+// The repository formats TypeScript with biome; the generated file has to match it byte for byte.
+function format(text: string): string {
+  const bin = join(packageDir, "..", "..", "node_modules", ".bin", "biome")
+  const run = spawnSync(bin, ["format", "--stdin-file-path", outputPath], { input: text, encoding: "utf8" })
+  if (run.status !== 0) throw new Error(`biome format failed: ${run.stderr}`)
+  return run.stdout
+}
+
+const output = format(emit())
 if (process.argv.includes("--check")) {
   const current = readFileSync(outputPath, "utf8")
   if (current !== output) {

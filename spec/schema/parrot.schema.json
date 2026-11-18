@@ -2,6 +2,1718 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Parrot protocol, version 1",
   "$defs": {
+    "Action": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The harness's name, such as `/compact`."
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": true,
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/ActionScope"
+        },
+        "when": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionWhen"
+          }
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Effect"
+          }
+        },
+        "requires": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Requirement"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/OpenActionSource"
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "scope",
+        "when",
+        "effects",
+        "source"
+      ],
+      "additionalProperties": true
+    },
+    "ActionInvokeParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": "string"
+        },
+        "input": true,
+        "args": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Delivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "ActionInvokeResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/ActionStatus"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": true
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ActionListParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`action/list` (Appendix E8): a session's actions, or an agent's."
+    },
+    "ActionListResult": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        }
+      },
+      "required": [
+        "actions"
+      ]
+    },
+    "ActionScope": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "session"
+      ]
+    },
+    "ActionSource": {
+      "type": "string",
+      "enum": [
+        "harness",
+        "driver",
+        "skill",
+        "extension",
+        "runtime"
+      ]
+    },
+    "ActionStatus": {
+      "type": "string",
+      "enum": [
+        "done",
+        "started",
+        "queued",
+        "requested"
+      ]
+    },
+    "ActionWhen": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "running"
+      ]
+    },
+    "Agent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "env": {
+          "type": "string",
+          "description": "Absent when a driver reports it; the runtime sets it."
+        },
+        "name": {
+          "type": "string"
+        },
+        "driver": {
+          "$ref": "#/$defs/AgentDriver"
+        },
+        "harness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HarnessInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "auth": {
+          "$ref": "#/$defs/AuthStatus"
+        },
+        "usable": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "controls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Control"
+          }
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "levels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionLevel"
+          }
+        },
+        "isolation": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Isolation"
+          }
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigOption"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "driver",
+        "installed",
+        "auth",
+        "usable",
+        "controls",
+        "features",
+        "levels",
+        "isolation",
+        "options",
+        "actions"
+      ],
+      "additionalProperties": true
+    },
+    "AgentDriver": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DriverKind"
+        },
+        "data": {
+          "type": "string",
+          "description": "The driver data version."
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "kind",
+        "data"
+      ]
+    },
+    "AgentListParams": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "AgentListResult": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Agent"
+          }
+        }
+      },
+      "required": [
+        "agents"
+      ]
+    },
+    "AgentRefreshParams": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "AgentRefreshResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/Agent"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "Answer": {
+      "type": "object",
+      "properties": {
+        "choice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": true,
+        "input": true,
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Answerable": {
+      "type": "string",
+      "enum": [
+        "connection",
+        "message"
+      ],
+      "description": "Who can still answer once things go away. `process` was removed (Appendix E8)."
+    },
+    "Applies": {
+      "type": "string",
+      "enum": [
+        "start",
+        "now",
+        "next_turn"
+      ]
+    },
+    "Attachment": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "description": "A media type."
+        },
+        "data": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Base64 content."
+        },
+        "uri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "AuthStatus": {
+      "type": "string",
+      "enum": [
+        "signed_in",
+        "signed_out",
+        "unknown"
+      ]
+    },
+    "Background": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OpenBackgroundKind"
+        },
+        "title": {
+          "type": "string"
+        },
+        "item": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title"
+      ]
+    },
+    "BackgroundKind": {
+      "type": "string",
+      "enum": [
+        "task",
+        "subagent",
+        "command"
+      ]
+    },
+    "Binding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "env": {
+          "type": "string"
+        },
+        "control": {
+          "$ref": "#/$defs/Control"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isolation": {
+          "$ref": "#/$defs/Isolation"
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/BindingStatus"
+        },
+        "via": {
+          "$ref": "#/$defs/BindingVia"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BindingPending"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started": {
+          "type": "string"
+        },
+        "stopped": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "session",
+        "agent",
+        "env",
+        "control",
+        "isolation",
+        "status",
+        "via",
+        "started"
+      ],
+      "additionalProperties": true
+    },
+    "BindingActionParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": "string"
+        },
+        "input": true,
+        "args": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The user item id for turn actions (Appendix E4)."
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "BindingActionResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/ActionStatus"
+        },
+        "request": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": true
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "BindingAnswerParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "request": {
+          "type": "string",
+          "description": "The driver key of the request."
+        },
+        "answer": {
+          "$ref": "#/$defs/Answer"
+        }
+      },
+      "required": [
+        "binding",
+        "request",
+        "answer"
+      ]
+    },
+    "BindingCancelParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "subagent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "binding"
+      ]
+    },
+    "BindingCancelResult": {
+      "type": "object",
+      "properties": {
+        "interrupted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "interrupted"
+      ]
+    },
+    "BindingDisposition": {
+      "type": "string",
+      "enum": [
+        "started",
+        "steered",
+        "handled"
+      ]
+    },
+    "BindingForkParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A turn key."
+        }
+      },
+      "required": [
+        "binding"
+      ]
+    },
+    "BindingForkResult": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    },
+    "BindingKeysParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "press": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "binding"
+      ]
+    },
+    "BindingOptionsParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "binding",
+        "values"
+      ]
+    },
+    "BindingOptionsResult": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigOption"
+          }
+        },
+        "level": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "network": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "options",
+        "level",
+        "network"
+      ]
+    },
+    "BindingPending": {
+      "type": "string",
+      "enum": [
+        "bundle"
+      ]
+    },
+    "BindingPromptParams": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "subagent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "The id the user item gets."
+        },
+        "text": {
+          "type": "string"
+        },
+        "context": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ContextEntry"
+          }
+        },
+        "attachments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          }
+        },
+        "steer": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "binding",
+        "message",
+        "text",
+        "steer"
+      ]
+    },
+    "BindingPromptResult": {
+      "type": "object",
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/BindingDisposition"
+        }
+      },
+      "required": [
+        "disposition"
+      ]
+    },
+    "BindingRef": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding"
+      ],
+      "description": "Params of `binding/stop` and `binding/screen`."
+    },
+    "BindingScreenResult": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "cursor": {
+          "$ref": "#/$defs/ScreenPos"
+        },
+        "size": {
+          "$ref": "#/$defs/ScreenSize"
+        }
+      },
+      "required": [
+        "text",
+        "cursor",
+        "size"
+      ]
+    },
+    "BindingStart": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "binding": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string",
+          "description": "The workspace's path."
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "control": {
+          "$ref": "#/$defs/Control"
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Paths the harness must not reach."
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpInjection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "session",
+        "binding",
+        "agent",
+        "workspace",
+        "cwd",
+        "options",
+        "control",
+        "deny"
+      ],
+      "additionalProperties": true
+    },
+    "BindingStartResult": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isolation": {
+          "$ref": "#/$defs/Isolation"
+        },
+        "level": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "network": {
+          "type": "boolean"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigOption"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        }
+      },
+      "required": [
+        "isolation",
+        "level",
+        "network",
+        "options",
+        "actions"
+      ]
+    },
+    "BindingStatus": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "running",
+        "stopped",
+        "lost",
+        "failed"
+      ]
+    },
+    "BindingVia": {
+      "type": "string",
+      "enum": [
+        "new",
+        "resume",
+        "adopt",
+        "fork",
+        "bundle"
+      ]
+    },
+    "Budget": {
+      "type": "object",
+      "properties": {
+        "tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Input (without cache reads) plus output."
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sessions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "BudgetState": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "$ref": "#/$defs/Budget"
+        },
+        "used": {
+          "$ref": "#/$defs/Budget"
+        }
+      },
+      "required": [
+        "limit",
+        "used"
+      ]
+    },
+    "Caller": {
+      "type": "string",
+      "enum": [
+        "model",
+        "script"
+      ]
+    },
+    "Carry": {
+      "type": "string",
+      "enum": [
+        "commits",
+        "staged",
+        "unstaged",
+        "untracked"
+      ]
+    },
+    "Choice": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChoiceIntent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChoiceScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amends": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ]
+    },
+    "ChoiceData": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ChoiceFull"
+        }
+      ],
+      "description": "`choice \"<value>\" label= tags=`, or a bare `choice \"<value>\"`."
+    },
+    "ChoiceFull": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Semantic tags, separated by spaces: `plan`, `bypass`, `ask`, `read-only` and so on."
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The harness's own value, when it differs from `name`."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ChoiceIntent": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "neutral"
+      ]
+    },
+    "ChoiceScope": {
+      "type": "string",
+      "enum": [
+        "once",
+        "session",
+        "always"
+      ]
+    },
+    "CommandItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "id",
+        "command",
+        "cwd",
+        "status"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "CompactionItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "trigger": {
+          "$ref": "#/$defs/CompactionTrigger"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "trigger"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "CompactionTrigger": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "auto"
+      ]
+    },
+    "CompletionValue": {
+      "type": "object",
+      "properties": {
+        "const": true,
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "const",
+        "title"
+      ]
+    },
+    "ConfigOption": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenOptionRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": true,
+        "value": true,
+        "default": true,
+        "applies": {
+          "$ref": "#/$defs/Applies"
+        },
+        "dependsOn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DependsOn"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "complete": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "schema",
+        "value",
+        "applies"
+      ],
+      "additionalProperties": true
+    },
+    "ConnectionGrant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "sessions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "principal",
+        "scopes"
+      ],
+      "description": "The `connection` of `InitializeResult`: who the caller is and what it may do."
+    },
+    "ConnectionInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "device": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "principal"
+      ]
+    },
+    "ContextEntry": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "text"
+      ]
+    },
+    "ContextUsage": {
+      "type": "object",
+      "properties": {
+        "used": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "window": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "used",
+        "window"
+      ]
+    },
+    "Control": {
+      "type": "string",
+      "enum": [
+        "native",
+        "tui"
+      ]
+    },
+    "CorrelateFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CorrelateKind"
+          },
+          "default": []
+        }
+      },
+      "description": "`correlate.kdl`: per item kind, how items of two sources match and which source wins\n(spec 32.1)."
+    },
+    "CorrelateKind": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "match": {
+          "type": "array",
+          "items": true,
+          "description": "The keys tried in order: `ref` (the harness id), `position` (turn and order), `text`.",
+          "default": []
+        },
+        "prefer": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The source that wins while the binding runs.",
+          "default": []
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The source that wins when history is read again.",
+          "default": []
+        },
+        "compare": {
+          "type": "array",
+          "items": true,
+          "description": "Fields compared in shadow mode; all of `set` when empty.",
+          "default": []
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "`kind \"tool\" { match \"ref\" \"position\"; prefer \"native\"; history \"transcript\"; }`. `kind \"*\"`\ncovers the kinds not named."
+    },
+    "Cost": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "format": "double"
+        },
+        "currency": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ]
+    },
+    "DeletedKind": {
+      "type": "string",
+      "enum": [
+        "session",
+        "workspace"
+      ]
+    },
+    "Delivery": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "queue",
+        "steer",
+        "interrupt"
+      ]
+    },
+    "DependsOn": {
+      "type": "object",
+      "properties": {
+        "option": {
+          "type": "string"
+        },
+        "schemas": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "option",
+        "schemas"
+      ]
+    },
+    "DependsOnData": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "when": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WhenChoices"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "`depends-on \"<option>\" { when \"<value>\" { choice ... } }`; `when \"*\"` matches any other value."
+    },
     "DetailData": {
       "type": "object",
       "properties": {
@@ -14,6 +1726,637 @@
       ],
       "description": "`data` of `-32020` and `-32040`."
     },
+    "DiscoveredSession": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/Ref"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "cwd",
+        "updated"
+      ],
+      "description": "A harness session no Parrot session has."
+    },
+    "DriverKind": {
+      "type": "string",
+      "enum": [
+        "builtin",
+        "process"
+      ]
+    },
+    "DriverUpdate": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "type": "string",
+          "description": "Empty in `history/read` results."
+        },
+        "subagent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A subagent key (30.3)."
+        },
+        "update": {
+          "$ref": "#/$defs/OpenDriverUpdateKind"
+        }
+      },
+      "required": [
+        "binding",
+        "update"
+      ],
+      "additionalProperties": true,
+      "description": "Params of the driver's `update` notification."
+    },
+    "DriverUpdateKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "state"
+            },
+            "state": {
+              "$ref": "#/$defs/State"
+            },
+            "background": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Background"
+              }
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "state",
+            "background"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "item"
+            },
+            "item": {
+              "$ref": "#/$defs/ItemPatch"
+            }
+          },
+          "required": [
+            "type",
+            "item"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "turn"
+            },
+            "turn": {
+              "$ref": "#/$defs/Turn"
+            }
+          },
+          "required": [
+            "type",
+            "turn"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "request"
+            },
+            "request": {
+              "$ref": "#/$defs/Request"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "options"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ConfigOption"
+              }
+            },
+            "level": {
+              "$ref": "#/$defs/PermissionLevel"
+            },
+            "network": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "options",
+            "level",
+            "network"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "actions"
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Action"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "actions"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "usage"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            }
+          },
+          "required": [
+            "type",
+            "usage"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ref"
+            },
+            "ref": {
+              "$ref": "#/$defs/Ref"
+            }
+          },
+          "required": [
+            "type",
+            "ref"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "mcp"
+            },
+            "servers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/McpServer"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "servers"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "notice"
+            },
+            "level": {
+              "$ref": "#/$defs/NoticeLevel"
+            },
+            "text": {
+              "type": "string"
+            },
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "level",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "frame"
+            },
+            "source": {
+              "type": "string"
+            },
+            "data": true
+          },
+          "required": [
+            "type",
+            "source",
+            "data"
+          ]
+        }
+      ],
+      "description": "Ids inside are driver keys."
+    },
+    "Effect": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "turn",
+        "destructive"
+      ]
+    },
+    "Empty": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The `{}` result of methods that return nothing; unknown fields are kept."
+    },
+    "EnvListResult": {
+      "type": "object",
+      "properties": {
+        "envs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Environment"
+          }
+        }
+      },
+      "required": [
+        "envs"
+      ]
+    },
+    "EnvStatus": {
+      "type": "string",
+      "enum": [
+        "online",
+        "offline"
+      ]
+    },
+    "EnvelopeNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "default": null
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ]
+    },
+    "EnvelopeRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "id": true,
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "default": null
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ]
+    },
+    "EnvelopeResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "id": true,
+        "result": {
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "Environment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absent for the local environment."
+        },
+        "os": {
+          "$ref": "#/$defs/Os"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/EnvStatus"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "runtime",
+        "name",
+        "os",
+        "arch",
+        "status",
+        "roots",
+        "features"
+      ],
+      "additionalProperties": true
+    },
+    "ErrorItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "message": {
+          "type": "string"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "message"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "FileChange": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/FileOp"
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diff": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "op"
+      ]
+    },
+    "FileChangeItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileChange"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        }
+      },
+      "required": [
+        "id",
+        "changes",
+        "status"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "FileOp": {
+      "type": "string",
+      "enum": [
+        "add",
+        "modify",
+        "delete",
+        "move"
+      ]
+    },
     "ForbiddenData": {
       "type": "object",
       "properties": {
@@ -25,6 +2368,379 @@
         "reason"
       ],
       "description": "`data` of `-32003`."
+    },
+    "HandoffItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "via": {
+          "$ref": "#/$defs/BindingVia"
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "to",
+        "via"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "HarnessInfo": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "version",
+        "verified"
+      ]
+    },
+    "HistoryDiscoverResult": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiscoveredSession"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "found"
+      ]
+    },
+    "HistoryReadParams": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "ref": {
+          "$ref": "#/$defs/Ref"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "ref"
+      ]
+    },
+    "HistoryReadResult": {
+      "type": "object",
+      "properties": {
+        "updates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DriverUpdate"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "updates"
+      ],
+      "description": "The stored history as updates; each has `binding: \"\"` (Appendix E4)."
+    },
+    "HookItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "event": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/HookOutcome"
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "event",
+        "name",
+        "outcome"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "HookOutcome": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "blocked",
+        "error"
+      ]
+    },
+    "IndexSnapshot": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionSummary"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Agent"
+          }
+        },
+        "envs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Environment"
+          }
+        }
+      },
+      "required": [
+        "sessions",
+        "agents",
+        "envs"
+      ]
+    },
+    "InitializeParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "peer": {
+          "$ref": "#/$defs/PeerInfo"
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "provides": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": true,
+          "description": "`FunctionSpec`s this client offers (25.2)."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "protocol",
+        "peer",
+        "features"
+      ],
+      "additionalProperties": true
+    },
+    "InitializeResult": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "peer": {
+          "$ref": "#/$defs/PeerInfo"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeInfo"
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "connection": {
+          "$ref": "#/$defs/ConnectionGrant"
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "protocol",
+        "peer",
+        "runtime",
+        "features",
+        "connection"
+      ],
+      "additionalProperties": true
+    },
+    "Isolation": {
+      "type": "string",
+      "enum": [
+        "none",
+        "sandbox",
+        "user",
+        "container"
+      ]
     },
     "IsolationData": {
       "type": "object",
@@ -44,16 +2760,586 @@
       ],
       "description": "`data` of `-32051`."
     },
+    "ItemBody": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UserItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/TextItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "assistant"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ReasoningItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reasoning"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ToolItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ScriptItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "script"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/CommandItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/FileChangeItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "file_change"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/PlanItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "plan"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/SubagentItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "subagent"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/WebItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "web"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ReviewItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "review"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/CompactionItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "compaction"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/HookItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "hook"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/HandoffItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "handoff"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ErrorItem",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "ItemCommon": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "Fields every item kind has."
+    },
+    "ItemGetParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "item"
+      ]
+    },
+    "ItemGetResult": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/OpenItemBody"
+        }
+      },
+      "required": [
+        "item"
+      ]
+    },
+    "ItemKind": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant",
+        "reasoning",
+        "tool",
+        "script",
+        "command",
+        "file_change",
+        "plan",
+        "subagent",
+        "web",
+        "review",
+        "compaction",
+        "hook",
+        "handoff",
+        "error"
+      ]
+    },
+    "ItemPatch": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenItemKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required on the first patch; never changes."
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "set": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "Replace fields; `null` removes one."
+        },
+        "append": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Append to string fields, after `set`."
+        },
+        "streaming": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "removed": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Always `true` when present: the item is gone."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "ItemSource": {
+      "type": "string",
+      "enum": [
+        "native",
+        "transcript",
+        "tui",
+        "inferred",
+        "runtime"
+      ]
+    },
+    "LevelMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "network": {
+          "type": "boolean",
+          "default": false
+        },
+        "when": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "level"
+      ]
+    },
+    "LevelTools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "tool": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "LevelsFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LevelTools"
+          },
+          "description": "`level \"read\" { tool \"Read\"; tool \"mcp__*\"; }`. A tool in no level is `host`.",
+          "default": []
+        },
+        "map": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LevelMap"
+          },
+          "description": "`map level=\"write\" network=#false { when permissionMode=\"acceptEdits\"; }`, first match\nwins. Several `when` nodes are alternatives; the properties of one must all hold. A\ncombination no `map` matches is `host` with network.",
+          "default": []
+        },
+        "pin": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PinArgs"
+          },
+          "description": "Arguments that pin the harness's settings sources under a ceiling.",
+          "default": []
+        }
+      },
+      "description": "`levels.kdl`: the tools each level allows, and the level each combination of option values\ngives (spec 15.2, Appendix E4)."
+    },
+    "McpInjection": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ]
+    },
+    "McpServer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/McpStatus"
+        },
+        "tools": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ]
+    },
+    "McpStatus": {
+      "type": "string",
+      "enum": [
+        "connected",
+        "failed",
+        "pending",
+        "needs_auth"
+      ]
+    },
+    "MergeMethod": {
+      "type": "string",
+      "enum": [
+        "merge",
+        "squash"
+      ]
+    },
     "Message": {
       "anyOf": [
         {
-          "$ref": "#/$defs/Request"
+          "$ref": "#/$defs/EnvelopeRequest"
         },
         {
-          "$ref": "#/$defs/Response"
+          "$ref": "#/$defs/EnvelopeResponse"
         },
         {
-          "$ref": "#/$defs/Notification"
+          "$ref": "#/$defs/EnvelopeNotification"
         }
       ]
     },
@@ -86,58 +3372,280 @@
       ],
       "description": "`data` of `-32011`."
     },
-    "Notification": {
+    "NoticeLevel": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "Notify": {
+      "type": "string",
+      "enum": [
+        "none",
+        "normal",
+        "urgent"
+      ]
+    },
+    "OnParentEnd": {
+      "type": "string",
+      "enum": [
+        "continue",
+        "stop"
+      ]
+    },
+    "OpenActionSource": {
+      "$ref": "#/$defs/ActionSource"
+    },
+    "OpenBackgroundKind": {
+      "$ref": "#/$defs/BackgroundKind"
+    },
+    "OpenDriverUpdateKind": {
+      "$ref": "#/$defs/DriverUpdateKind"
+    },
+    "OpenItemBody": {
+      "$ref": "#/$defs/ItemBody"
+    },
+    "OpenItemKind": {
+      "$ref": "#/$defs/ItemKind"
+    },
+    "OpenOptionRole": {
+      "$ref": "#/$defs/OptionRole"
+    },
+    "OpenOriginKind": {
+      "$ref": "#/$defs/OriginKind"
+    },
+    "OpenRequestKind": {
+      "$ref": "#/$defs/RequestKind"
+    },
+    "OpenSubject": {
+      "$ref": "#/$defs/Subject"
+    },
+    "OpenTaskStatus": {
+      "$ref": "#/$defs/TaskStatus"
+    },
+    "OpenTurnStop": {
+      "$ref": "#/$defs/TurnStop"
+    },
+    "OpenUpdate": {
+      "$ref": "#/$defs/Update"
+    },
+    "OptionCompleteParams": {
       "type": "object",
       "properties": {
-        "jsonrpc": {
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
           "type": "string"
         },
-        "method": {
+        "prefix": {
           "type": "string"
         },
-        "params": {
-          "default": null
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       },
       "required": [
-        "jsonrpc",
-        "method"
+        "option",
+        "prefix"
       ]
     },
-    "Request": {
+    "OptionCompleteResult": {
       "type": "object",
       "properties": {
-        "jsonrpc": {
-          "type": "string"
-        },
-        "id": true,
-        "method": {
-          "type": "string"
-        },
-        "params": {
-          "default": null
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CompletionValue"
+          }
         }
       },
       "required": [
-        "jsonrpc",
-        "id",
-        "method"
+        "values"
       ]
     },
-    "Response": {
+    "OptionData": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "jsonrpc": {
+        "name": {
+          "type": "string",
+          "description": "The option id."
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
           "type": "string"
         },
-        "id": true,
-        "result": {
-          "default": null
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        "error": {
+        "applies": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`start`, `now` or `next-turn`; `now` when absent."
+        },
+        "default": true,
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The JSON type of a free value, such as `string`, when there are no choices."
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The harness's own name for the option, such as a config key or a flag."
+        },
+        "dynamic": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "The harness reports the choices at runtime; these are the fallback."
+        },
+        "choice": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceData"
+          },
+          "default": []
+        },
+        "depends-on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DependsOnData"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "name",
+        "label"
+      ],
+      "description": "`option \"<id>\" role= label= applies= default= { choice ...; depends-on ... }`."
+    },
+    "OptionListParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "`option/list` (Appendix E8)."
+    },
+    "OptionListResult": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigOption"
+          }
+        },
+        "level": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RpcError"
+              "$ref": "#/$defs/PermissionLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "options"
+      ]
+    },
+    "OptionRole": {
+      "type": "string",
+      "enum": [
+        "model",
+        "effort",
+        "mode",
+        "sandbox",
+        "speed"
+      ]
+    },
+    "OptionSetParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "values"
+      ]
+    },
+    "OptionSetResult": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigOption"
+          }
+        },
+        "reset": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionLevel"
             },
             {
               "type": "null"
@@ -146,9 +3654,877 @@
         }
       },
       "required": [
-        "jsonrpc",
+        "options",
+        "reset"
+      ]
+    },
+    "OptionsFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "option": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OptionData"
+          },
+          "default": []
+        }
+      },
+      "description": "`options.kdl`: options the harness doesn't report itself (spec 15.1, 31)."
+    },
+    "Origin": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/OpenOriginKind"
+        },
+        "principal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OriginCause"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The well-known action that produced the item, such as `continue`."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": true
+    },
+    "OriginCause": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "item": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "OriginKind": {
+      "type": "string",
+      "enum": [
+        "client",
+        "harness",
+        "remote",
+        "hook",
+        "session",
+        "wake",
+        "runtime"
+      ]
+    },
+    "Os": {
+      "type": "string",
+      "enum": [
+        "linux",
+        "macos",
+        "windows"
+      ]
+    },
+    "PeerInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PeerKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "version"
+      ],
+      "additionalProperties": true
+    },
+    "PeerKind": {
+      "type": "string",
+      "enum": [
+        "client",
+        "runtime",
+        "driver"
+      ]
+    },
+    "PermissionLevel": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "sandboxed",
+        "host"
+      ],
+      "description": "What an agent can do without asking anyone, lowest first."
+    },
+    "Pin": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "network": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "level",
+        "network"
+      ],
+      "description": "Hold the harness to at most this level."
+    },
+    "PinArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "arg": {
+          "type": "array",
+          "items": true,
+          "default": []
+        }
+      },
+      "description": "`pin { arg \"--setting-sources\" \"\" }`: the arguments to pass, in order."
+    },
+    "PlanEntry": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanStatus"
+        }
+      },
+      "required": [
+        "text",
+        "status"
+      ]
+    },
+    "PlanItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "entries": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PlanEntry"
+          }
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "PlanStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "done"
+      ]
+    },
+    "PromptDisposition": {
+      "type": "string",
+      "enum": [
+        "started",
+        "steered",
+        "queued",
+        "handled"
+      ]
+    },
+    "QueueEditParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "id",
+        "text"
+      ]
+    },
+    "QueueEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "kind": {
+          "$ref": "#/$defs/QueueEntryKind"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "origin",
+        "kind"
+      ],
+      "additionalProperties": true
+    },
+    "QueueEntryKind": {
+      "type": "string",
+      "enum": [
+        "prompt",
+        "action",
+        "wake"
+      ],
+      "description": "Appendix E4 adds `action`."
+    },
+    "QueueListResult": {
+      "type": "object",
+      "properties": {
+        "queue": {
+          "$ref": "#/$defs/QueueState"
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "description": "`queue/list` (Appendix E8)."
+    },
+    "QueueMoveParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "session",
+        "id",
+        "index"
+      ]
+    },
+    "QueueRemoveParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
         "id"
       ]
+    },
+    "QueueSessionParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "Params of `queue/clear`, `queue/resume` and `queue/list`."
+    },
+    "QueueState": {
+      "type": "object",
+      "properties": {
+        "paused": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueueEntry"
+          }
+        }
+      },
+      "required": [
+        "paused",
+        "entries"
+      ]
+    },
+    "RateLimit": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "used": {
+          "type": "number",
+          "format": "double"
+        },
+        "limit": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "resets": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "used"
+      ]
+    },
+    "ReadDirection": {
+      "type": "string",
+      "enum": [
+        "back",
+        "forward"
+      ]
+    },
+    "ReasoningItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "text": {
+          "type": "string"
+        },
+        "summary": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "RebindRequire": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "any"
+      ]
+    },
+    "Ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "strength": {
+          "$ref": "#/$defs/RefStrength"
+        }
+      },
+      "required": [
+        "id",
+        "strength"
+      ],
+      "description": "A harness's own reference to a session, item or request."
+    },
+    "RefStrength": {
+      "type": "string",
+      "enum": [
+        "strong",
+        "weak"
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "Omitted when a driver reports the request."
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Sessions from the root to this one; omitted by drivers."
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "item": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/OpenRequestKind"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenSubject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/PermissionLevel"
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Choice"
+          }
+        },
+        "input": true,
+        "blocking": {
+          "type": "boolean"
+        },
+        "answerable": {
+          "$ref": "#/$defs/Answerable"
+        },
+        "expires": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Answer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notify": {
+          "$ref": "#/$defs/Notify"
+        },
+        "status": {
+          "$ref": "#/$defs/RequestStatus"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Answer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "answeredBy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A principal, or `harness`, `fallback`, `ceiling`."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "level",
+        "blocking",
+        "answerable",
+        "notify",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+    "RequestAnswerParams": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "string"
+        },
+        "answer": {
+          "$ref": "#/$defs/Answer"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "request",
+        "answer"
+      ]
+    },
+    "RequestKind": {
+      "type": "string",
+      "enum": [
+        "approval",
+        "question",
+        "plan",
+        "input",
+        "auth"
+      ]
+    },
+    "RequestListParams": {
+      "type": "object",
+      "properties": {
+        "tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RequestListResult": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Request"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "requests"
+      ]
+    },
+    "RequestStatus": {
+      "type": "string",
+      "enum": [
+        "open",
+        "answered",
+        "expired",
+        "cancelled"
+      ]
+    },
+    "Requirement": {
+      "type": "string",
+      "enum": [
+        "terminal"
+      ]
+    },
+    "ReviewItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "target": true,
+        "findings": true
+      },
+      "required": [
+        "id",
+        "target"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
     },
     "RpcError": {
       "type": "object",
@@ -169,6 +4545,1898 @@
         "message"
       ]
     },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "ok",
+        "error",
+        "cancelled"
+      ],
+      "description": "The status of `script`, `subagent`, `command`, `file_change` and `web` items (Appendix E8)."
+    },
+    "RuntimeInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "env": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "env"
+      ]
+    },
+    "Scope": {
+      "type": "string",
+      "enum": [
+        "read",
+        "prompt",
+        "answer",
+        "configure",
+        "manage",
+        "delegate",
+        "workspace",
+        "destructive",
+        "functions"
+      ]
+    },
+    "ScreenPos": {
+      "type": "object",
+      "properties": {
+        "row": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "col": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "row",
+        "col"
+      ]
+    },
+    "ScreenSize": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rows",
+        "cols"
+      ]
+    },
+    "ScriptItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "language": {
+          "type": "string"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absent when the harness doesn't expose it."
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "background": {
+          "type": "boolean"
+        },
+        "result": true,
+        "error": true
+      },
+      "required": [
+        "id",
+        "language",
+        "status",
+        "background"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "Session": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string",
+          "description": "The owning runtime: where the current binding runs."
+        },
+        "movedTo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "background": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Background"
+          }
+        },
+        "binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Binding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/SessionKind"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionParent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "description": "A `Task` (19)."
+        },
+        "seed": {
+          "description": "A `Seed` (23)."
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "grant": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "ceiling": {
+          "description": "A `Ceiling` (22)."
+        },
+        "advisory": {
+          "type": "boolean"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcp": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/McpServer"
+          }
+        },
+        "created": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "runtime",
+        "workspace",
+        "cwd",
+        "state",
+        "background",
+        "bindings",
+        "kind",
+        "origin",
+        "grant",
+        "ceiling",
+        "advisory",
+        "created",
+        "updated",
+        "archived"
+      ],
+      "additionalProperties": true
+    },
+    "SessionAdoptParams": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "ref": {
+          "$ref": "#/$defs/Ref"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "ref"
+      ]
+    },
+    "SessionArchiveParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session",
+        "archived"
+      ]
+    },
+    "SessionBindingResult": {
+      "type": "object",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        }
+      },
+      "required": [
+        "binding"
+      ],
+      "description": "The result of `session/start` and `session/rebind`."
+    },
+    "SessionCancelParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "tree": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionCancelResult": {
+      "type": "object",
+      "properties": {
+        "interrupted": {
+          "type": "boolean"
+        },
+        "queued": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "interrupted",
+        "queued"
+      ]
+    },
+    "SessionDiscoverParams": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "SessionDiscoverResult": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiscoveredSession"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "found"
+      ]
+    },
+    "SessionGetResult": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Session"
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionKind": {
+      "type": "string",
+      "enum": [
+        "root",
+        "child",
+        "embedded"
+      ]
+    },
+    "SessionListParams": {
+      "type": "object",
+      "properties": {
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archived": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "SessionListResult": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionSummary"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessions"
+      ]
+    },
+    "SessionNewParams": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "$ref": "#/$defs/WorkspaceRequest"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "options": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "control": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Control"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "grant": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "description": "A `TaskRequest` (19)."
+        },
+        "seed": {
+          "description": "A `SeedRequest` (23)."
+        },
+        "ceiling": {
+          "description": "A `Ceiling` (22)."
+        },
+        "wake": {
+          "description": "A `Wake` (20)."
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Budget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A `Budget` allotment (Appendix E9)."
+        },
+        "onParentEnd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OnParentEnd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "agent",
+        "workspace"
+      ],
+      "additionalProperties": true,
+      "description": "`NewSession` in the spec."
+    },
+    "SessionNewResult": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Session"
+        },
+        "subscription": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "subscription",
+        "head"
+      ],
+      "description": "The result of `session/new` and `session/adopt`."
+    },
+    "SessionParent": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "item": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionPromptParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "context": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ContextEntry"
+          }
+        },
+        "attachments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          }
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Delivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "session",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "SessionPromptResult": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/PromptDisposition"
+        },
+        "queued": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "disposition"
+      ]
+    },
+    "SessionReadParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadDirection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionReadResult": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OpenItemBody"
+          }
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "SessionRebindParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "require": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RebindRequire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interrupt": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionRef": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "Params of methods that take only `{ session }`: `session/get`, `session/delete`."
+    },
+    "SessionRenameParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "title"
+      ]
+    },
+    "SessionRewindParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "string"
+        },
+        "files": {
+          "type": "boolean"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "turn",
+        "files"
+      ]
+    },
+    "SessionSnapshot": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Session"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OpenItemBody"
+          },
+          "description": "The newest items, oldest first."
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Request"
+          }
+        },
+        "queue": {
+          "$ref": "#/$defs/QueueState"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigOption"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          }
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subscribers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConnectionInfo"
+          }
+        }
+      },
+      "required": [
+        "session",
+        "items",
+        "requests",
+        "queue",
+        "options",
+        "actions",
+        "subscribers"
+      ]
+    },
+    "SessionStartParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "options": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionStopParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "tree": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "kind": {
+          "$ref": "#/$defs/SessionKind"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenTaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "updated": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "runtime",
+        "state",
+        "kind",
+        "archived",
+        "updated"
+      ],
+      "additionalProperties": true,
+      "description": "What lists and the index feed carry."
+    },
+    "SessionTreeParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionTreeResult": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeNode"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "nodes"
+      ]
+    },
+    "Snapshot": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/SessionSnapshot"
+          }
+        },
+        "index": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndexSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "State": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "idle",
+        "running",
+        "requires_action",
+        "stopped",
+        "lost",
+        "unrecognised",
+        "unknown"
+      ]
+    },
+    "SubagentItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "title": {
+          "type": "string"
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "description": "A subagent. Drivers report `key` (30.3); the runtime fills `session`.",
+      "additionalProperties": true
+    },
+    "Subject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "input": true,
+            "editable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "tool",
+            "input"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "command"
+            },
+            "command": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "command",
+            "cwd"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "files"
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "diff": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "paths"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "network"
+            },
+            "host": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "plan"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "function"
+            },
+            "function": {
+              "type": "string"
+            },
+            "input": true
+          },
+          "required": [
+            "type",
+            "function",
+            "input"
+          ]
+        }
+      ]
+    },
+    "SubscribeParams": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "replayFrom": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "SubscribeResult": {
+      "type": "object",
+      "properties": {
+        "subscription": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Snapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "subscription",
+        "head"
+      ]
+    },
+    "Target": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tree": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tree"
+          ],
+          "description": "A session and its descendants in one stream."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "index"
+          ]
+        }
+      ]
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "awaiting",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "description": "A task's status as summaries carry it. `interrupted` comes from Appendix E7."
+    },
+    "TextItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "description": "An `assistant` item; `text` is Markdown.",
+      "additionalProperties": true
+    },
+    "TokenUsage": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cacheRead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cacheWrite": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "reasoning": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "description": "`input` excludes cache reads."
+    },
+    "ToolItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "tool": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "input": true,
+        "status": {
+          "$ref": "#/$defs/ToolStatus"
+        },
+        "output": true,
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caller": {
+          "$ref": "#/$defs/Caller"
+        },
+        "function": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "tool",
+        "title",
+        "input",
+        "status",
+        "caller"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "ToolStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "paused",
+        "ok",
+        "error",
+        "cancelled"
+      ]
+    },
+    "TreeNode": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/SessionSummary"
+        },
+        "depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "session",
+        "depth"
+      ]
+    },
+    "Turn": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "binding": {
+          "type": "string",
+          "description": "Omitted when a driver reports the turn."
+        },
+        "status": {
+          "$ref": "#/$defs/TurnStatus"
+        },
+        "stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenTurnStop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "continuable": {
+          "type": "boolean"
+        },
+        "input": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started": {
+          "type": "string"
+        },
+        "ended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "continuable",
+        "started"
+      ],
+      "additionalProperties": true
+    },
+    "TurnError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ]
+    },
+    "TurnStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "interrupted",
+        "failed"
+      ]
+    },
+    "TurnStop": {
+      "type": "string",
+      "enum": [
+        "end",
+        "max_tokens",
+        "turn_limit",
+        "refusal",
+        "cancelled",
+        "budget",
+        "error"
+      ]
+    },
+    "UnsubscribeParams": {
+      "type": "object",
+      "properties": {
+        "subscription": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription"
+      ]
+    },
     "UnsupportedData": {
       "type": "object",
       "properties": {
@@ -181,6 +6449,997 @@
       ],
       "description": "`data` of `-32001`."
     },
+    "Update": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "state"
+            },
+            "state": {
+              "$ref": "#/$defs/State"
+            },
+            "background": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Background"
+              }
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "state",
+            "background"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session"
+            },
+            "session": {
+              "$ref": "#/$defs/Session"
+            }
+          },
+          "required": [
+            "type",
+            "session"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "item"
+            },
+            "item": {
+              "$ref": "#/$defs/ItemPatch"
+            }
+          },
+          "required": [
+            "type",
+            "item"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "turn"
+            },
+            "turn": {
+              "$ref": "#/$defs/Turn"
+            }
+          },
+          "required": [
+            "type",
+            "turn"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "request"
+            },
+            "request": {
+              "$ref": "#/$defs/Request"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "queue"
+            },
+            "queue": {
+              "$ref": "#/$defs/QueueState"
+            }
+          },
+          "required": [
+            "type",
+            "queue"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "options"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ConfigOption"
+              }
+            },
+            "level": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PermissionLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "network": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "options"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "actions"
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Action"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "actions"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "usage"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            }
+          },
+          "required": [
+            "type",
+            "usage"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "notice"
+            },
+            "level": {
+              "$ref": "#/$defs/NoticeLevel"
+            },
+            "text": {
+              "type": "string"
+            },
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "level",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "summary"
+            },
+            "session": {
+              "$ref": "#/$defs/SessionSummary"
+            }
+          },
+          "required": [
+            "type",
+            "session"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "agent"
+            },
+            "agent": {
+              "$ref": "#/$defs/Agent"
+            }
+          },
+          "required": [
+            "type",
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "env"
+            },
+            "env": {
+              "$ref": "#/$defs/Environment"
+            }
+          },
+          "required": [
+            "type",
+            "env"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "workspace"
+            },
+            "workspace": {
+              "$ref": "#/$defs/Workspace"
+            }
+          },
+          "required": [
+            "type",
+            "workspace"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "deleted"
+            },
+            "kind": {
+              "$ref": "#/$defs/DeletedKind"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "id"
+          ]
+        }
+      ]
+    },
+    "UpdateParams": {
+      "type": "object",
+      "properties": {
+        "subscription": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "string",
+          "description": "The update's place in the runtime's sequence; an opaque cursor (Appendix E2)."
+        },
+        "runtime": {
+          "type": "string",
+          "description": "The runtime that emitted it (Appendix E2)."
+        },
+        "at": {
+          "type": "string"
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "update": {
+          "$ref": "#/$defs/OpenUpdate",
+          "description": "Unknown update types are kept raw and ignored."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "subscription",
+        "seq",
+        "runtime",
+        "at",
+        "update"
+      ],
+      "additionalProperties": true,
+      "description": "Params of the `update` notification."
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimits": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/RateLimit"
+          }
+        },
+        "countedIn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For embedded sessions: the session whose usage already includes this."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "UserItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "text": {
+          "type": "string"
+        },
+        "context": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ContextEntry"
+          }
+        },
+        "attachments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/UserStatus"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set by a driver when the item echoes a runtime prompt (Appendix E4)."
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "UserStatus": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "sent",
+        "handled",
+        "uncertain"
+      ]
+    },
+    "WebItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binding": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "results": true
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "description": "Fields every item kind has.",
+      "additionalProperties": true
+    },
+    "WhenChoices": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "default": true,
+        "choice": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChoiceData"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Workspace": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "env": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkspaceKind"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The session that created a worktree."
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "created": {
+          "type": "string"
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "env",
+        "kind",
+        "path",
+        "sessions",
+        "created"
+      ],
+      "additionalProperties": true
+    },
+    "WorkspaceCreateParams": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/WorkspaceRequest"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "request"
+      ]
+    },
+    "WorkspaceKind": {
+      "type": "string",
+      "enum": [
+        "dir",
+        "worktree",
+        "external"
+      ]
+    },
+    "WorkspaceListParams": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "WorkspaceListResult": {
+      "type": "object",
+      "properties": {
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Workspace"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "workspaces"
+      ]
+    },
+    "WorkspaceMergeParams": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "into": {
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/MergeMethod"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "from",
+        "into",
+        "method"
+      ]
+    },
+    "WorkspaceMergeResult": {
+      "type": "object",
+      "properties": {
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conflicts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "WorkspaceRemoveParams": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "force": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "workspace"
+      ]
+    },
+    "WorkspaceRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "dir"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "worktree"
+            },
+            "repo": {
+              "type": "string"
+            },
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "base": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "repo"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "use"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace"
+          ]
+        }
+      ]
+    },
+    "WorkspaceResult": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "$ref": "#/$defs/Workspace"
+        }
+      },
+      "required": [
+        "workspace"
+      ],
+      "description": "The result of `workspace/create` and `workspace/transfer`."
+    },
+    "WorkspaceStatusParams": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace"
+      ]
+    },
+    "WorkspaceStatusResult": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ahead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "behind": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "dirty",
+        "changed"
+      ]
+    },
+    "WorkspaceTransferParams": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string",
+          "description": "The target environment."
+        },
+        "include": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Carry"
+          }
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "workspace",
+        "to"
+      ]
+    },
     "WrongStateData": {
       "type": "object",
       "properties": {
@@ -192,6 +7451,445 @@
         "state"
       ],
       "description": "`data` of `-32004`."
+    }
+  },
+  "x-methods": {
+    "action/invoke": {
+      "params": {
+        "$ref": "#/$defs/ActionInvokeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ActionInvokeResult"
+      }
+    },
+    "action/list": {
+      "params": {
+        "$ref": "#/$defs/ActionListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ActionListResult"
+      }
+    },
+    "agent/list": {
+      "params": {
+        "$ref": "#/$defs/AgentListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AgentListResult"
+      }
+    },
+    "agent/refresh": {
+      "params": {
+        "$ref": "#/$defs/AgentRefreshParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AgentRefreshResult"
+      }
+    },
+    "binding/action": {
+      "params": {
+        "$ref": "#/$defs/BindingActionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingActionResult"
+      }
+    },
+    "binding/answer": {
+      "params": {
+        "$ref": "#/$defs/BindingAnswerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "binding/cancel": {
+      "params": {
+        "$ref": "#/$defs/BindingCancelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingCancelResult"
+      }
+    },
+    "binding/fork": {
+      "params": {
+        "$ref": "#/$defs/BindingForkParams"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingForkResult"
+      }
+    },
+    "binding/keys": {
+      "params": {
+        "$ref": "#/$defs/BindingKeysParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "binding/options": {
+      "params": {
+        "$ref": "#/$defs/BindingOptionsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingOptionsResult"
+      }
+    },
+    "binding/prompt": {
+      "params": {
+        "$ref": "#/$defs/BindingPromptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingPromptResult"
+      }
+    },
+    "binding/screen": {
+      "params": {
+        "$ref": "#/$defs/BindingRef"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingScreenResult"
+      }
+    },
+    "binding/start": {
+      "params": {
+        "$ref": "#/$defs/BindingStart"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingStartResult"
+      }
+    },
+    "binding/stop": {
+      "params": {
+        "$ref": "#/$defs/BindingRef"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "env/list": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/EnvListResult"
+      }
+    },
+    "history/discover": {
+      "params": {
+        "$ref": "#/$defs/SessionDiscoverParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HistoryDiscoverResult"
+      }
+    },
+    "history/read": {
+      "params": {
+        "$ref": "#/$defs/HistoryReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HistoryReadResult"
+      }
+    },
+    "initialize": {
+      "params": {
+        "$ref": "#/$defs/InitializeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/InitializeResult"
+      }
+    },
+    "item/get": {
+      "params": {
+        "$ref": "#/$defs/ItemGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ItemGetResult"
+      }
+    },
+    "option/complete": {
+      "params": {
+        "$ref": "#/$defs/OptionCompleteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/OptionCompleteResult"
+      }
+    },
+    "option/list": {
+      "params": {
+        "$ref": "#/$defs/OptionListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/OptionListResult"
+      }
+    },
+    "option/set": {
+      "params": {
+        "$ref": "#/$defs/OptionSetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/OptionSetResult"
+      }
+    },
+    "queue/clear": {
+      "params": {
+        "$ref": "#/$defs/QueueSessionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "queue/edit": {
+      "params": {
+        "$ref": "#/$defs/QueueEditParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "queue/list": {
+      "params": {
+        "$ref": "#/$defs/QueueSessionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/QueueListResult"
+      }
+    },
+    "queue/move": {
+      "params": {
+        "$ref": "#/$defs/QueueMoveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "queue/pause": {
+      "params": {
+        "$ref": "#/$defs/QueueSessionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "queue/remove": {
+      "params": {
+        "$ref": "#/$defs/QueueRemoveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "queue/resume": {
+      "params": {
+        "$ref": "#/$defs/QueueSessionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "request/answer": {
+      "params": {
+        "$ref": "#/$defs/RequestAnswerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "request/list": {
+      "params": {
+        "$ref": "#/$defs/RequestListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequestListResult"
+      }
+    },
+    "session/archive": {
+      "params": {
+        "$ref": "#/$defs/SessionArchiveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/cancel": {
+      "params": {
+        "$ref": "#/$defs/SessionCancelParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionCancelResult"
+      }
+    },
+    "session/delete": {
+      "params": {
+        "$ref": "#/$defs/SessionRef"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/get": {
+      "params": {
+        "$ref": "#/$defs/SessionRef"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionGetResult"
+      }
+    },
+    "session/keys": {
+      "params": {
+        "$ref": "#/$defs/SessionRef"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/list": {
+      "params": {
+        "$ref": "#/$defs/SessionListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionListResult"
+      }
+    },
+    "session/new": {
+      "params": {
+        "$ref": "#/$defs/SessionNewParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionNewResult"
+      }
+    },
+    "session/prompt": {
+      "params": {
+        "$ref": "#/$defs/SessionPromptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionPromptResult"
+      }
+    },
+    "session/rebind": {
+      "params": {
+        "$ref": "#/$defs/SessionRebindParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionBindingResult"
+      }
+    },
+    "session/rename": {
+      "params": {
+        "$ref": "#/$defs/SessionRenameParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/rewind": {
+      "params": {
+        "$ref": "#/$defs/SessionRewindParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/screen": {
+      "params": {
+        "$ref": "#/$defs/SessionRef"
+      },
+      "result": {
+        "$ref": "#/$defs/BindingScreenResult"
+      }
+    },
+    "session/start": {
+      "params": {
+        "$ref": "#/$defs/SessionStartParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionBindingResult"
+      }
+    },
+    "session/stop": {
+      "params": {
+        "$ref": "#/$defs/SessionStopParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/tree": {
+      "params": {
+        "$ref": "#/$defs/SessionTreeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionTreeResult"
+      }
+    },
+    "subscribe": {
+      "params": {
+        "$ref": "#/$defs/SubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SubscribeResult"
+      }
+    },
+    "unsubscribe": {
+      "params": {
+        "$ref": "#/$defs/UnsubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "workspace/create": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkspaceResult"
+      }
+    },
+    "workspace/list": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkspaceListResult"
+      }
+    },
+    "workspace/merge": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceMergeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkspaceMergeResult"
+      }
+    },
+    "workspace/remove": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceRemoveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "workspace/status": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkspaceStatusResult"
+      }
+    },
+    "workspace/transfer": {
+      "params": {
+        "$ref": "#/$defs/WorkspaceTransferParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkspaceResult"
+      }
+    }
+  },
+  "x-notifications": {
+    "update": {
+      "$ref": "#/$defs/UpdateParams"
     }
   }
 }
