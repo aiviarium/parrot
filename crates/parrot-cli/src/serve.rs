@@ -1,1 +1,146 @@
+//! `parrot serve`: the runtime on the local socket, and on WebSocket with `--ws`.
 
+use parrot_core::{Clock, Core, Ids, Peer};
+use parrot_serve::{Runtime, RuntimeBackend, TokenCheck};
+use parrot_store::Store;
+use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Overrides the socket path (or pipe name on Windows) for `serve` and `connect`.
+pub const SOCKET_ENV: &str = "PARROT_SOCKET";
+
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+}
+
+/// `<prefix>_` and a UUID v7 in the 26-character ULID alphabet.
+struct UlidIds;
+
+impl Ids for UlidIds {
+    fn next(&mut self, prefix: &str) -> String {
+        const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        let v = uuid::Uuid::now_v7().as_u128();
+        let mut id = format!("{prefix}_");
+        for i in 0..26 {
+            id.push(ALPHABET[((v >> (125 - 5 * i)) & 31) as usize] as char);
+        }
+        id
+    }
+}
+
+/// Refuses every client token until token storage exists.
+struct NoTokens;
+
+impl TokenCheck for NoTokens {
+    fn check(&self, _token: &str) -> Option<Peer> {
+        None
+    }
+}
+
+/// The runtime's state directory for this user and OS.
+pub fn default_state_dir() -> io::Result<PathBuf> {
+    let env_dir = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let home = || env_dir("HOME").ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"));
+    if cfg!(windows) {
+        return env_dir("LOCALAPPDATA")
+            .map(|d| d.join("parrot"))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is not set"));
+    }
+    if cfg!(target_os = "macos") {
+        return Ok(home()?.join("Library/Application Support/parrot"));
+    }
+    match env_dir("XDG_STATE_HOME") {
+        Some(dir) => Ok(dir.join("parrot")),
+        None => Ok(home()?.join(".local/state/parrot")),
+    }
+}
+
+/// The socket path: `PARROT_SOCKET`, or the platform default.
+pub fn socket_path() -> io::Result<PathBuf> {
+    if let Some(path) = std::env::var_os(SOCKET_ENV).filter(|v| !v.is_empty()) {
+        return Ok(path.into());
+    }
+    #[cfg(unix)]
+    return parrot_serve::socket::default_socket_path();
+    #[cfg(windows)]
+    return parrot_serve::socket::default_pipe_name().map(PathBuf::from);
+}
+
+pub async fn run(state_dir: Option<PathBuf>, ws: Option<String>) -> Result<(), String> {
+    let dir = match state_dir {
+        Some(dir) => dir,
+        None => default_state_dir().map_err(|e| e.to_string())?,
+    };
+    let db = dir.join("state.db");
+    let store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
+    let core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
+    let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), |rt| RuntimeBackend::new(rt, store));
+
+    let socket = socket_path().map_err(|e| e.to_string())?;
+    let local = serve_local(rt.clone(), socket.clone());
+    let remote = async {
+        let Some(addr) = ws else {
+            return std::future::pending().await;
+        };
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+        parrot_serve::websocket::serve_websocket(rt.clone(), listener, Arc::new(NoTokens))
+            .await
+            .map_err(|e| format!("websocket: {e}"))
+    };
+    let result = tokio::select! {
+        r = local => r,
+        r = remote => r,
+        _ = tokio::signal::ctrl_c() => Ok(()),
+        _ = terminated() => Ok(()),
+    };
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(&socket);
+    result
+}
+
+#[cfg(unix)]
+async fn serve_local(rt: Runtime, path: PathBuf) -> Result<(), String> {
+    let listener = parrot_serve::socket::bind_socket(&path)
+        .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    parrot_serve::socket::serve_socket(rt, listener)
+        .await
+        .map_err(|e| format!("socket: {e}"))
+}
+
+#[cfg(windows)]
+async fn serve_local(rt: Runtime, path: PathBuf) -> Result<(), String> {
+    let name = path.to_string_lossy().into_owned();
+    parrot_serve::socket::serve_pipe(rt, &name)
+        .await
+        .map_err(|e| format!("pipe {name}: {e}"))
+}
+
+#[cfg(unix)]
+async fn terminated() {
+    use tokio::signal::unix::{SignalKind, signal};
+    match signal(SignalKind::terminate()) {
+        Ok(mut s) => {
+            s.recv().await;
+        }
+        Err(_) => std::future::pending().await,
+    }
+}
+
+#[cfg(windows)]
+async fn terminated() {
+    std::future::pending().await
+}
