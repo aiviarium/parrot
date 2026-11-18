@@ -1298,6 +1298,8 @@ dependencies = [
  "parrot-core",
  "parrot-driver",
  "parrot-driver-claude",
+ "parrot-driver-codex",
+ "parrot-driver-tui",
  "parrot-guard",
  "parrot-link",
  "parrot-mcp",
@@ -1353,6 +1355,35 @@ dependencies = [
  "parrot-proto",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "parrot-driver-codex"
+version = "0.1.0"
+dependencies = [
+ "parrot-driver",
+ "parrot-guard",
+ "parrot-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "parrot-driver-tui"
+version = "0.1.0"
+dependencies = [
+ "parrot-driver",
+ "parrot-proto",
+ "parrot-term",
+ "parrot-tui",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
