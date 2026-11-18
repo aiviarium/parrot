@@ -342,7 +342,16 @@ pub fn dispatch(cx: &mut Cx, session: &str) {
     let Some(q) = cx.state.queue.by_session.get_mut(session) else {
         return;
     };
-    if q.paused {
+    // A summary another session waits for goes first, even through a paused queue (spec 23.2).
+    let summary = q
+        .entries
+        .iter()
+        .position(|e| e.origin.get("action").and_then(Value::as_str) == Some("summarize"));
+    if let Some(i) = summary.filter(|_| q.paused)
+        && let Some(e) = q.entries.remove(i)
+    {
+        q.entries.push_front(e);
+    } else if q.paused {
         return;
     }
     let Some(entry) = q.entries.pop_front() else {

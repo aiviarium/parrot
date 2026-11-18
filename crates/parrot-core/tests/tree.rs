@@ -1309,3 +1309,103 @@ fn a_source_summary_is_asked_of_the_source_harness() {
         "the summary turn is cut: {text}"
     );
 }
+
+/// Stop a session and let its driver exit.
+fn stop_and_exit(sim: &mut Sim, session: &str, binding: &str) {
+    sim.ok(OWNER, "session/stop", json!({ "session": session }));
+    sim.handle(Input::DriverExited {
+        binding: binding.into(),
+        detail: "stopped".into(),
+    });
+    assert_eq!(sim.get(session)["state"], "stopped");
+}
+
+#[test]
+fn a_native_fork_of_a_stopped_source_resumes_it_to_fork_then_stops_it() {
+    let mut sim = Sim::new();
+    let (s, b) = sim.root(json!({}));
+    sim.driver(
+        &b,
+        json!({ "type": "ref", "ref": { "id": "h1", "strength": "strong" } }),
+    );
+    sim.turn(&b, "t1", "first");
+    sim.turn(&b, "t2", "second");
+    let t1 = sim.ok(OWNER, "session/bundle", json!({ "session": s }))["bundle"]["items"][0]["turn"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    stop_and_exit(&mut sim, &s, &b);
+    sim.core.state.sessions.agents.get_mut("claude").unwrap()["features"] = json!({ "session.fork": {} });
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" },
+            "seed": { "session": s, "at": t1, "require": "exact" } }),
+    );
+    let f = r.unwrap()["session"]["id"].as_str().unwrap().to_string();
+    // The source is resumed first.
+    let woken = start_params(&e).expect("the source starts");
+    assert_eq!(woken["session"], s.as_str());
+    assert_eq!(woken["resume"]["id"], "h1");
+    let b2 = woken["binding"].as_str().unwrap().to_string();
+    let e = sim.bring_up(&b2);
+    let (call, fp) = driver_calls(&e, "binding/fork").remove(0);
+    assert_eq!(fp["binding"], b2.as_str());
+    assert_eq!(fp["at"], "t1", "the turn's key from the binding that ran it");
+    let e = sim.handle(Input::DriverReply {
+        binding: b2.clone(),
+        call,
+        result: Ok(json!({ "ref": { "id": "fork:h1", "strength": "strong" } })),
+    });
+    let start = start_params(&e).unwrap();
+    assert_eq!(start["session"], f.as_str());
+    assert_eq!(start["resume"]["id"], "fork:h1");
+    assert_eq!(
+        driver_calls(&e, "binding/stop")[0].1["binding"],
+        b2.as_str(),
+        "the source stops again"
+    );
+    assert_eq!(sim.get(&f)["seed"]["via"], "fork");
+}
+
+#[test]
+fn a_stopped_source_with_a_paused_queue_summarizes_itself_and_stops_again() {
+    let mut sim = Sim::new();
+    let (s, b) = sim.root(json!({}));
+    sim.driver(
+        &b,
+        json!({ "type": "ref", "ref": { "id": "h1", "strength": "strong" } }),
+    );
+    sim.turn(&b, "t1", "wrote the parser");
+    stop_and_exit(&mut sim, &s, &b);
+    sim.ok(OWNER, "queue/pause", json!({ "session": s }));
+    let (r, e) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "codex", "workspace": { "kind": "dir", "path": "/work/demo" },
+            "seed": { "session": s, "summary": "source" } }),
+    );
+    assert_eq!(r, Err(0), "the call waits for the summary");
+    let id = json!(sim.next_id);
+    let woken = start_params(&e).expect("the source starts");
+    assert_eq!(woken["resume"]["id"], "h1");
+    let b2 = woken["binding"].as_str().unwrap().to_string();
+    let e = sim.bring_up(&b2);
+    let prompt = driver_calls(&e, "binding/prompt").remove(0).1;
+    assert!(
+        prompt["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Summarize this session")
+    );
+    let e = sim.turn(&b2, "t2", "The parser is done.");
+    let created = reply(&e, &id).unwrap().unwrap();
+    assert!(created["session"]["id"].is_string());
+    assert_eq!(
+        driver_calls(&e, "binding/stop")[0].1["binding"],
+        b2.as_str(),
+        "the source stops again"
+    );
+    let q = sim.ok(OWNER, "queue/list", json!({ "session": s }))["queue"].clone();
+    assert_eq!(q["paused"], true, "{q}");
+}
