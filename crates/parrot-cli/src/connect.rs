@@ -16,7 +16,19 @@ pub async fn run(socket: Option<PathBuf>, link: bool) -> Result<(), String> {
     let stream = open(&path)
         .await
         .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
-    relay(stream).await.map_err(|e| e.to_string())
+    exit_with(relay(stream).await)
+}
+
+/// Ends the process with the relay's outcome. Tokio reads stdin on a blocking thread that
+/// shutdown waits for, so a caller that keeps our stdin open would keep a dead relay alive.
+fn exit_with(result: std::io::Result<()>) -> ! {
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("parrot: {e}");
+            std::process::exit(1)
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -25,16 +37,7 @@ async fn run_link(sock: &std::path::Path) -> Result<(), String> {
     let stream = parrot_link::endpoint::connect_link_socket(&path)
         .await
         .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
-    let result = relay(stream).await;
-    // Tokio reads stdin on a blocking thread that shutdown waits for, so a carrier that keeps
-    // our stdin open would keep a dead relay alive after the runtime closed the link.
-    match result {
-        Ok(()) => std::process::exit(0),
-        Err(e) => {
-            eprintln!("parrot: {e}");
-            std::process::exit(1)
-        }
-    }
+    exit_with(relay(stream).await)
 }
 
 #[cfg(windows)]
