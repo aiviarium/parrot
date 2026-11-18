@@ -1,0 +1,13 @@
+{"type":"user","message":{"role":"user","content":"Say hello"},"parent_tool_use_id":null,"session_id":""}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Look at this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]},"parent_tool_use_id":null}
+{"type":"control_request","request_id":"init-1","request":{"subtype":"initialize","hooks":null}}
+{"type":"control_request","request_id":"int-1","request":{"subtype":"interrupt"}}
+{"type":"control_request","request_id":"mode-1","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}
+{"type":"control_request","request_id":"model-1","request":{"subtype":"set_model","model":"claude-haiku-5-5"}}
+{"type":"control_request","request_id":"model-2","request":{"subtype":"set_model","model":null}}
+{"type":"control_request","request_id":"mcp-1","request":{"subtype":"mcp_status"}}
+{"type":"control_response","response":{"subtype":"success","request_id":"perm-1","response":{"behavior":"allow","updatedInput":{"command":"ls","description":"List files"}}}}
+{"type":"control_response","response":{"subtype":"success","request_id":"perm-1","response":{"behavior":"deny","message":"The user said no","interrupt":false}}}
+{"type":"control_response","response":{"subtype":"error","request_id":"hook-1","error":"Parrot does not answer hook_callback"}}
+{"type":"keep_alive"}
+{"type":"update_environment_variables","variables":{"FAKE_TOKEN":"not-a-secret"}}
