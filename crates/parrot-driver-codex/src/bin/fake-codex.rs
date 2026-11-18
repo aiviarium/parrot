@@ -11,6 +11,16 @@ fn main() {
         println!("codex-cli 0.167.1");
         return;
     }
+    // `codex login status` exits 0 when signed in and 1 when not, with its message on stderr.
+    if args.first().map(String::as_str) == Some("login") && args.get(1).map(String::as_str) == Some("status")
+    {
+        if std::env::var(fake::LOGIN_ENV).is_ok_and(|v| v == "out") {
+            eprintln!("Not logged in");
+            std::process::exit(1);
+        }
+        eprintln!("Logged in using ChatGPT");
+        return;
+    }
     let Some(path) = fake::scenario_arg(&args).or_else(|| std::env::var(fake::SCENARIO_ENV).ok()) else {
         eprintln!("fake-codex: give --scenario <path> or set {}", fake::SCENARIO_ENV);
         std::process::exit(64);

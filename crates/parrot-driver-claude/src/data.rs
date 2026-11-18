@@ -1,8 +1,8 @@
 //! The Claude egg's data files (spec 31), read from `$PARROT_DRIVER_DATA` with the copies in
-//! `eggs/claude/parrot` compiled in as the fallback.
+//! `eggs/claude/parrot` compiled in as the fallback. The version Claude Code reports picks the
+//! version shim.
 
-use std::sync::OnceLock;
-
+use parrot_driver::data::DataCell;
 use parrot_proto::driver_data::{Builtin, DriverData};
 
 pub const BUILTIN: Builtin = Builtin {
@@ -17,46 +17,22 @@ pub const BUILTIN: Builtin = Builtin {
     )],
 };
 
-static DATA: OnceLock<(DriverData, Option<String>)> = OnceLock::new();
-
-/// The version `claude --version` reports, which picks the egg's version shim (spec 31). Only a
-/// driver the runtime started from an egg (`PARROT_DRIVER_DATA` set) asks, so the compiled-in
-/// data stays the same wherever the driver runs on its own, as in tests.
-fn cli_version() -> Option<String> {
-    std::env::var_os(parrot_proto::driver_data::DRIVER_DATA_ENV)?;
-    let bin = std::env::var_os(crate::driver::CLAUDE_BIN_ENV).unwrap_or_else(|| "claude".into());
-    let out = std::process::Command::new(bin)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .map(str::to_owned)
-}
-
-fn loaded() -> &'static (DriverData, Option<String>) {
-    DATA.get_or_init(|| match DriverData::load_for(BUILTIN, cli_version().as_deref()) {
-        Ok(d) => (d, None),
-        Err(e) => (
-            DriverData::builtin(BUILTIN).expect("the compiled-in data parses"),
-            Some(format!(
-                "the egg's driver data is invalid, using the built-in copy: {e}"
-            )),
-        ),
-    })
-}
+static DATA: DataCell = DataCell::new(BUILTIN);
 
 /// The driver data in use.
 pub fn data() -> &'static DriverData {
-    &loaded().0
+    DATA.get()
 }
 
 /// Why the egg's data was not used, if it wasn't.
-pub fn load_error() -> Option<&'static str> {
-    loaded().1.as_deref()
+pub fn load_error() -> Option<String> {
+    DATA.load_error()
+}
+
+/// Takes the version Claude Code reported, from `--version` or its `initialize` answer, and
+/// returns whether it picked another version shim.
+pub fn observe_version(version: &str) -> bool {
+    DATA.observe(version)
 }
 
 #[cfg(test)]

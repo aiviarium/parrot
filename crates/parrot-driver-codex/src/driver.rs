@@ -39,6 +39,8 @@ use parrot_proto::session::{Ref, RefStrength};
 pub const CODEX_BIN_ENV: &str = "PARROT_CODEX_BIN";
 /// The variable the MCP server's bearer token reaches Codex in, so it is never in argv.
 pub const MCP_TOKEN_ENV: &str = "PARROT_MCP_TOKEN";
+/// How long an agent-scoped sign-in keeps its app-server up.
+const LOGIN_WAIT: Duration = Duration::from_secs(600);
 /// How long Codex has to answer a request.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long `binding/stop` waits after closing stdin before killing Codex.
@@ -102,7 +104,8 @@ impl Binding {
     fn record(&self, shadow: bool, updates: &[DriverUpdate]) {
         if shadow {
             let mut f = self.fold.lock().unwrap();
-            for u in updates {
+            // The rollout holds the main thread only, so subagent updates stay out of the fold.
+            for u in updates.iter().filter(|u| u.subagent.is_none()) {
                 f.push(&to_value(u));
             }
         }
@@ -111,7 +114,7 @@ impl Binding {
 
 /// Whether the updates end a turn.
 fn ends_turn(updates: &[DriverUpdate]) -> bool {
-    updates.iter().any(|u| {
+    updates.iter().filter(|u| u.subagent.is_none()).any(|u| {
         matches!(&u.update, Open::Known(DriverUpdateKind::Turn { turn }) if turn.status != parrot_proto::state::TurnStatus::Running)
     })
 }
@@ -147,10 +150,15 @@ async fn shadow_turn(driver: Arc<Driver>, b: Arc<Binding>) {
                 // Turn ids are the same in both sources, so the turn that ended is found by its id.
                 let pairs =
                     correlate::correlate(data, &live.last_turn(), &disk.turn_or_last(live.last_turn_id()));
-                correlate::differences(data, &pairs, "native", "transcript")
+                let mut out: Vec<Value> = correlate::differences(data, &pairs, "native", "transcript")
                     .iter()
                     .map(|d| correlate::notice(&b.id, d))
-                    .collect()
+                    .collect();
+                // What only the rollout has joins the live stream, in the turn that ended.
+                let merged = correlate::merged(data, &pairs, &b.id, live.last_turn_id(), "native");
+                b.fold.lock().unwrap().extend(&merged);
+                out.extend(merged);
+                out
             }
         };
     for n in notices {
@@ -275,12 +283,14 @@ impl Driver {
                         s.turn.as_ref().map(|t| t.key.clone()).or(s.last_turn.clone()),
                     )
                 };
-                if p.at.is_some() && p.at != latest {
-                    return Err(RpcError::new(-32001, "Codex forks only at the latest turn"));
-                }
                 let thread = thread.ok_or_else(|| RpcError::new(-32004, "the thread has not started yet"))?;
+                let mut params = json!({"threadId": thread});
+                // An earlier turn: Codex keeps the turns up to it and drops the later ones.
+                if let Some(at) = p.at.as_ref().filter(|at| Some(*at) != latest.as_ref()) {
+                    params["lastTurnId"] = json!(at);
+                }
                 let r = b
-                    .request("thread/fork", json!({"threadId": thread}), None)
+                    .request("thread/fork", params, None)
                     .await
                     .map_err(codex_error)?;
                 let id = r
@@ -316,6 +326,27 @@ impl Driver {
             "binding/cancel" => {
                 let p: BindingCancelParams = params(p)?;
                 let b = self.binding(&p.binding)?;
+                if let Some(sub) = &p.subagent {
+                    // A subagent's turn runs in its own thread.
+                    let target = {
+                        let mut state = b.state.lock().unwrap();
+                        let s = state
+                            .subagents
+                            .get_mut(sub)
+                            .ok_or_else(|| RpcError::new(-32602, format!("no subagent {sub}")))?;
+                        s.cancel();
+                        s.turn.as_ref().map(|t| t.key.clone())
+                    };
+                    let Some(turn) = target else {
+                        return Ok(to_value(&BindingCancelResult { interrupted: false }));
+                    };
+                    let r = b
+                        .request("turn/interrupt", json!({"threadId": sub, "turnId": turn}), None)
+                        .await;
+                    return Ok(to_value(&BindingCancelResult {
+                        interrupted: r.is_ok(),
+                    }));
+                }
                 let target = {
                     let mut state = b.state.lock().unwrap();
                     state.cancel();
@@ -342,6 +373,15 @@ impl Driver {
             "binding/answer" => {
                 let p: BindingAnswerParams = params(p)?;
                 let b = self.binding(&p.binding)?;
+                let login = b.state.lock().unwrap().take_login(&p.request);
+                if let Some(id) = login {
+                    let _ = b
+                        .request("account/login/cancel", json!({"loginId": id}), None)
+                        .await;
+                    let closed = b.state.lock().unwrap().login_closed(&p.request, false);
+                    self.emit(vec![closed]);
+                    return Ok(json!({}));
+                }
                 let (msg, updates) = b
                     .state
                     .lock()
@@ -389,13 +429,64 @@ impl Driver {
             }
             "binding/action" => {
                 let p: BindingActionParams = params(p)?;
-                let id = p
-                    .binding
-                    .clone()
-                    .ok_or_else(|| RpcError::new(-32602, "codex actions need a binding"))?;
+                let Some(id) = p.binding.clone() else {
+                    return self.agent_action(&p).await;
+                };
                 let b = self.binding(&id)?;
                 let thread = b.state.lock().unwrap().thread_id.clone();
                 match p.action.as_str() {
+                    "login" => {
+                        let key = login(&b).await?;
+                        return Ok(to_value(&BindingActionResult {
+                            status: ActionStatus::Requested,
+                            request: Some(key),
+                            result: None,
+                        }));
+                    }
+                    "logout" => {
+                        b.request("account/logout", json!({}), None)
+                            .await
+                            .map_err(codex_error)?;
+                        return Ok(to_value(&BindingActionResult {
+                            status: ActionStatus::Done,
+                            request: None,
+                            result: None,
+                        }));
+                    }
+                    skill if skill.starts_with(mapping::SKILL_PREFIX) => {
+                        let name = &skill[mapping::SKILL_PREFIX.len()..];
+                        let text = p
+                            .input
+                            .as_ref()
+                            .and_then(|i| i.get("text"))
+                            .and_then(Value::as_str)
+                            .or(p.args.as_deref())
+                            .unwrap_or_default()
+                            .to_owned();
+                        let message = p.message.clone().unwrap_or_else(|| format!("skill-{}", now()));
+                        let params = b
+                            .state
+                            .lock()
+                            .unwrap()
+                            .skill_turn_params(name, &text, &message)
+                            .ok_or_else(|| RpcError::new(-32602, format!("no skill {name}")))?;
+                        let prompt = BindingPromptParams {
+                            binding: id.clone(),
+                            subagent: None,
+                            message: message.clone(),
+                            text: format!("${name} {text}").trim_end().to_owned(),
+                            context: None,
+                            attachments: None,
+                            steer: false,
+                        };
+                        let on_ok: OnOk = Box::new(move |state, result| {
+                            let turn = result.pointer("/turn/id").and_then(Value::as_str);
+                            state.prompt_accepted(&prompt, turn, BindingDisposition::Started, &now())
+                        });
+                        b.request("turn/start", params, Some(on_ok))
+                            .await
+                            .map_err(codex_error)?;
+                    }
                     "compact" => {
                         b.state.lock().unwrap().compact_requested = true;
                         b.request("thread/compact/start", json!({"threadId": thread}), None)
@@ -436,6 +527,9 @@ impl Driver {
 
     async fn prompt(self: &Arc<Self>, p: BindingPromptParams) -> Result<Value, RpcError> {
         let b = self.binding(&p.binding)?;
+        if let Some(sub) = p.subagent.clone() {
+            return self.prompt_subagent(&b, &sub, p).await;
+        }
         let skipped = input::input(&p).skipped;
         self.emit(
             skipped
@@ -492,22 +586,115 @@ impl Driver {
         }))
     }
 
-    async fn start(self: &Arc<Self>, start: BindingStart) -> Result<Value, RpcError> {
-        let mut state = MapState::new(start.binding.clone());
-        state.cwd = start.cwd.clone();
-        let opt = |k: &str| start.options.get(k).and_then(Value::as_str).map(str::to_owned);
-        state.model = opt("model").filter(|m| m != "default");
-        state.effort = opt("effort");
-        if let Some(a) = opt("approvalPolicy") {
-            state.approval = known(Some(a), "approvalPolicy")?;
-        }
-        if let Some(s) = opt("sandbox") {
-            state.sandbox = known(Some(s), "sandbox")?;
-        }
-        if let Some(pin) = &start.pin {
-            state.apply_pin(pin);
-        }
+    /// A prompt to a subagent: a turn on its thread, or a steer when one is running.
+    async fn prompt_subagent(
+        &self,
+        b: &Arc<Binding>,
+        sub: &str,
+        p: BindingPromptParams,
+    ) -> Result<Value, RpcError> {
+        let (steer, start) = {
+            let mut state = b.state.lock().unwrap();
+            let s = state
+                .subagents
+                .get_mut(sub)
+                .ok_or_else(|| RpcError::new(-32602, format!("no subagent {sub}")))?;
+            (s.turn_steer_params(&p), s.turn_start_params(&p))
+        };
+        let (method, params, d) = match steer {
+            Some(params) => ("turn/steer", params, BindingDisposition::Steered),
+            None => ("turn/start", start, BindingDisposition::Started),
+        };
+        let sub_key = sub.to_owned();
+        let on_ok: OnOk = Box::new(move |state, result| {
+            let turn = result.pointer("/turn/id").and_then(Value::as_str);
+            state.sub(&sub_key).prompt_accepted(&p, turn, d, &now())
+        });
+        b.request(method, params, Some(on_ok))
+            .await
+            .map_err(codex_error)?;
+        Ok(to_value(&BindingPromptResult { disposition: d }))
+    }
 
+    /// An agent-scoped action with no binding: `login` runs on an app-server of its own, which
+    /// stays up until the sign-in ends or ten minutes pass.
+    async fn agent_action(self: &Arc<Self>, p: &BindingActionParams) -> Result<Value, RpcError> {
+        match p.action.as_str() {
+            "login" | "logout" => {}
+            other => {
+                return Err(RpcError::new(-32602, format!("{other} needs a binding")));
+            }
+        }
+        let id = format!("agent-{}", now());
+        let start = BindingStart {
+            session: String::new(),
+            binding: id.clone(),
+            agent: p.agent.clone().unwrap_or_else(|| "codex".into()),
+            workspace: std::env::temp_dir().display().to_string(),
+            cwd: std::env::temp_dir().display().to_string(),
+            options: Default::default(),
+            control: parrot_proto::agent::Control::Native,
+            resume: None,
+            pin: None,
+            isolation: None,
+            deny: vec![],
+            mcp: None,
+            meta: None,
+            extra: Map::new(),
+        };
+        let b = self.spawn(&start)?;
+        let init = json!({
+            "clientInfo": {"name": "parrot", "title": "Parrot", "version": env!("CARGO_PKG_VERSION")},
+            "capabilities": {"experimentalApi": true},
+        });
+        let stop = |b: Arc<Binding>, driver: Arc<Driver>| async move {
+            driver.bindings.lock().unwrap().remove(&b.id);
+            b.stop().await;
+        };
+        if let Err(e) = b.request("initialize", init, None).await {
+            stop(b, self.clone()).await;
+            return Err(codex_error(e));
+        }
+        let _ = b
+            .write(&Message::Notification {
+                method: "initialized".into(),
+                params: Value::Null,
+            })
+            .await;
+        if p.action == "logout" {
+            let r = b.request("account/logout", json!({}), None).await;
+            stop(b, self.clone()).await;
+            r.map_err(codex_error)?;
+            return Ok(to_value(&BindingActionResult {
+                status: ActionStatus::Done,
+                request: None,
+                result: None,
+            }));
+        }
+        let key = match login(&b).await {
+            Ok(k) => k,
+            Err(e) => {
+                stop(b, self.clone()).await;
+                return Err(e);
+            }
+        };
+        let driver = self.clone();
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + LOGIN_WAIT;
+            while tokio::time::Instant::now() < deadline && b.state.lock().unwrap().login.is_some() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            stop(b, driver).await;
+        });
+        Ok(to_value(&BindingActionResult {
+            status: ActionStatus::Requested,
+            request: Some(key),
+            result: None,
+        }))
+    }
+
+    /// Starts `codex app-server` for a binding and its read loop.
+    fn spawn(self: &Arc<Self>, start: &BindingStart) -> Result<Arc<Binding>, RpcError> {
         let mut cmd = if self.config.guard {
             parrot_guard::guarded_command(&self.config.codex_bin)
         } else {
@@ -516,22 +703,15 @@ impl Driver {
             c.process_group(0);
             c
         };
-        let mut config = Map::new();
+        cmd.args(&self.config.args);
+        if start.pin.is_some() {
+            // Settings the user's config.toml can't loosen under a ceiling (levels.kdl `pin`).
+            cmd.args(crate::data::data().levels.pin_args());
+        }
         if let Some(mcp) = &start.mcp {
             cmd.env(MCP_TOKEN_ENV, &mcp.token);
-            let server = match (&mcp.url, &mcp.command) {
-                (Some(url), _) => json!({"url": url, "bearer_token_env_var": MCP_TOKEN_ENV}),
-                (None, Some(c)) if !c.is_empty() => {
-                    json!({"command": c[0], "args": &c[1..], "env_vars": [MCP_TOKEN_ENV]})
-                }
-                _ => Value::Null,
-            };
-            if !server.is_null() {
-                config.insert("mcp_servers".into(), json!({"parrot": server}));
-            }
         }
-        cmd.args(&self.config.args)
-            .envs(self.config.env.iter().cloned())
+        cmd.envs(self.config.env.iter().cloned())
             .current_dir(&start.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -542,6 +722,8 @@ impl Driver {
             .map_err(|e| RpcError::new(-32603, format!("cannot start codex: {e}")))?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout is piped");
+        let mut state = MapState::new(start.binding.clone());
+        state.cwd = start.cwd.clone();
         let b = Arc::new(Binding {
             id: start.binding.clone(),
             stdin: tokio::sync::Mutex::new(stdin),
@@ -558,6 +740,40 @@ impl Driver {
             .unwrap()
             .insert(start.binding.clone(), b.clone());
         tokio::spawn(read_loop(self.clone(), b.clone(), stdout));
+        Ok(b)
+    }
+
+    async fn start(self: &Arc<Self>, start: BindingStart) -> Result<Value, RpcError> {
+        let mut state = MapState::new(start.binding.clone());
+        state.cwd = start.cwd.clone();
+        let opt = |k: &str| start.options.get(k).and_then(Value::as_str).map(str::to_owned);
+        state.model = opt("model").filter(|m| m != "default");
+        state.effort = opt("effort");
+        if let Some(a) = opt("approvalPolicy") {
+            state.approval = known(Some(a), "approvalPolicy")?;
+        }
+        if let Some(s) = opt("sandbox") {
+            state.sandbox = known(Some(s), "sandbox")?;
+        }
+        if let Some(pin) = &start.pin {
+            state.apply_pin(pin);
+        }
+
+        let mut config = Map::new();
+        if let Some(mcp) = &start.mcp {
+            let server = match (&mcp.url, &mcp.command) {
+                (Some(url), _) => json!({"url": url, "bearer_token_env_var": MCP_TOKEN_ENV}),
+                (None, Some(c)) if !c.is_empty() => {
+                    json!({"command": c[0], "args": &c[1..], "env_vars": [MCP_TOKEN_ENV]})
+                }
+                _ => Value::Null,
+            };
+            if !server.is_null() {
+                config.insert("mcp_servers".into(), json!({"parrot": server}));
+            }
+        }
+        let b = self.spawn(&start)?;
+        *b.state.lock().unwrap() = state;
 
         let opening = tokio::spawn(open_thread(
             self.clone(),
@@ -588,7 +804,7 @@ impl Driver {
                 level: state.level(),
                 network: state.network(),
                 options: state.options(),
-                actions: mapping::actions(),
+                actions: state.actions(),
             }
         };
         Ok(to_value(&result))
@@ -606,9 +822,14 @@ async fn open_thread(
         "clientInfo": {"name": "parrot", "title": "Parrot", "version": env!("CARGO_PKG_VERSION")},
         "capabilities": {"experimentalApi": true},
     });
-    b.request("initialize", init, None)
+    let ready = b
+        .request("initialize", init, None)
         .await
         .map_err(|e| RpcError::new(-32603, format!("codex did not initialize: {}", e.message)))?;
+    // The user agent carries the CLI's version, which picks the egg's version shim.
+    if let Some(ua) = ready.get("userAgent").and_then(Value::as_str) {
+        crate::data::observe_version(ua);
+    }
     b.write(&Message::Notification {
         method: "initialized".into(),
         params: Value::Null,
@@ -678,7 +899,24 @@ async fn open_thread(
     let options = b.state.lock().unwrap().options_update();
     driver.emit(updates);
     driver.emit(vec![options, state_update(&b.id, State::Idle, None)]);
+    // The skill list comes after the start, so a slow answer doesn't hold the binding up.
+    let (d, sb) = (driver.clone(), b.clone());
+    tokio::spawn(async move { list_skills(&d, &sb).await });
     Ok(reference)
+}
+
+/// Asks Codex for the skills in the binding's directory and offers them as actions.
+async fn list_skills(driver: &Driver, b: &Binding) {
+    let cwd = b.state.lock().unwrap().cwd.clone();
+    let Ok(r) = b
+        .request("skills/list", json!({"cwds": [cwd], "forceReload": false}), None)
+        .await
+    else {
+        return;
+    };
+    if let Some(u) = b.state.lock().unwrap().skills_listed(&r) {
+        driver.emit(vec![u]);
+    }
 }
 
 fn known(value: Option<String>, key: &str) -> Result<String, RpcError> {
@@ -786,9 +1024,16 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
                 }
             }
             Message::Request { id, method, params } => {
-                let (updates, reply) = b.state.lock().unwrap().server_request(&id, &method, &params);
+                let thread = ServerNotification::thread_id(&params).map(str::to_owned);
+                let (updates, reply) =
+                    b.state
+                        .lock()
+                        .unwrap()
+                        .server_request_in(thread.as_deref(), &id, &method, &params, &at);
                 b.record(driver.config.shadow, &updates);
-                let raised = !updates.is_empty();
+                let raised = updates.iter().any(|u| {
+                    u.subagent.is_none() && matches!(&u.update, Open::Known(DriverUpdateKind::Request { .. }))
+                });
                 driver.emit(updates);
                 if let Some(reply) = reply {
                     let _ = b.write(&reply).await;
@@ -799,7 +1044,12 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             }
             Message::Notification { method, params } => {
                 let n = ServerNotification::parse(&method, &params);
-                let updates = b.state.lock().unwrap().step(&n, &at);
+                if method == "skills/changed" {
+                    let (driver, b) = (driver.clone(), b.clone());
+                    tokio::spawn(async move { list_skills(&driver, &b).await });
+                }
+                let thread = ServerNotification::thread_id(&params).map(str::to_owned);
+                let updates = b.state.lock().unwrap().step_in(thread.as_deref(), &n, &at);
                 b.record(driver.config.shadow, &updates);
                 let ended = ends_turn(&updates);
                 driver.emit(updates);
@@ -856,6 +1106,10 @@ pub fn agent() -> Agent {
     features.insert("session.history".into(), json!({}));
     features.insert("session.fork".into(), json!({"at": ["turn"]}));
     features.insert("session.steer".into(), json!({"when": "next_step"}));
+    features.insert(
+        "session.subagents".into(),
+        json!({"prompt": true, "cancel": true}),
+    );
     features.insert("attachments".into(), input::feature());
     features.insert(
         "usage".into(),
@@ -899,11 +1153,16 @@ pub const VERIFIED: (&str, &str) = ("0.167.0", "0.168.0");
 /// skills and MCP server names. What can't be found out is left out.
 pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
     use parrot_driver::probe;
+    // The version picks the version shim, so it is read before the options are built.
+    let version = probe::version(bin).await;
+    if let Some(v) = &version {
+        crate::data::observe_version(v);
+    }
     let mut a = agent();
     let home = std::env::var_os("CODEX_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".codex")));
-    match probe::version(bin).await {
+    match version {
         Some(v) => {
             a.harness = Some(parrot_proto::agent::HarnessInfo {
                 verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
@@ -916,10 +1175,17 @@ pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
             a.detail = Some("codex --version did not answer".into());
         }
     }
+    // `codex login status` also sees credentials kept in the OS keychain, where no auth.json
+    // exists; the file is the fallback when the command does not answer.
     let auth_file = home.as_ref().is_some_and(|h| h.join("auth.json").is_file());
-    if auth_file || std::env::var_os("OPENAI_API_KEY").is_some() {
-        a.auth = AuthStatus::SignedIn;
-    }
+    let status = probe::run(bin, &["login", "status"]).await;
+    a.auth = match status.as_ref().and_then(|o| o.code) {
+        Some(0) => AuthStatus::SignedIn,
+        _ if std::env::var_os("OPENAI_API_KEY").is_some() => AuthStatus::SignedIn,
+        Some(_) => AuthStatus::SignedOut,
+        None if auth_file => AuthStatus::SignedIn,
+        None => a.auth,
+    };
     let mut meta = Map::new();
     if let Some(h) = &home {
         let skills = probe::folders_with(&h.join("skills"), "SKILL.md");
@@ -935,6 +1201,33 @@ pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
         a.meta = Some(meta);
     }
     a
+}
+
+/// Starts a device-code sign-in and raises it as an auth request; returns the request's key.
+async fn login(b: &Binding) -> Result<String, RpcError> {
+    let on_ok: OnOk = Box::new(|state, result| {
+        let id = result.get("loginId").and_then(Value::as_str).unwrap_or_default();
+        let url = result
+            .get("verificationUrl")
+            .or_else(|| result.get("authUrl"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let code = result.get("userCode").and_then(Value::as_str);
+        state.login_started(id, url, code).1
+    });
+    // The key comes from the answer: the sign-in may already have ended by the time it returns.
+    let r = b
+        .request(
+            "account/login/start",
+            json!({"type": "chatgptDeviceCode"}),
+            Some(on_ok),
+        )
+        .await
+        .map_err(codex_error)?;
+    r.get("loginId")
+        .and_then(Value::as_str)
+        .map(|id| format!("login-{id}"))
+        .ok_or_else(|| RpcError::new(-32603, "codex started no sign-in"))
 }
 
 /// The current time in RFC 3339, UTC, to the millisecond.

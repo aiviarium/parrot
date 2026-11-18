@@ -1,0 +1,8 @@
+// A pinned start, a device-code sign-in and a turn started from a skill.
+{"args":["-c","approvals_reviewer=\"user\""]}
+{"expect":{"method":"account/login/start","params":{"type":"chatgptDeviceCode"}}}
+{"emit":{"id":"{{id}}","result":{"type":"chatgptDeviceCode","loginId":"login-fake-1","verificationUrl":"https://auth.example.test/device","userCode":"FAKE-1234"}}}
+{"emit":{"method":"account/login/completed","params":{"loginId":"login-fake-1","success":true,"error":null}}}
+{"expect":{"method":"turn/start","params":{"input":[{"type":"text","text":"$fake-lint check src"},{"type":"skill","name":"fake-lint","path":"/fake/skills/fake-lint/SKILL.md"}]}}}
+{"emit":{"id":"{{id}}","result":{"turn":{"id":"turn-k","items":[],"status":"inProgress","error":null}}}}
+{"emit":{"method":"turn/completed","params":{"threadId":"thr-fake-0001","turn":{"id":"turn-k","items":[],"status":"completed","error":null}}}}
