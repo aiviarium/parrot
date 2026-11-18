@@ -25,6 +25,8 @@ export function stdioTransport(command: string, args: string[] = [], options: St
     if (line !== "") handlers?.message(line)
   })
   child.stderr.on("data", () => {})
+  // A child that exits first leaves the pipe broken; the close handler reports that.
+  child.stdin.on("error", () => {})
   child.on("error", (error) => {
     closed = true
     handlers?.close(error)
@@ -39,7 +41,11 @@ export function stdioTransport(command: string, args: string[] = [], options: St
   return {
     send(text) {
       if (closed) return
-      child.stdin.write(`${text}\n`)
+      try {
+        child.stdin.write(`${text}\n`)
+      } catch {
+        // The close handler has already reported the broken pipe.
+      }
     },
     close() {
       closed = true
