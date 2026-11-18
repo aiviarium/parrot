@@ -58,19 +58,14 @@ mod tests {
 
     #[test]
     fn the_in_repo_eggs_are_valid() {
-        let packages = crate::builtin::packages();
+        let eggs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs");
+        let target = crate::ParrotTarget::default();
         for id in ["claude", "codex", "acp", "pi", "opencode", "t3"] {
-            let files = packages.get(id).unwrap_or_else(|| panic!("no egg for {id}"));
-            let data = files
-                .iter()
-                .filter_map(|(p, b)| p.strip_prefix("parrot/").map(|p| (p, *b)));
-            let problems = crate::target::check_files(data);
+            let dir = eggs.join(id);
+            let problems = crate::store::check_package(&dir, &target);
             assert!(problems.is_empty(), "{id}: {problems:?}");
-            let manifest =
-                hatchery::Manifest::parse(std::str::from_utf8(files["package.kdl"]).unwrap()).unwrap();
+            let manifest = hatchery::Manifest::load(&dir).unwrap();
             assert_eq!(manifest.name().id, id);
-            let eggs = crate::Eggs::new("/nonexistent");
-            assert_eq!(eggs.refusal(&manifest), None);
         }
     }
 }

@@ -1,4 +1,6 @@
-driver "builtin" name="pi"
+driver "command" {
+  run "variants/{os}-{arch}/parrot-driver-pi{exe}"
+}
 cli "pi" versions=">=1.0"
 data-version "1"
 controls "native"

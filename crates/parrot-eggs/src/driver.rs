@@ -9,8 +9,7 @@
 //!
 //! ```kdl
 //! driver "command" {
-//!   run "bin/driver"
-//!   variant os="linux" arch="x86_64" run="bin/linux-x86_64/driver"
+//!   run "variants/{os}-{arch}/driver{exe}"
 //! }
 //! cli "example" versions=">=1.0"
 //! data-version "1"
@@ -40,6 +39,20 @@ pub struct DriverFile {
     /// How many bindings one driver process serves; any number when left out (spec 30.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bindings: Option<u32>,
+    /// Version shims: folders whose files replace the egg's own for a range of harness
+    /// versions. The last listed range that holds the detected version wins (spec 31).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shims: Vec<ShimSpec>,
+}
+
+/// One `shim ">=2.2" dir="shims/2.2"` line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShimSpec {
+    /// A semver range of harness versions.
+    pub versions: String,
+    /// The folder, relative to the egg's `parrot` folder.
+    pub dir: String,
 }
 
 fn native_only() -> Vec<Control> {
@@ -101,6 +114,7 @@ impl DriverFile {
         let mut data_version = None;
         let mut controls = None;
         let mut bindings = None;
+        let mut shims = Vec::new();
         for node in doc.nodes() {
             match node.name().value() {
                 "driver" => driver = parse_run(node, &mut problems),
@@ -139,6 +153,18 @@ impl DriverFile {
                     }
                     controls = Some(list);
                 }
+                "shim" => match (kdlx::arg_str(node), kdlx::prop_str(node, "dir")) {
+                    (Some(v), Some(dir)) => {
+                        if hatchery::semver::VersionReq::parse(v).is_err() {
+                            problems.push(format!("shim versions {v:?} is not a semver range"));
+                        }
+                        shims.push(ShimSpec {
+                            versions: v.to_string(),
+                            dir: dir.to_string(),
+                        });
+                    }
+                    _ => problems.push("shim needs a version range and dir=".into()),
+                },
                 "bindings" => match kdlx::args(node).next().and_then(|v| v.as_integer()) {
                     Some(n) if n >= 1 && n <= i128::from(u32::MAX) => bindings = Some(n as u32),
                     _ => problems.push("bindings needs a positive number".into()),
@@ -159,13 +185,15 @@ impl DriverFile {
                 data_version,
                 controls: controls.unwrap_or_else(native_only),
                 bindings,
+                shims,
             }),
             _ => Err(problems),
         }
     }
 
     /// The command to run on `os`/`arch`, relative to the egg's `parrot` folder, with its
-    /// arguments. `None` for a built-in driver.
+    /// arguments. `None` for a built-in driver. In the path, `{os}` and `{arch}` become the
+    /// platform's names as Rust gives them, and `{exe}` becomes `.exe` on Windows.
     pub fn command_for(&self, os: &str, arch: &str) -> Option<Result<(String, Vec<String>), String>> {
         let DriverRun::Command { run, args, variants } = &self.driver else {
             return None;
@@ -178,8 +206,10 @@ impl DriverFile {
             .find(|v| matches(v))
             .map(|v| v.run.clone())
             .or_else(|| run.clone());
+        let exe = if os == "windows" { ".exe" } else { "" };
+        let fill = |p: &str| p.replace("{os}", os).replace("{arch}", arch).replace("{exe}", exe);
         Some(match program {
-            Some(p) => Ok((p, args.clone())),
+            Some(p) => Ok((fill(&p), args.clone())),
             None => Err(format!("the driver has no program for {os}-{arch}")),
         })
     }
@@ -302,5 +332,15 @@ data-version "1"
         .unwrap_err();
         assert_eq!(e.len(), 3, "{e:?}");
         assert!(DriverFile::parse("driver {").unwrap_err()[0].contains("not valid KDL"));
+    }
+
+    #[test]
+    fn fills_the_platform_into_a_command() {
+        let d = DriverFile::parse("driver \"command\" {\n  run \"variants/{os}-{arch}/d{exe}\"\n}\ndata-version \"1\"\n")
+            .unwrap();
+        let (run, _) = d.command_for("windows", "x86_64").unwrap().unwrap();
+        assert_eq!(run, "variants/windows-x86_64/d.exe");
+        let (run, _) = d.command_for("linux", "aarch64").unwrap().unwrap();
+        assert_eq!(run, "variants/linux-aarch64/d");
     }
 }

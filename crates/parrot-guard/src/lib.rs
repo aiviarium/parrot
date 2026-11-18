@@ -22,6 +22,15 @@ pub fn run(program: OsString, args: Vec<OsString>) -> std::io::Result<i32> {
     return windows::run(program, args);
 }
 
+/// Whether the current executable answers `guard`: `parrot` itself, or a standalone driver
+/// binary named `parrot-driver-<name>`.
+pub fn can_guard() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .is_some_and(|s| s == "parrot" || s.starts_with("parrot-driver-"))
+}
+
 /// A command that runs `program` through the current executable's `guard` subcommand.
 pub fn guarded_command(program: impl AsRef<OsStr>) -> tokio::process::Command {
     let exe = std::env::current_exe().unwrap_or_else(|_| "parrot".into());

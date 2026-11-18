@@ -1,6 +1,7 @@
 //! The agents the runtime knows (spec 6): which exist, how each is driven, and what discovery
-//! found. Agents come from installed driver eggs, fed in with [`load`]; the built-in list is the
-//! fallback when none are.
+//! found. Agents come from installed driver eggs, fed in with [`load`]. With no egg installed the
+//! runtime has no agents, and `agent/list` says how to install one. The built-in list is only the
+//! default of a core that never loads eggs, as in tests.
 //!
 //! When a driver reports the harness version it found, the agent's `harness.verified` says
 //! whether its egg's `cli versions` range covers it (spec 31). Sessions of an unverified agent
@@ -13,6 +14,9 @@ use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+/// What `agent/list` adds when no driver egg is installed.
+pub const NO_EGGS_HINT: &str = "No driver eggs are installed. Install one with `parrot eggs install aiviarium/claude` (or codex, pi, opencode, t3, acp), then restart `parrot serve`.";
 
 /// What a driver egg says about its agent.
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +87,7 @@ pub fn record(egg: &AgentEgg) -> Value {
 pub fn load(state: &mut State, eggs: Vec<AgentEgg>) {
     state.sessions.agents.clear();
     state.sessions.eggs.clear();
+    state.sessions.eggs_loaded = true;
     for egg in eggs {
         state.sessions.agents.insert(egg.id.clone(), record(&egg));
         state.sessions.eggs.insert(egg.id.clone(), egg);
@@ -92,7 +97,7 @@ pub fn load(state: &mut State, eggs: Vec<AgentEgg>) {
 /// Put back an agent read from the store. What its egg says wins over the stored copy, since
 /// the egg may have changed since.
 pub fn restore(state: &mut State, id: String, mut value: Value) {
-    if !state.sessions.eggs.is_empty() && !state.sessions.eggs.contains_key(&id) {
+    if state.sessions.eggs_loaded && !state.sessions.eggs.contains_key(&id) {
         // Its egg is gone: the agent is no longer known.
         return;
     }
@@ -166,9 +171,14 @@ pub fn session_harness(state: &State, agent: &str) -> Option<Value> {
 /// `agent/*` methods.
 pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, params: Value) -> Reply {
     match method {
-        "agent/list" => {
-            Reply::Now(check(cx.state, conn, Scope::Read).map(|()| json!({ "agents": agents(cx.state) })))
-        }
+        "agent/list" => Reply::Now(check(cx.state, conn, Scope::Read).map(|()| {
+            let agents = agents(cx.state);
+            if agents.is_empty() && cx.state.sessions.eggs_loaded {
+                json!({ "agents": agents, "hint": NO_EGGS_HINT })
+            } else {
+                json!({ "agents": agents })
+            }
+        })),
         "agent/refresh" => refresh(cx, conn, id, params),
         _ => crate::sessions::call(cx, conn, id, method, params),
     }

@@ -1,4 +1,6 @@
-driver "builtin" name="t3"
+driver "command" {
+  run "variants/{os}-{arch}/parrot-driver-t3{exe}"
+}
 cli "t3"
 data-version "1"
 controls "native"

@@ -57,10 +57,7 @@ pub struct Config {
 impl Config {
     /// `PARROT_PI_BIN` or `pi`, guarded when running as `parrot`.
     pub fn from_env() -> Self {
-        let guard = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_stem().map(|s| s == "parrot"))
-            .unwrap_or(false);
+        let guard = parrot_guard::can_guard();
         let mut data = DriverData::load(builtin);
         data.fill(default_data());
         Config {
@@ -214,6 +211,7 @@ impl Driver {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![agent(&self.config.data)],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/prompt" => {
@@ -768,9 +766,9 @@ pub fn agent(data: &DriverData) -> Agent {
         data.levels.clone()
     };
     Agent {
-        id: "pi".into(),
+        id: parrot_proto::driver_data::agent_id("pi"),
         env: String::new(),
-        name: "Pi".into(),
+        name: parrot_proto::driver_data::agent_name("Pi"),
         driver: AgentDriver {
             name: "pi".into(),
             version: env!("CARGO_PKG_VERSION").into(),

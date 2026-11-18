@@ -63,10 +63,7 @@ pub struct Config {
 impl Config {
     /// `PARROT_CODEX_BIN` or `codex`, guarded when running as `parrot`.
     pub fn from_env() -> Self {
-        let guard = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_stem().map(|s| s == "parrot"))
-            .unwrap_or(false);
+        let guard = parrot_guard::can_guard();
         Config {
             codex_bin: std::env::var_os(CODEX_BIN_ENV).unwrap_or_else(|| "codex".into()),
             args: vec!["app-server".into()],
@@ -265,6 +262,7 @@ impl Driver {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![probed(&self.config.codex_bin).await],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/fork" => {
@@ -864,9 +862,9 @@ pub fn agent() -> Agent {
         json!({"cost": false, "context": true, "rateLimits": true}),
     );
     Agent {
-        id: "codex".into(),
+        id: parrot_proto::driver_data::agent_id("codex"),
         env: String::new(),
-        name: "Codex".into(),
+        name: parrot_proto::driver_data::agent_name("Codex"),
         driver: AgentDriver {
             name: "codex".into(),
             version: env!("CARGO_PKG_VERSION").into(),

@@ -199,7 +199,7 @@ impl RuntimeBackend {
         self
     }
 
-    /// Resolves drivers from these eggs instead of the compiled-in list.
+    /// Resolves drivers from these eggs.
     pub fn with_drivers(mut self, drivers: crate::drivers::Drivers) -> Self {
         self.drivers = Some(std::sync::Arc::new(drivers));
         self
@@ -211,7 +211,7 @@ impl RuntimeBackend {
         }
         match &self.drivers {
             Some(drivers) => drivers.resolve(agent),
-            None => crate::drivers::resolve(agent),
+            None => Err(format!("no driver egg for agent {agent}")),
         }
     }
 
@@ -365,7 +365,10 @@ impl Backend for RuntimeBackend {
 
     fn agent_call(&mut self, agent: String, call: u64, method: String, params: Value) {
         let rt = self.rt.clone();
-        if let Some(a) = self.tui.get(&agent) {
+        // An agent with a native driver answers agent calls through it, even when it can also
+        // run under TUI control.
+        let native = self.resolve(&agent);
+        if let (Some(a), Err(_)) = (self.tui.get(&agent), &native) {
             let config = crate::tui::driver_config(&agent, a);
             tokio::spawn(async move {
                 let result = match config {
@@ -383,9 +386,8 @@ impl Backend for RuntimeBackend {
             });
             return;
         }
-        let cmd = self.resolve(&agent);
         tokio::spawn(async move {
-            let result = match cmd {
+            let result = match native {
                 Ok(cmd) => ask_driver(&cmd, &method, params).await,
                 Err(detail) => Err(RpcError::new(DRIVER_FAILED, detail)),
             };

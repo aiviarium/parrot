@@ -5,6 +5,7 @@ pub mod dialog;
 pub mod driver;
 pub mod frame;
 pub mod input;
+pub mod stdio;
 pub mod transcript;
 
 pub use driver::{Config, TranscriptDir, TuiDriver};

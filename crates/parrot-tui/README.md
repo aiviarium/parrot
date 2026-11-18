@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use parrot_tui::{Profile, SessionExt};
 
-let profile = Profile::load("packages/parrot-agents/tui/claude-code.kdl")?;
+let profile = Profile::load("eggs/claude/parrot/profile.kdl")?;
 let tui = session.automate(Some(profile));
 tui.wait_for_state("idle", Duration::from_secs(30)).await?;
 let vars = HashMap::from([("text".to_string(), "run the tests".to_string())]);
@@ -52,8 +52,8 @@ text  heading  status  progress  hint  scroll  separator
 
 ## Profiles
 
-A profile is a KDL file with these top-level nodes. The profiles for Claude Code and Codex are in
-`packages/parrot-agents/tui/`, and each egg has a copy as `eggs/<agent>/parrot/profile.kdl`.
+A profile is a KDL file with these top-level nodes. The live profiles for Claude Code and Codex
+are in their eggs, as `eggs/<agent>/parrot/profile.kdl`.
 
 | Node | What it holds |
 | --- | --- |

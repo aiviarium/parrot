@@ -245,6 +245,18 @@ impl TuiDriver {
     }
 }
 
+impl TuiDriver {
+    /// A call handler that outlives a borrow of the driver, for serving calls concurrently.
+    /// The driver itself must stay alive: dropping it kills every binding.
+    pub fn handle(&self) -> impl Fn(String, Value) -> parrot_driver::bin::Reply + Send + Sync + 'static {
+        let shared = self.shared.clone();
+        move |method, params| {
+            let shared = shared.clone();
+            Box::pin(async move { shared.handle(&method, params).await })
+        }
+    }
+}
+
 impl Driver for TuiDriver {
     fn call(
         &mut self,
@@ -305,6 +317,7 @@ impl Shared {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![self.agent()],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/prompt" => self.prompt(params(p)?).await,

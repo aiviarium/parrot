@@ -169,8 +169,8 @@ with Enter) and `codex-holdout` (90x28: a short answer, an approval, the model p
 - **Codex model picker**: `Select Model and Effort` with numbered models, then `Select Reasoning
   Level for …`. A long prompt wraps with the cursor on the second line.
 
-Profiles in truth files are frozen copies in `../profiles` of the ones in `packages/parrot-agents/tui/`,
-so the crate's tests do not change when the agent package's profiles do. When updating a profile, copy it
+Profiles in truth files are frozen copies in `../profiles` of the ones in `eggs/<agent>/parrot/profile.kdl`,
+so the crate's tests do not change when the eggs' profiles do. When updating a profile, copy it
 into that directory and run `cargo test -p parrot-tui`.
 Development casts also live in `crates/parrot-term/fixtures/casts` for emulator regression tests; refresh
 both copies when re-recording a shared cast. Live recording examples still run real CLIs by hand.

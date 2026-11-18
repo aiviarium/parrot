@@ -92,11 +92,7 @@ pub fn load_from(dir: &Path) -> Data {
     if let Ok(text) = std::fs::read_to_string(dir.join("driver.kdl")) {
         for line in text.lines() {
             let line = line.trim();
-            if let Some(rest) = line.strip_prefix("driver ") {
-                if let Some(name) = property(rest, "name") {
-                    data.agent_name = name;
-                }
-            } else if let Some(rest) = line.strip_prefix("command ") {
+            if let Some(rest) = line.strip_prefix("command ") {
                 let argv = strings(rest);
                 if !argv.is_empty() {
                     data.command = Some(argv);
@@ -132,20 +128,6 @@ fn strings(line: &str) -> Vec<String> {
     out
 }
 
-/// The value of `key="value"` or `key=value` on a line.
-fn property(line: &str, key: &str) -> Option<String> {
-    let at = line.find(&format!("{key}="))? + key.len() + 1;
-    let rest = line[at..].trim_start();
-    if let Some(stripped) = rest.strip_prefix('"') {
-        let end = stripped.find('"')?;
-        return Some(stripped[..end].to_owned());
-    }
-    let end = rest
-        .find(|c: char| c.is_whitespace() || c == ';' || c == '}')
-        .unwrap_or(rest.len());
-    Some(rest[..end].to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,7 +156,7 @@ level "write" { tool "Change"; }
         std::fs::write(
             dir.path().join("driver.kdl"),
             r#"
-driver "builtin" name="Example ACP"
+driver "builtin" name="acp"
 command "acp-agent" "--acp"
 data-version "7"
             "#,
@@ -183,7 +165,6 @@ data-version "7"
         let data = load_from(dir.path());
         assert_eq!(data.level_of(Some("careful")), (PermissionLevel::Read, false));
         assert_eq!(data.tool_level("other", "Change"), PermissionLevel::Write);
-        assert_eq!(data.agent_name, "Example ACP");
         assert_eq!(data.command, Some(vec!["acp-agent".into(), "--acp".into()]));
         assert_eq!(data.version, "7");
     }
