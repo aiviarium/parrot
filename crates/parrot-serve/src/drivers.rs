@@ -184,7 +184,14 @@ fn agent_egg(egg: &LoadedEgg) -> AgentEgg {
         controls,
         cli_versions,
         refused: egg.driver.as_ref().err().cloned(),
+        tool_timeout: limits(egg).and_then(|l| l.tool_timeout()),
     }
+}
+
+/// The egg's `limits.kdl`, if it has one that reads.
+fn limits(egg: &LoadedEgg) -> Option<parrot_proto::driver_data::LimitsFile> {
+    let text = std::fs::read_to_string(egg.data_dir.join("limits.kdl")).ok()?;
+    parrot_proto::driver_data::parse("limits.kdl", &text).ok()
 }
 
 fn parrot_exe() -> Result<PathBuf, String> {

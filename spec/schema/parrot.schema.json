@@ -1053,6 +1053,33 @@
         "bundle"
       ]
     },
+    "BlobPutParams": {
+      "type": "object",
+      "properties": {
+        "transfer": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "data": {
+          "type": "string",
+          "description": "Base64."
+        },
+        "last": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "transfer",
+        "index",
+        "data",
+        "last"
+      ],
+      "description": "One chunk of a transfer over a link, at most 1 MiB (E9)."
+    },
     "Budget": {
       "type": "object",
       "properties": {
@@ -1122,6 +1149,79 @@
         "model",
         "script"
       ]
+    },
+    "CarrierInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "target": true,
+        "listens": {
+          "type": "boolean"
+        },
+        "containment": {
+          "type": "string"
+        },
+        "maxMessage": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "title",
+        "target",
+        "listens",
+        "containment",
+        "maxMessage"
+      ]
+    },
+    "CarrierListResult": {
+      "type": "object",
+      "properties": {
+        "carriers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CarrierInfo"
+          }
+        }
+      },
+      "required": [
+        "carriers"
+      ]
+    },
+    "CarrierRef": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "`ssh`, `command`, `tcp`, or a carrier egg's name."
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Validated against the carrier's target schema."
+        },
+        "fallback": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/CarrierRef"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "target"
+      ],
+      "description": "How a runtime reaches its peer."
     },
     "Carry": {
       "type": "string",
@@ -2376,6 +2476,387 @@
       ],
       "description": "`data` of `-32003`."
     },
+    "FunctionCallParams": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "type": "string"
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": true,
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The session the call is for; the runtime sets it on calls it forwards."
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Seconds to wait for an approval, capped by the harness's tool-call timeout (27.2)."
+        }
+      },
+      "required": [
+        "function",
+        "input"
+      ],
+      "description": "`function/call`, from a client to the runtime and from the runtime to the providing client."
+    },
+    "FunctionContent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            },
+            "data": {
+              "type": "string"
+            },
+            "mime": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "mime"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "uri"
+          ]
+        }
+      ]
+    },
+    "FunctionDescribeParams": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "names"
+      ]
+    },
+    "FunctionDescribeResult": {
+      "type": "object",
+      "properties": {
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FunctionInfo"
+          }
+        },
+        "declarations": {
+          "type": "string",
+          "description": "The functions as TypeScript declarations."
+        }
+      },
+      "required": [
+        "functions",
+        "declarations"
+      ]
+    },
+    "FunctionError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "FunctionExample": {
+      "type": "object",
+      "properties": {
+        "input": true,
+        "output": true
+      },
+      "required": [
+        "input"
+      ]
+    },
+    "FunctionInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Namespaced, dot-separated; `parrot.` is reserved for this spec (27.1)."
+        },
+        "description": {
+          "type": "string"
+        },
+        "input": true,
+        "output": true,
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Effect"
+          }
+        },
+        "level": {
+          "$ref": "#/$defs/PermissionLevel",
+          "description": "The lowest permission level that allows a call without asking (E5)."
+        },
+        "examples": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/FunctionExample"
+          }
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pinned": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Listed directly to harnesses (26)."
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input",
+        "effects",
+        "level"
+      ],
+      "additionalProperties": true,
+      "description": "A function with its provider: `runtime`, a connection id or a link id."
+    },
+    "FunctionListParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "FunctionListResult": {
+      "type": "object",
+      "properties": {
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FunctionInfo"
+          }
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "functions"
+      ]
+    },
+    "FunctionProvideParams": {
+      "type": "object",
+      "properties": {
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FunctionSpec"
+          }
+        }
+      },
+      "required": [
+        "functions"
+      ]
+    },
+    "FunctionResult": {
+      "type": "object",
+      "properties": {
+        "output": true,
+        "content": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/FunctionContent"
+          }
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FunctionError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "The result of `function/call`, from the runtime to a client and from a provider to the\nruntime."
+    },
+    "FunctionSearchParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "FunctionSpec": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Namespaced, dot-separated; `parrot.` is reserved for this spec (27.1)."
+        },
+        "description": {
+          "type": "string"
+        },
+        "input": true,
+        "output": true,
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Effect"
+          }
+        },
+        "level": {
+          "$ref": "#/$defs/PermissionLevel",
+          "description": "The lowest permission level that allows a call without asking (E5)."
+        },
+        "examples": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/FunctionExample"
+          }
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pinned": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Listed directly to harnesses (26)."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input",
+        "effects",
+        "level"
+      ],
+      "additionalProperties": true,
+      "description": "A function a provider offers."
+    },
     "HandoffItem": {
       "type": "object",
       "properties": {
@@ -3271,6 +3752,279 @@
         }
       },
       "description": "`levels.kdl`: the tools each level allows, and the level each combination of option values\ngives (spec 15.2, Appendix E4)."
+    },
+    "LimitsFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool-timeout": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "description": "`tool-timeout 60`: how many seconds the harness waits for one tool call, MCP calls\nincluded. Calls into Parrot return before it, less a margin.",
+          "default": []
+        }
+      },
+      "description": "`limits.kdl`: numbers the harness imposes (spec 31, 27.2)."
+    },
+    "Link": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "peer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinkPeer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "carrier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CarrierRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grant": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "offer": {
+          "$ref": "#/$defs/LinkOffer"
+        },
+        "containment": {
+          "type": "string",
+          "description": "`restricted`, `shell` or `unknown` (24.4)."
+        },
+        "status": {
+          "type": "string",
+          "description": "`connected`, `connecting`, `down` or `unpaired`."
+        },
+        "via": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "grant",
+        "offer",
+        "containment",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+    "LinkAddParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "carrier": {
+          "$ref": "#/$defs/CarrierRef"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grant": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "offer": {
+          "$ref": "#/$defs/LinkOffer"
+        },
+        "ask": {
+          "description": "Pairing over the carrier: the grant and offer to ask the peer for (24.3)."
+        }
+      },
+      "required": [
+        "name",
+        "carrier",
+        "grant",
+        "offer"
+      ]
+    },
+    "LinkInviteParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "grant": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "offer": {
+          "$ref": "#/$defs/LinkOffer"
+        },
+        "expires": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "grant",
+        "offer"
+      ]
+    },
+    "LinkInviteResult": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "A pairing code, valid once."
+        },
+        "link": {
+          "$ref": "#/$defs/Link"
+        }
+      },
+      "required": [
+        "code",
+        "link"
+      ]
+    },
+    "LinkListResult": {
+      "type": "object",
+      "properties": {
+        "links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Link"
+          }
+        }
+      },
+      "required": [
+        "links"
+      ]
+    },
+    "LinkOffer": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "env",
+        "sessions"
+      ],
+      "description": "What a link shows its peer: the environment, and `none`, `linked` or `all` sessions."
+    },
+    "LinkPeer": {
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string",
+          "description": "The peer's public key, pinned at pairing."
+        }
+      },
+      "required": [
+        "runtime",
+        "key"
+      ]
+    },
+    "LinkRemoveParams": {
+      "type": "object",
+      "properties": {
+        "link": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "link"
+      ]
+    },
+    "LinkResult": {
+      "type": "object",
+      "properties": {
+        "link": {
+          "$ref": "#/$defs/Link"
+        }
+      },
+      "required": [
+        "link"
+      ]
+    },
+    "LinkUpdateParams": {
+      "type": "object",
+      "properties": {
+        "link": {
+          "type": "string"
+        },
+        "carrier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CarrierRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grant": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "offer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinkOffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "link"
+      ]
     },
     "McpInjection": {
       "type": "object",
@@ -4924,6 +5678,47 @@
       ],
       "description": "The result of `session/start` and `session/rebind`."
     },
+    "SessionBundleParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A turn id; the latest when left out."
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`none` or `source`; `source` asks the source to summarize itself and needs `delegate`."
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionBundleResult": {
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "description": "The `ContextBundle` (23.2)."
+        },
+        "rendered": {
+          "type": "string",
+          "description": "The bundle as Markdown (Appendix D)."
+        }
+      },
+      "required": [
+        "bundle",
+        "rendered"
+      ]
+    },
     "SessionCancelParams": {
       "type": "object",
       "properties": {
@@ -4957,6 +5752,62 @@
         "interrupted",
         "queued"
       ]
+    },
+    "SessionCommitParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "A move's second phase: the target owns the session on receipt (E9)."
+    },
+    "SessionConfigureParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "ceiling": {
+          "description": "A `Ceiling` (22)."
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Budget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wake": {
+          "description": "A `Wake` (20)."
+        },
+        "onParentEnd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OnParentEnd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "`session/configure` (Appendix E8): `delegate` on a subtree, `manage` on a root."
     },
     "SessionDiscoverParams": {
       "type": "object",
@@ -5110,7 +5961,15 @@
           ]
         },
         "workspace": {
-          "$ref": "#/$defs/WorkspaceRequest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required, unless a `seed` that carries the workspace gives one (23.1)."
         },
         "cwd": {
           "type": [
@@ -5210,8 +6069,7 @@
         }
       },
       "required": [
-        "agent",
-        "workspace"
+        "agent"
       ],
       "additionalProperties": true,
       "description": "`NewSession` in the spec."
@@ -5235,6 +6093,19 @@
         "head"
       ],
       "description": "The result of `session/new` and `session/adopt`."
+    },
+    "SessionOfferParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "additionalProperties": true,
+      "description": "A move's first phase, from the owner (E1). The log travels as `blob/put` chunks."
     },
     "SessionParent": {
       "type": "object",
@@ -6061,6 +6932,112 @@
         }
       ]
     },
+    "TaskAssignParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRequest"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "task"
+      ]
+    },
+    "TaskAssignResult": {
+      "type": "object",
+      "properties": {
+        "task": true
+      },
+      "required": [
+        "task"
+      ],
+      "description": "The result of `task/assign`: the session's new `Task`."
+    },
+    "TaskChange": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "task": {
+          "description": "The session's `Task` as it is now."
+        }
+      },
+      "required": [
+        "session",
+        "task"
+      ]
+    },
+    "TaskFailParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "error"
+      ]
+    },
+    "TaskFinishParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "output": {
+          "description": "Structured when the task has a `result` schema, else `{ text }`."
+        }
+      },
+      "required": [
+        "session",
+        "output"
+      ]
+    },
+    "TaskRequest": {
+      "type": "object",
+      "properties": {
+        "brief": {
+          "type": "string",
+          "description": "The child's first prompt."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "A JSON Schema the output must match."
+        },
+        "completeOn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`finish` or `idle`."
+        }
+      },
+      "required": [
+        "brief"
+      ],
+      "additionalProperties": true,
+      "description": "`TaskRequest` (19)."
+    },
     "TaskStatus": {
       "type": "string",
       "enum": [
@@ -6072,6 +7049,58 @@
         "interrupted"
       ],
       "description": "A task's status as summaries carry it. `interrupted` comes from Appendix E7."
+    },
+    "TaskWaitParams": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A cursor from an earlier call; the first call leaves it out."
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Seconds, capped by the harness's tool-call timeout (20.1)."
+        }
+      },
+      "required": [
+        "sessions"
+      ]
+    },
+    "TaskWaitResult": {
+      "type": "object",
+      "properties": {
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskChange"
+          }
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "timedOut": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "changes",
+        "cursor",
+        "timedOut"
+      ]
     },
     "TextItem": {
       "type": "object",
@@ -6144,6 +7173,148 @@
       ],
       "description": "An `assistant` item; `text` is Markdown.",
       "additionalProperties": true
+    },
+    "Token": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "sessions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Limits the token to these sessions' subtrees."
+        },
+        "provides": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Patterns of the functions the token may provide."
+        },
+        "expires": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created": {
+          "type": "string"
+        },
+        "lastUsed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "scopes",
+        "created"
+      ],
+      "description": "A client token for WebSocket connections (spec 3.4, Appendix E8)."
+    },
+    "TokenCreateParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          }
+        },
+        "sessions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "provides": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "expires": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "scopes"
+      ]
+    },
+    "TokenCreateResult": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "$ref": "#/$defs/Token"
+        },
+        "secret": {
+          "type": "string",
+          "description": "Shown once."
+        }
+      },
+      "required": [
+        "token",
+        "secret"
+      ]
+    },
+    "TokenListResult": {
+      "type": "object",
+      "properties": {
+        "tokens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Token"
+          }
+        }
+      },
+      "required": [
+        "tokens"
+      ]
+    },
+    "TokenRevokeParams": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ]
     },
     "TokenUsage": {
       "type": "object",
@@ -7573,12 +8744,68 @@
         "$ref": "#/$defs/Empty"
       }
     },
+    "blob/put": {
+      "params": {
+        "$ref": "#/$defs/BlobPutParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "carrier/list": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/CarrierListResult"
+      }
+    },
     "env/list": {
       "params": {
         "$ref": "#/$defs/Empty"
       },
       "result": {
         "$ref": "#/$defs/EnvListResult"
+      }
+    },
+    "function/call": {
+      "params": {
+        "$ref": "#/$defs/FunctionCallParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FunctionResult"
+      }
+    },
+    "function/describe": {
+      "params": {
+        "$ref": "#/$defs/FunctionDescribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FunctionDescribeResult"
+      }
+    },
+    "function/list": {
+      "params": {
+        "$ref": "#/$defs/FunctionListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FunctionListResult"
+      }
+    },
+    "function/provide": {
+      "params": {
+        "$ref": "#/$defs/FunctionProvideParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "function/search": {
+      "params": {
+        "$ref": "#/$defs/FunctionSearchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FunctionListResult"
       }
     },
     "history/discover": {
@@ -7611,6 +8838,46 @@
       },
       "result": {
         "$ref": "#/$defs/ItemGetResult"
+      }
+    },
+    "link/add": {
+      "params": {
+        "$ref": "#/$defs/LinkAddParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LinkResult"
+      }
+    },
+    "link/invite": {
+      "params": {
+        "$ref": "#/$defs/LinkInviteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LinkInviteResult"
+      }
+    },
+    "link/list": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/LinkListResult"
+      }
+    },
+    "link/remove": {
+      "params": {
+        "$ref": "#/$defs/LinkRemoveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "link/update": {
+      "params": {
+        "$ref": "#/$defs/LinkUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LinkResult"
       }
     },
     "option/complete": {
@@ -7709,12 +8976,28 @@
         "$ref": "#/$defs/RequestListResult"
       }
     },
+    "session/adopt": {
+      "params": {
+        "$ref": "#/$defs/SessionAdoptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionNewResult"
+      }
+    },
     "session/archive": {
       "params": {
         "$ref": "#/$defs/SessionArchiveParams"
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/bundle": {
+      "params": {
+        "$ref": "#/$defs/SessionBundleParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionBundleResult"
       }
     },
     "session/cancel": {
@@ -7725,12 +9008,36 @@
         "$ref": "#/$defs/SessionCancelResult"
       }
     },
+    "session/commit": {
+      "params": {
+        "$ref": "#/$defs/SessionCommitParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/configure": {
+      "params": {
+        "$ref": "#/$defs/SessionConfigureParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
     "session/delete": {
       "params": {
         "$ref": "#/$defs/SessionRef"
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "session/discover": {
+      "params": {
+        "$ref": "#/$defs/SessionDiscoverParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionDiscoverResult"
       }
     },
     "session/get": {
@@ -7765,12 +9072,28 @@
         "$ref": "#/$defs/SessionNewResult"
       }
     },
+    "session/offer": {
+      "params": {
+        "$ref": "#/$defs/SessionOfferParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
     "session/prompt": {
       "params": {
         "$ref": "#/$defs/SessionPromptParams"
       },
       "result": {
         "$ref": "#/$defs/SessionPromptResult"
+      }
+    },
+    "session/read": {
+      "params": {
+        "$ref": "#/$defs/SessionReadParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionReadResult"
       }
     },
     "session/rebind": {
@@ -7837,6 +9160,62 @@
         "$ref": "#/$defs/SubscribeResult"
       }
     },
+    "task/assign": {
+      "params": {
+        "$ref": "#/$defs/TaskAssignParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TaskAssignResult"
+      }
+    },
+    "task/fail": {
+      "params": {
+        "$ref": "#/$defs/TaskFailParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "task/finish": {
+      "params": {
+        "$ref": "#/$defs/TaskFinishParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "task/wait": {
+      "params": {
+        "$ref": "#/$defs/TaskWaitParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TaskWaitResult"
+      }
+    },
+    "token/create": {
+      "params": {
+        "$ref": "#/$defs/TokenCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TokenCreateResult"
+      }
+    },
+    "token/list": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/TokenListResult"
+      }
+    },
+    "token/revoke": {
+      "params": {
+        "$ref": "#/$defs/TokenRevokeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
     "unsubscribe": {
       "params": {
         "$ref": "#/$defs/UnsubscribeParams"
@@ -7891,6 +9270,16 @@
       },
       "result": {
         "$ref": "#/$defs/WorkspaceResult"
+      }
+    }
+  },
+  "x-client-methods": {
+    "function/call": {
+      "params": {
+        "$ref": "#/$defs/FunctionCallParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FunctionResult"
       }
     }
   },

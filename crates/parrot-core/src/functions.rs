@@ -423,6 +423,16 @@ fn pending(request: &str) -> Value {
         "request": request } })
 }
 
+/// How long a session's call waits for its approval: within its harness's tool-call timeout
+/// from `limits.kdl`, less a margin, and never over [`MAX_WAIT_MS`] (27.2).
+pub fn approval_wait_ms(state: &crate::State, session: &str) -> u64 {
+    let timeout = crate::directory::binding_of(state, session)
+        .and_then(|b| state.bindings.by_id.get(&b).map(|r| r.agent.clone()))
+        .and_then(|agent| crate::agents::tool_timeout(state, &agent));
+    let limit = parrot_proto::driver_data::call_limit_ms(timeout, MAX_WAIT_MS);
+    state.functions.wait_ms.map_or(limit, |w| w.min(limit))
+}
+
 /// Opens a request for a call that needs one, and waits within the time limit (E5, 27.2).
 fn open_approval(
     cx: &mut Cx,
@@ -485,7 +495,7 @@ fn open_approval(
         .as_u64()
         .map(|s| s.saturating_mul(1000))
         .unwrap_or(u64::MAX)
-        .min(cx.state.functions.wait_ms.unwrap_or(MAX_WAIT_MS));
+        .min(approval_wait_ms(cx.state, session));
     let deadline_ms = cx.now_ms + wait;
     cx.emit(Effect::TimerAt { at_ms: deadline_ms });
     if let Some(k) = &key {
@@ -787,15 +797,21 @@ pub fn on_reply(cx: &mut Cx, call: u64, result: Result<Value, RpcError>) {
 
 /// The `mcp` entry of a binding's `BindingStart` (spec 26, 30.1), or `None` without functions.
 /// The token is for this binding only; drivers pass it to `parrot mcp` in `PARROT_MCP_TOKEN`.
-pub fn mcp_for(cx: &mut Cx, _session: &str, binding: &str) -> Option<Value> {
+pub fn mcp_for(cx: &mut Cx, session: &str, binding: &str) -> Option<Value> {
     let program = cx.state.functions.mcp.clone()?;
+    let agent = cx.state.sessions.by_id.get(session).map(|s| s.agent.clone());
+    let timeout = agent.and_then(|a| crate::agents::tool_timeout(cx.state, &a));
     let token = format!("{}{}", cx.ids.next("mcp"), cx.ids.next("k"));
     cx.state.functions.tokens.retain(|_, b| b != binding);
     cx.state
         .functions
         .tokens
         .insert(token.clone(), binding.to_string());
-    Some(json!({ "command": [program, "mcp", "--binding", binding], "token": token }))
+    let mut command = vec![program, "mcp".into(), "--binding".into(), binding.to_string()];
+    if let Some(t) = timeout {
+        command.extend(["--tool-timeout".to_string(), t.to_string()]);
+    }
+    Some(json!({ "command": command, "token": token }))
 }
 
 /// The session a binding's MCP credential stands for, if `token` is that binding's.

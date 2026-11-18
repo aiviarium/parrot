@@ -242,3 +242,33 @@ fn effects_the_ceiling_does_not_list_open_a_request() {
     assert!(reply(&effects, &id).is_none());
     assert_eq!(sim.core.state.functions.approvals.len(), 1);
 }
+
+#[test]
+fn the_wait_follows_the_harness_tool_timeout_from_its_egg() {
+    use parrot_core::agents::AgentEgg;
+    use parrot_proto::agent::{Control, DriverKind};
+    let egg = |timeout| AgentEgg {
+        id: "claude".into(),
+        name: "Claude".into(),
+        driver_name: "claude".into(),
+        driver_version: "1".into(),
+        kind: DriverKind::Process,
+        data: "1".into(),
+        controls: vec![Control::Native],
+        cli_versions: None,
+        refused: None,
+        tool_timeout: timeout,
+    };
+    let (mut sim, session) = setup();
+    sim.core.state.functions.wait_ms = None;
+    assert_eq!(parrot_core::functions::approval_wait_ms(&sim.core.state, &session), 170_000);
+    parrot_core::agents::load(&mut sim.core.state, vec![egg(Some(60))]);
+    // 60 seconds less a tenth.
+    assert_eq!(parrot_core::functions::approval_wait_ms(&sim.core.state, &session), 54_000);
+    let (_, effects) = sim.send("con_o", "function/call", call_params(&session, "acme.deploy", "k9"));
+    let id = json!(sim.next_id);
+    assert!(reply(&effects, &id).is_none(), "the call waits");
+    assert!(reply(&sim.advance(53_000), &id).is_none(), "still within the limit");
+    let r = reply(&sim.advance(1_000), &id).expect("an answer at the limit").unwrap();
+    assert_eq!(r["error"]["code"], "pending_approval", "{r}");
+}

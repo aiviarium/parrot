@@ -407,7 +407,7 @@ interface Background { id: string; kind: "task" | "subagent" | "command" | strin
 interface NewSession {
   agent: string
   env?: string                     // default: the parent's env, else the local env
-  workspace: WorkspaceRequest      // required: where work happens is always an explicit choice
+  workspace?: WorkspaceRequest     // required unless a seed carries the workspace (23.1): where work happens is always an explicit choice
   cwd?: string
   options?: Record<string, Json>
   title?: string
@@ -1665,6 +1665,8 @@ with the `parrot` target, versioned separately from the runtime, as KDL files:
   announced as features.
 - The runtime's Rust types are the source. `schemars` generates the JSON Schema (including driver data
   files), which is committed; the TypeScript client is generated from it; CI fails on a stale schema.
+  The schema's `x-methods` lists the methods a client or runtime calls, `x-client-methods` the
+  requests a runtime sends to a client, and `x-notifications` the notifications.
 - Open unions use a custom `Open<T>` (a known variant, or the raw `serde_json::Value`), since
   `#[serde(other)]` covers only unit variants. Every struct keeps unknown fields in
   `#[serde(flatten)] extra`. Patches apply to `serde_json::Map`.

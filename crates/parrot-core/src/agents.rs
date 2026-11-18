@@ -33,6 +33,8 @@ pub struct AgentEgg {
     pub cli_versions: Option<String>,
     /// Why the egg can't be used, such as a `requires parrot` this runtime doesn't meet.
     pub refused: Option<String>,
+    /// The harness's tool-call timeout in seconds, from the egg's `limits.kdl`.
+    pub tool_timeout: Option<u64>,
 }
 
 /// The agents known before any egg is loaded.
@@ -57,6 +59,7 @@ fn builtin_agent(id: &str, name: &str) -> Value {
         controls: vec![Control::Native],
         cli_versions: None,
         refused: None,
+        tool_timeout: None,
     })
 }
 
@@ -331,4 +334,9 @@ mod tests {
         assert!(!covers(">=2.0", "unknown"));
         assert!(!covers("not a range", "2.0.0"));
     }
+}
+
+/// The tool-call timeout of `agent`'s harness in seconds, from its egg (spec 27.2).
+pub fn tool_timeout(state: &State, agent: &str) -> Option<u64> {
+    state.sessions.eggs.get(agent).and_then(|e| e.tool_timeout)
 }

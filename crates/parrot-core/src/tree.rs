@@ -351,7 +351,7 @@ pub fn plan_new(cx: &mut Cx, conn: &str, p: &SessionNewParams) -> Result<Plan, R
         &p.agent,
         p.env.as_deref().unwrap_or(&cx.state.principals.env),
     )?;
-    if matches!(p.workspace, WorkspaceRequest::Worktree { .. }) {
+    if matches!(p.workspace, Some(WorkspaceRequest::Worktree { .. })) {
         // Spawning with a new worktree needs `workspace` (E8).
         check(cx.state, conn, Scope::Workspace)?;
     }

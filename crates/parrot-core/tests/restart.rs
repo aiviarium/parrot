@@ -578,3 +578,41 @@ fn seconds_spent_are_kept_across_a_restart() {
     let s = b.ok("session/get", json!({ "session": session }))["session"].clone();
     assert_eq!(s["budget"]["used"]["seconds"], 42, "{s}");
 }
+
+#[test]
+fn streamed_text_is_written_once_its_stream_ends_and_survives_a_crash_mid_stream() {
+    let mut a = Sim::new(0);
+    a.connect("con_a");
+    let (session, binding) = idle_session(&mut a, json!({}));
+    let puts = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Persist { record } if record["op"] == "put" && record["kind"] == "item"))
+            .count()
+    };
+    let first = a.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "kind": "assistant",
+        "set": { "text": "Hel" }, "streaming": true } }));
+    assert_eq!(puts(&first), 1, "the first patch sets a field");
+    for part in ["lo", ", wor"] {
+        let effects = a.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "append": { "text": part } } }));
+        assert_eq!(puts(&effects), 0, "appends of an open stream aren't written");
+    }
+    // A second item streams and the runtime stops before its stream ends.
+    a.driver(&binding, json!({ "type": "item", "item": { "id": "k2", "kind": "reasoning",
+        "append": { "text": "think" }, "streaming": true } }));
+    let mut b = restart(&mut a);
+    let items = b.ok("session/read", json!({ "session": session }))["items"].clone();
+    let text = |kind: &str| {
+        items.as_array().unwrap().iter().find(|i| i["kind"] == kind).map(|i| i["text"].clone())
+    };
+    assert_eq!(text("assistant"), Some(json!("Hello, wor")), "{items}");
+    assert_eq!(text("reasoning"), Some(json!("think")), "{items}");
+
+    let mut c = Sim::new(0);
+    c.connect("con_a");
+    let (_, binding) = idle_session(&mut c, json!({}));
+    c.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "kind": "assistant",
+        "set": { "text": "a" }, "streaming": true } }));
+    let end = c.driver(&binding, json!({ "type": "item", "item": { "id": "k1", "append": { "text": "b" }, "streaming": false } }));
+    assert_eq!(puts(&end), 1, "the end of the stream is written");
+}

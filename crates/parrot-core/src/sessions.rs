@@ -545,6 +545,13 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
         return Ok(Value::Null);
     }
     let p: SessionNewParams = parse(params)?;
+    // Where work happens is always an explicit choice: given, or carried by the seed.
+    let Some(request) = p.workspace.clone() else {
+        return Err(RpcError::new(
+            -32602,
+            "invalid params: workspace is required unless a seed carries the workspace",
+        ));
+    };
     let mut plan = if p.parent.is_some()
         || p.seed.is_some()
         || p.task.is_some()
@@ -574,7 +581,7 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
     }
     let ceiling = plan.as_ref().map(|p| p.node.ceiling.clone()).unwrap_or_default();
     let fenced = |path: &str| crate::ceilings::check_path(&ceiling, path);
-    let (workspace, path) = match &p.workspace {
+    let (workspace, path) = match &request {
         WorkspaceRequest::Dir { path } => {
             if let Err(e) = fenced(path) {
                 if let Some(plan) = &plan {

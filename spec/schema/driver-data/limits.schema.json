@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LimitsFile",
+  "description": "`limits.kdl`: numbers the harness imposes (spec 31, 27.2).",
+  "type": "object",
+  "properties": {
+    "tool-timeout": {
+      "description": "`tool-timeout 60`: how many seconds the harness waits for one tool call, MCP calls\nincluded. Calls into Parrot return before it, less a margin.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false
+}

@@ -106,11 +106,17 @@ pub fn flush(cx: &mut Cx) {
         let seq = cx.next_seq();
         if is_item && let (Some(s), Some(patch), Some(i)) = (&session, update.get("item"), &item_id) {
             let key = format!("{s}/{i}");
+            let appends_only = patch
+                .as_object()
+                .is_some_and(|p| p.keys().all(|k| matches!(k.as_str(), "id" | "binding" | "append" | "streaming")));
             match items::apply(cx.state, s, patch, seq) {
+                // The text of a stream in flight is in the log; the projection is written when
+                // the stream ends or a field is set, and a restart replays the appends after it.
+                Some(item) if appends_only && item.get("streaming") == Some(&Value::Bool(true)) => {}
                 Some(item) => {
                     let created = items::created(cx.state, s, i);
                     cx.persist(json!({ "op": "put", "kind": "item", "id": key,
-                        "value": { "session": s, "created": created, "item": item } }));
+                        "value": { "session": s, "created": created, "at": seq, "item": item } }));
                 }
                 None => cx.persist(json!({ "op": "delete", "kind": "item", "id": key })),
             }
