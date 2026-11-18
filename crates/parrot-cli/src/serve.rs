@@ -73,6 +73,7 @@ pub async fn run(
     state_dir: Option<PathBuf>,
     ws: Option<String>,
     link_listen: Option<String>,
+    workspace_root: Option<PathBuf>,
 ) -> Result<(), String> {
     let dir = match state_dir {
         Some(dir) => dir,
@@ -82,7 +83,8 @@ pub async fn run(
     let store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
     let key =
         parrot_link::StaticKey::load_or_create(&dir).map_err(|e| format!("cannot read the link key: {e}"))?;
-    let hub = parrot_serve::link_hub::LinkHub::new(key, Some(dir.join("links.json")));
+    let link_store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
+    let hub = parrot_serve::link_hub::LinkHub::with_store(key, link_store, Some(dir.join("links.json")));
     let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
     let drivers = load_drivers(&dir);
     parrot_core::agents::load(&mut core.state, drivers.agents());
@@ -121,6 +123,7 @@ pub async fn run(
     );
     let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
+    let workspace_root = workspace_root.unwrap_or_else(|| dir.join("workspaces"));
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
             .with_links(backend_hub)
@@ -129,6 +132,7 @@ pub async fn run(
             .with_drivers(drivers)
             .with_tui(tui)
             .with_tokens(backend_tokens)
+            .with_workspace_root(workspace_root)
     });
     hub.attach(rt.clone());
 

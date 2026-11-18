@@ -24,6 +24,11 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
 
+/// The store projection that holds link records.
+const LINK_KIND: &str = "link";
+/// How long `parrot link invite` may take when it runs through a carrier.
+const INVITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The id of the hub's own `initialize` call to the peer.
 const INIT_ID: &str = "hub:init";
 
@@ -34,7 +39,7 @@ pub struct LinkHub {
     invites: Arc<InviteBook>,
     carriers: Carriers,
     records: Mutex<Vec<Value>>,
-    file: Option<PathBuf>,
+    store: Option<Mutex<parrot_store::Store>>,
     addresses: Mutex<Vec<String>>,
     rt: OnceLock<Runtime>,
     live: Mutex<HashMap<String, Arc<Notify>>>,
@@ -63,14 +68,50 @@ fn invalid(message: &str) -> RpcError {
 }
 
 impl LinkHub {
-    /// A hub with this runtime's key, keeping its records in `file` (`links.json` in the state
-    /// directory) when given.
-    pub fn new(key: StaticKey, file: Option<PathBuf>) -> Arc<LinkHub> {
-        let records: Vec<Value> = file
-            .as_ref()
-            .and_then(|f| std::fs::read(f).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+    /// A hub with this runtime's key that keeps its records in memory only.
+    pub fn new(key: StaticKey) -> Arc<LinkHub> {
+        Self::build(key, Vec::new(), None)
+    }
+
+    /// A hub keeping its link records and pinned keys in the runtime's store (spec 35), as
+    /// projections of kind `link`. A `links.json` of an older runtime at `legacy` is imported
+    /// once, then renamed to `links.json.imported`. Invite secrets are never stored: an invite
+    /// lives as long as the runtime that made it.
+    pub fn with_store(key: StaticKey, store: parrot_store::Store, legacy: Option<PathBuf>) -> Arc<LinkHub> {
+        use parrot_store::Ops;
+        let mut records: Vec<Value> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = store.list(LINK_KIND, cursor.as_deref(), 1000).unwrap_or_default();
+            let full = page.len() == 1000;
+            cursor = page.last().map(|(id, _)| id.clone());
+            records.extend(page.into_iter().map(|(_, v)| v));
+            if !full {
+                break;
+            }
+        }
+        if let Some(file) = legacy.filter(|f| f.is_file()) {
+            let imported: Vec<Value> = std::fs::read(&file)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default();
+            for r in imported {
+                let Some(id) = r["id"].as_str() else { continue };
+                if records.iter().any(|x| x["id"] == id) {
+                    continue;
+                }
+                if store.put(LINK_KIND, id, &r).is_ok() {
+                    records.push(r);
+                }
+            }
+            if std::fs::rename(&file, file.with_extension("json.imported")).is_err() {
+                eprintln!("parrot: imported {} but cannot rename it", file.display());
+            }
+        }
+        Self::build(key, records, Some(Mutex::new(store)))
+    }
+
+    fn build(key: StaticKey, records: Vec<Value>, store: Option<Mutex<parrot_store::Store>>) -> Arc<LinkHub> {
         let pins = Arc::new(PinSet::new());
         for r in &records {
             if let Some(k) = r["peer"]["key"].as_str().and_then(PublicKey::from_hex) {
@@ -83,7 +124,7 @@ impl LinkHub {
             invites: Arc::new(InviteBook::new()),
             carriers: Carriers::new(),
             records: Mutex::new(records),
-            file,
+            store,
             addresses: Mutex::new(Vec::new()),
             rt: OnceLock::new(),
             live: Mutex::new(HashMap::new()),
@@ -120,14 +161,29 @@ impl LinkHub {
     }
 
     fn save(&self, records: &[Value]) {
-        let Some(file) = &self.file else { return };
-        let tmp = file.with_extension("json.tmp");
-        let body = serde_json::to_vec_pretty(records).unwrap_or_default();
-        if std::fs::write(&tmp, body)
-            .and_then(|()| std::fs::rename(&tmp, file))
-            .is_err()
-        {
-            eprintln!("parrot: cannot write {}", file.display());
+        use parrot_store::Ops;
+        let Some(store) = &self.store else { return };
+        let mut store = store.lock().expect("lock");
+        let saved = store.transaction(|tx| -> parrot_store::Result<()> {
+            let stored: Vec<String> = tx
+                .list(LINK_KIND, None, 100_000)?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            for id in stored {
+                if !records.iter().any(|r| r["id"] == id.as_str()) {
+                    tx.delete(LINK_KIND, &id)?;
+                }
+            }
+            for r in records {
+                if let Some(id) = r["id"].as_str() {
+                    tx.put(LINK_KIND, id, r)?;
+                }
+            }
+            Ok(())
+        });
+        if let Err(e) = saved {
+            eprintln!("parrot: cannot store the links: {e}");
         }
     }
 
@@ -210,11 +266,10 @@ impl LinkHub {
         let name = p["name"].as_str().ok_or_else(|| invalid("name is required"))?;
         let carrier: CarrierRef =
             serde_json::from_value(p["carrier"].clone()).map_err(|e| invalid(&format!("carrier: {e}")))?;
-        let code = p["code"].as_str().ok_or_else(|| {
-            RpcError::new(-32001, "pairing over the carrier needs a code here")
-                .with_data(json!({ "feature": "link.pairCarrier" }))
-        })?;
-        let code = InviteCode::parse(code).map_err(link_error)?;
+        let code = match p["code"].as_str() {
+            Some(code) => InviteCode::parse(code).map_err(link_error)?,
+            None => invite_over_carrier(&carrier, name, &p).await?,
+        };
         let channel = self.carriers.open(&carrier).await.map_err(link_error)?;
         let conn = Dialer::new(self.key.clone())
             .max_message(channel.max_message)
@@ -472,5 +527,186 @@ pub async fn serve_link_tcp(hub: Arc<LinkHub>, listener: tokio::net::TcpListener
     loop {
         let (stream, _) = listener.accept().await?;
         tokio::spawn(hub.clone().accept(stream));
+    }
+}
+
+/// A value that may stand in a remote command line as it is: a shell on the peer reads it as one
+/// literal word.
+fn literal(v: &str) -> bool {
+    !v.is_empty() && !v.starts_with('-') && v.chars().all(|c| c.is_ascii_alphanumeric() || "_-.,".contains(c))
+}
+
+/// The argv that runs `parrot link invite --json` on the peer through `carrier` (spec 24.3), for
+/// carriers that reach a shell there: `ssh`, and a `command` whose argv ends in
+/// `parrot connect --link`.
+pub fn invite_argv(carrier: &CarrierRef, name: &str, ask: &Value) -> Result<Vec<String>, RpcError> {
+    let refuse = |why: &str| {
+        RpcError::new(-32001, format!("pairing over this carrier needs a code: {why}"))
+            .with_data(json!({ "feature": "link.pairCarrier" }))
+    };
+    let mut argv = match carrier.kind.as_str() {
+        "ssh" => parrot_link::carrier::ssh_argv(&carrier.target).map_err(link_error)?,
+        "command" => parrot_link::carrier::command_argv(&carrier.target).map_err(link_error)?,
+        _ => return Err(refuse("the carrier gives no shell on the peer")),
+    };
+    let at = argv
+        .windows(2)
+        .position(|w| w[0] == "connect" && w[1] == "--link")
+        .ok_or_else(|| refuse("the command does not run parrot connect --link"))?;
+    let rest: Vec<String> = argv.split_off(at).into_iter().skip(2).collect();
+    let grant: Vec<&str> = ask["grant"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let sessions = ask["offer"]["sessions"].as_str().unwrap_or("none");
+    if !literal(name) || grant.iter().any(|g| !literal(g)) || !["none", "linked", "all"].contains(&sessions) {
+        return Err(invalid("name and ask must be plain words"));
+    }
+    argv.extend([
+        "link".into(),
+        "invite".into(),
+        "--json".into(),
+        "--name".into(),
+        name.into(),
+    ]);
+    if !grant.is_empty() {
+        argv.extend(["--grant".into(), grant.join(",")]);
+    }
+    argv.extend(["--sessions".into(), sessions.into()]);
+    if ask["offer"]["env"].as_bool() == Some(true) {
+        argv.push("--offer-env".into());
+    }
+    // The socket of the peer's `connect --link`, when it names one, is the runtime to ask.
+    let mut rest = rest.into_iter();
+    while let Some(arg) = rest.next() {
+        if arg == "--socket"
+            && let Some(path) = rest.next()
+        {
+            argv.extend([arg, path]);
+        }
+    }
+    Ok(argv)
+}
+
+/// Runs `parrot link invite --json` through the carrier and reads the code it prints. The
+/// carrier is trusted exactly this once; every connection after it checks the pinned key.
+async fn invite_over_carrier(carrier: &CarrierRef, name: &str, p: &Value) -> Result<InviteCode, RpcError> {
+    let peer_name = p["ask"]["name"].as_str().unwrap_or(name);
+    let argv = invite_argv(carrier, peer_name, &p["ask"])?;
+    let failed = |why: String| {
+        RpcError::new(-32040, "link failed").with_data(json!({ "reason": "pairing", "detail": why }))
+    };
+    let run = tokio::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(INVITE_TIMEOUT, run)
+        .await
+        .map_err(|_| failed("the invite timed out".into()))?
+        .map_err(|e| failed(format!("cannot run the carrier: {e}")))?;
+    if !out.status.success() {
+        return Err(failed(format!("the invite failed: {}", out.status)));
+    }
+    // The output holds the code, a secret, so it never goes into an error.
+    let v: Value =
+        serde_json::from_slice(&out.stdout).map_err(|_| failed("the invite printed no JSON".into()))?;
+    let code = v["code"]
+        .as_str()
+        .ok_or_else(|| failed("the invite printed no code".into()))?;
+    InviteCode::parse(code).map_err(link_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(argv: &[&str]) -> CarrierRef {
+        serde_json::from_value(json!({ "kind": "command", "target": { "argv": argv } })).unwrap()
+    }
+
+    #[test]
+    fn invites_through_a_command_that_reaches_parrot() {
+        let c = command(&[
+            "docker",
+            "exec",
+            "-i",
+            "box",
+            "parrot",
+            "connect",
+            "--link",
+            "--socket",
+            "/run/p/sock",
+        ]);
+        let ask = json!({ "grant": ["read", "prompt"], "offer": { "env": true, "sessions": "linked" } });
+        let argv = invite_argv(&c, "laptop", &ask).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "docker",
+                "exec",
+                "-i",
+                "box",
+                "parrot",
+                "link",
+                "invite",
+                "--json",
+                "--name",
+                "laptop",
+                "--grant",
+                "read,prompt",
+                "--sessions",
+                "linked",
+                "--offer-env",
+                "--socket",
+                "/run/p/sock"
+            ]
+        );
+    }
+
+    #[test]
+    fn refuses_what_a_remote_shell_would_read_as_code() {
+        let c = command(&["parrot", "connect", "--link"]);
+        for ask in [
+            json!({ "grant": ["read;rm"] }),
+            json!({ "grant": ["read"], "offer": { "sessions": "$(x)" } }),
+        ] {
+            assert_eq!(invite_argv(&c, "laptop", &ask).unwrap_err().code, -32602, "{ask}");
+        }
+        assert_eq!(invite_argv(&c, "a b", &json!({})).unwrap_err().code, -32602);
+        let tcp: CarrierRef =
+            serde_json::from_value(json!({ "kind": "tcp", "target": { "address": "x:1" } })).unwrap();
+        assert_eq!(invite_argv(&tcp, "laptop", &json!({})).unwrap_err().code, -32001);
+        let other = command(&["socat", "-", "TCP:x:1"]);
+        assert_eq!(
+            invite_argv(&other, "laptop", &json!({})).unwrap_err().code,
+            -32001
+        );
+    }
+
+    #[test]
+    fn imports_links_json_once_into_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("links.json");
+        let record = json!({ "id": "lnk_a", "name": "made-up", "peer": { "runtime": "rt_x", "key": "00".repeat(32) },
+            "grant": ["read"], "offer": { "env": false, "sessions": "none" }, "containment": "restricted", "status": "down" });
+        std::fs::write(&legacy, serde_json::to_vec(&json!([record])).unwrap()).unwrap();
+        let db = dir.path().join("state.db");
+        let key = || StaticKey::from_private([7; 32]);
+        let hub = LinkHub::with_store(
+            key(),
+            parrot_store::Store::open(&db).unwrap(),
+            Some(legacy.clone()),
+        );
+        assert!(hub.record("lnk_a").is_some());
+        assert!(!legacy.exists());
+        assert!(dir.path().join("links.json.imported").exists());
+        let pinned = PublicKey::from_hex(&"00".repeat(32)).unwrap().runtime_id();
+        assert!(hub.pins.get(&pinned).is_some());
+        hub.remove(json!({ "link": "lnk_a" })).unwrap();
+        drop(hub);
+        let again = LinkHub::with_store(key(), parrot_store::Store::open(&db).unwrap(), Some(legacy));
+        assert!(again.record("lnk_a").is_none());
     }
 }

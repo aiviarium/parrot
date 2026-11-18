@@ -94,6 +94,8 @@ pub struct RuntimeBackend {
     /// Agents under TUI control, run in process (spec 32.2).
     tui: HashMap<String, crate::config::TuiAgent>,
     tokens: Option<std::sync::Arc<crate::tokens::TokenStore>>,
+    /// Where workspaces that arrive over a link are unpacked.
+    workspace_root: Option<PathBuf>,
 }
 
 impl RuntimeBackend {
@@ -144,6 +146,7 @@ impl RuntimeBackend {
             next_call: 0,
             writer: Some(tx),
             links: None,
+            workspace_root: None,
             scratch: std::env::temp_dir(),
             notifier: crate::notify::Notifier::default(),
             tui: HashMap::new(),
@@ -160,6 +163,12 @@ impl RuntimeBackend {
     /// Runs `link.*` operations with this hub (spec 24).
     pub fn with_links(mut self, hub: std::sync::Arc<crate::link_hub::LinkHub>) -> Self {
         self.links = Some(hub);
+        self
+    }
+
+    /// Unpacks workspaces that arrive over a link under `root` (spec 8, 24).
+    pub fn with_workspace_root(mut self, root: PathBuf) -> Self {
+        self.workspace_root = Some(root);
         self
     }
 
@@ -315,8 +324,15 @@ impl Backend for RuntimeBackend {
         }
     }
 
-    fn workspace(&mut self, call: u64, op: String, params: Value) {
+    fn workspace(&mut self, call: u64, op: String, mut params: Value) {
         let rt = self.rt.clone();
+        if op == "transfer.unpack" {
+            // The root is this runtime's, never one a peer names.
+            params["root"] = match &self.workspace_root {
+                Some(root) => json!(root),
+                None => Value::Null,
+            };
+        }
         if op.starts_with("link.") || op.starts_with("carrier.") {
             let hub = self.links.clone();
             tokio::spawn(async move {
@@ -433,7 +449,7 @@ fn initialize_params() -> Value {
 const RESTORE_RECENT: u64 = parrot_core::subscriptions::RECENT as u64;
 
 /// Every kind of projection the core persists.
-const KINDS: [&str; 13] = [
+const KINDS: [&str; 14] = [
     "agent",
     "workspace",
     "session",
@@ -447,6 +463,7 @@ const KINDS: [&str; 13] = [
     "inflight",
     "moved",
     "outbox",
+    "arrived",
 ];
 
 /// Reads what the core needs to continue after a restart.

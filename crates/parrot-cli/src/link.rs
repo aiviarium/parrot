@@ -40,9 +40,19 @@ enum LinkCommand {
         carrier: CarrierArgs,
         #[command(flatten)]
         terms: Terms,
-        /// Reads the pairing code from the first line of standard input.
+        /// Reads the pairing code from the first line of standard input. Without it, the code
+        /// comes from `parrot link invite --json` run on the peer through the carrier.
         #[arg(long)]
         code_stdin: bool,
+        /// Scopes to ask the peer for when pairing over the carrier, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        ask_grant: Vec<String>,
+        /// Which of its sessions to ask the peer to offer: `none`, `linked` or `all`.
+        #[arg(long, default_value = "none")]
+        ask_sessions: String,
+        /// Asks the peer to offer its environment.
+        #[arg(long)]
+        ask_offer_env: bool,
     },
     /// Lists the links.
     List,
@@ -130,11 +140,22 @@ fn request(command: LinkCommand) -> Result<(&'static str, Value, Print), String>
             carrier,
             terms,
             code_stdin,
+            ask_grant,
+            ask_sessions,
+            ask_offer_env,
         } => {
-            let mut params = terms.params(name)?;
+            let mut params = terms.params(name.clone())?;
             params.insert("carrier".into(), carrier.into_ref()?);
             if code_stdin {
                 params.insert("code".into(), read_code()?.into());
+            } else {
+                let ask = Terms {
+                    grant: ask_grant,
+                    offer_env: ask_offer_env,
+                    sessions: ask_sessions,
+                }
+                .params(name)?;
+                params.insert("ask".into(), ask.into());
             }
             ("link/add", params.into(), print_pretty)
         }

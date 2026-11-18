@@ -95,7 +95,7 @@ pub fn is_busy(state: &State, session: &str) -> bool {
     state.queue.by_session.get(session).is_some_and(|q| q.busy)
 }
 
-fn publish_queue(cx: &mut Cx, session: &str) {
+pub(crate) fn publish_queue(cx: &mut Cx, session: &str) {
     let q = queue_state(cx.state, session);
     // The stored form also keeps each entry's driver params, so a restart can send it.
     let mut stored = q.clone();
