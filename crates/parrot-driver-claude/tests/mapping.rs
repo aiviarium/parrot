@@ -71,6 +71,7 @@ fn play(name: &str) -> (Vec<Value>, Vec<Value>) {
                 updates.extend(u.iter().map(|u| serde_json::to_value(u).unwrap()));
             }
             Step::Exit(_) => break,
+            Step::Choose(_) | Step::McpCall { .. } | Step::Shell(_) => {}
         }
     }
     (updates, written)
