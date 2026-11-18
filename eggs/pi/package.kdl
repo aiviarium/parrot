@@ -1,0 +1,24 @@
+format 1
+
+package {
+  group aiviarium
+  id pi
+  version "0.1.0"
+}
+
+about {
+  name "Pi"
+  summary "The Parrot driver for pi, over its RPC mode."
+  license MIT
+  license Apache-2.0
+  repository "https://github.com/aiviarium/parrot"
+  keywords parrot driver pi
+}
+
+targets {
+  parrot {
+    requires {
+      parrot "^0.1"
+    }
+  }
+}

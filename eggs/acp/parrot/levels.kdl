@@ -1,0 +1,27 @@
+// The tools each permission level allows without asking, by tool name or ACP tool kind. A tool in
+// no level is `host`.
+level "read" {
+  tool "read"
+  tool "search"
+  tool "think"
+}
+level "write" {
+  tool "edit"
+  tool "write"
+  tool "delete"
+  tool "move"
+}
+level "host" {
+  tool "execute"
+  tool "fetch"
+  tool "other"
+}
+
+// The level each agent mode gives, first match wins. A mode no map names counts as host with
+// network, so a mode an agent update adds cannot slip under a ceiling (spec 15.2).
+map level="read" network=#false {
+  when mode="default"
+  when mode="plan"
+}
+map level="write" network=#false { when mode="acceptEdits"; }
+map level="host" network=#true { when mode="bypassPermissions"; }

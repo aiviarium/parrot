@@ -15,7 +15,7 @@ screen ─> segmentation ─> raw tree ─> profile rules ─> labelled tree ─
 | --- | --- |
 | `tree` | Segments a screen into nodes. It reads borders, rules, gaps and style runs, and also fills, highlights, the cursor and aligned columns. A node has the same id in every frame, and `diff` lists what changed |
 | `tree::surfaces` | Finds every dialog with choices or a text field, with no profile. `Automation::choose` answers one |
-| `Profile` | Reads a TOML profile and checks every rule, including each action with its variables filled in |
+| `Profile` | Reads a KDL profile and checks every rule, including each action with its variables filled in |
 | `Locator`, `ScreenExt` | Find text, regexes and boxes on a screen |
 | `SessionExt::automate` | Tracks a session's tree and state with a profile. `wait_for`, `wait_for_state` and `act` drive it |
 | `measure` | Scores a profile's state detection against labelled casts |
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use parrot_tui::{Profile, SessionExt};
 
-let profile = Profile::load("packages/parrot-agents/tui/claude-code.toml")?;
+let profile = Profile::load("packages/parrot-agents/tui/claude-code.kdl")?;
 let tui = session.automate(Some(profile));
 tui.wait_for_state("idle", Duration::from_secs(30)).await?;
 let vars = HashMap::from([("text".to_string(), "run the tests".to_string())]);
@@ -52,17 +52,31 @@ text  heading  status  progress  hint  scroll  separator
 
 ## Profiles
 
-A profile is a TOML file with these tables. The profiles for Claude Code and Codex are in
-`packages/parrot-agents/tui/`.
+A profile is a KDL file with these top-level nodes. The profiles for Claude Code and Codex are in
+`packages/parrot-agents/tui/`, and each egg has a copy as `eggs/<agent>/parrot/profile.kdl`.
 
-| Table | What it holds |
+| Node | What it holds |
 | --- | --- |
-| `[profile]` | `id`, `name`, `description`, `match = { command, version }`, `version-from-screen` and `unrecognised-after` (default 10 s) |
-| `[[node]]` | A rule that tags, relabels or regroups nodes |
-| `[[state]]` | A named condition over the tree |
-| `[[action]]` | A named input sequence with a condition before it and one after it |
-| `[[variant]]` | Rules for a CLI version range, such as `version = ">=2.1, <2.2"` |
-| `[[hook]]` | A function the host provides as a `Tagger`, for what rules cannot express |
+| `profile` | `id`, `name`, `description`, `match command= version=`, `version-from-screen` and `unrecognised-after` (default 10 s) |
+| `node` | A rule that tags, relabels or regroups nodes |
+| `state` | A named condition over the tree |
+| `action` | A named input sequence with a condition before it and one after it |
+| `variant` | Rules for a CLI version range, such as `version=">=2.1, <2.2"` |
+| `hook` | A function the host provides as a `Tagger`, for what rules cannot express |
+
+Scalar keys are properties, and tables are child nodes. A list is a node with several arguments,
+or a node repeated once per element. Write `(array)` before a list that has one element,
+such as `(array)role "dialog"`. The keys below keep their names.
+`spec/schema/driver-data/profile.schema.json` is the schema.
+
+```kdl
+node tag="prompt" last=#true {
+  where role="input" source="auto:rule-input"
+}
+state name="idle" {
+  when exists="prompt"
+}
+```
 
 ### Node rules
 
@@ -114,14 +128,15 @@ Conditions appear as `when`, `require`, `expect` and `wait`.
 | `within` | A timeout for `expect` and `wait` |
 | `hold` | The condition must hold without a break for this long before it counts |
 
-Inside `[[state]]`, `state = X` and `not = [X]` test whether X's rules hold. A state may have several
+Inside a `state` node, `state="X"` and `(array)not "X"` test whether X's rules hold. A state may have several
 rules, and any of them holding makes it hold. The current state is the first one in file order that
-holds, so a fallback such as `starting = { until-seen = "idle" }` goes last.
+holds, so a fallback such as `state name="starting" { when until-seen="idle"; }` goes last.
 
 ### Actions
 
-Steps are `key` (a name or a list), `type`, `paste`, `select = { in, index | label | option, confirm,
-timeout }` and `wait = { ... }` with an optional `timeout`.
+Steps are `steps` nodes, one per step, in order. A step is `key` (a name or a list), `type`, `paste`,
+`select in= index= | label= | option= confirm= timeout=` or `wait { ... }` with an optional
+`timeout`.
 
 - `require` is checked first, and `expect` afterwards. A failed `require`, step or `expect` is an
   error that contains the labelled tree and the state.

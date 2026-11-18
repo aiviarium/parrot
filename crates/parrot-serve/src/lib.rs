@@ -4,13 +4,18 @@
 //! `Input`s for it, and `executor` turns the core's effects back into messages and backend calls.
 
 pub mod backend_impl;
+pub mod config;
+pub mod desktop;
 pub mod dispatch;
 pub mod drivers;
 pub mod executor;
 pub mod framing;
+pub mod link_hub;
+pub mod notify;
 pub mod socket;
 pub mod stdio;
 pub mod tokens;
+pub mod tui;
 pub mod websocket;
 pub mod workspace_ops;
 pub mod workspace_transfer;

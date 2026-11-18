@@ -116,7 +116,7 @@ mod tests {
     /// The Claude Code permission prompt, replayed from its cast through the live profile.
     #[test]
     fn a_claude_approval_reads_as_choices() {
-        let profile = Profile::load(fixture("packages/parrot-agents/tui/claude-code.toml")).unwrap();
+        let profile = Profile::load(fixture("packages/parrot-agents/tui/claude-code.kdl")).unwrap();
         let cast = Cast::load(fixture("crates/parrot-tui/fixtures/casts/claude-permission.cast")).unwrap();
         let mut tracker = Tracker::new(Some(profile), Default::default());
         let mut found = None;

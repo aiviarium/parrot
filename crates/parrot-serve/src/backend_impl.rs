@@ -84,9 +84,16 @@ enum BindingCmd {
 pub struct RuntimeBackend {
     rt: Sink,
     commands: HashMap<String, DriverCommand>,
+    drivers: Option<std::sync::Arc<crate::drivers::Drivers>>,
     bindings: HashMap<BindingId, mpsc::UnboundedSender<BindingCmd>>,
     next_call: u64,
     writer: Option<std::sync::mpsc::Sender<Write>>,
+    links: Option<std::sync::Arc<crate::link_hub::LinkHub>>,
+    scratch: PathBuf,
+    notifier: crate::notify::Notifier,
+    /// Agents under TUI control, run in process (spec 32.2).
+    tui: HashMap<String, crate::config::TuiAgent>,
+    tokens: Option<std::sync::Arc<crate::tokens::TokenStore>>,
 }
 
 impl RuntimeBackend {
@@ -132,10 +139,46 @@ impl RuntimeBackend {
         Self {
             rt,
             commands: HashMap::new(),
+            drivers: None,
             bindings: HashMap::new(),
             next_call: 0,
             writer: Some(tx),
+            links: None,
+            scratch: std::env::temp_dir(),
+            notifier: crate::notify::Notifier::default(),
+            tui: HashMap::new(),
+            tokens: None,
         }
+    }
+
+    /// Drives these agents through their terminal when a binding asks for `control: "tui"`.
+    pub fn with_tui(mut self, agents: impl IntoIterator<Item = (String, crate::config::TuiAgent)>) -> Self {
+        self.tui.extend(agents);
+        self
+    }
+
+    /// Runs `link.*` operations with this hub (spec 24).
+    pub fn with_links(mut self, hub: std::sync::Arc<crate::link_hub::LinkHub>) -> Self {
+        self.links = Some(hub);
+        self
+    }
+
+    /// Keeps client tokens here for `token/*` (spec 3.4).
+    pub fn with_tokens(mut self, tokens: std::sync::Arc<crate::tokens::TokenStore>) -> Self {
+        self.tokens = Some(tokens);
+        self
+    }
+
+    /// Delivers notification events to these push targets (spec 36).
+    pub fn with_notifier(mut self, notifier: crate::notify::Notifier) -> Self {
+        self.notifier = notifier;
+        self
+    }
+
+    /// Where runtime functions put files they return by `uri`, such as screenshots.
+    pub fn with_scratch(mut self, dir: PathBuf) -> Self {
+        self.scratch = dir;
+        self
     }
 
     /// Runs `agent`'s driver as `program args…` instead of the built-in resolution.
@@ -156,11 +199,20 @@ impl RuntimeBackend {
         self
     }
 
+    /// Resolves drivers from these eggs instead of the compiled-in list.
+    pub fn with_drivers(mut self, drivers: crate::drivers::Drivers) -> Self {
+        self.drivers = Some(std::sync::Arc::new(drivers));
+        self
+    }
+
     fn resolve(&self, agent: &str) -> Result<DriverCommand, String> {
         if let Some(cmd) = self.commands.get(agent) {
             return Ok(cmd.clone());
         }
-        crate::drivers::resolve(agent)
+        match &self.drivers {
+            Some(drivers) => drivers.resolve(agent),
+            None => crate::drivers::resolve(agent),
+        }
     }
 
     /// An internal call id, counting down from `u64::MAX`.
@@ -193,9 +245,17 @@ impl Backend for RuntimeBackend {
             let _ = old.send(BindingCmd::Stop);
         }
         let rt = self.rt.clone();
-        match self.resolve(&agent) {
-            Ok(cmd) => {
-                tokio::spawn(run_binding(rt, binding, cmd, start, call, rx));
+        let how = if start["control"] == "tui" {
+            match self.tui.get(&agent) {
+                Some(a) => crate::tui::driver_config(&agent, a).map(|c| Launch::Tui(Box::new(c))),
+                None => Err(format!("agent {agent} has no TUI profile")),
+            }
+        } else {
+            self.resolve(&agent).map(Launch::Process)
+        };
+        match how {
+            Ok(how) => {
+                tokio::spawn(run_binding(rt, binding, how, start, call, rx));
             }
             Err(detail) => {
                 self.bindings.remove(&binding);
@@ -241,6 +301,7 @@ impl Backend for RuntimeBackend {
     }
 
     fn persist(&mut self, record: Value) {
+        self.notifier.record(&record);
         if let Some(writer) = &self.writer {
             let _ = writer.send(Write::Record(record));
         }
@@ -256,6 +317,44 @@ impl Backend for RuntimeBackend {
 
     fn workspace(&mut self, call: u64, op: String, params: Value) {
         let rt = self.rt.clone();
+        if op.starts_with("link.") || op.starts_with("carrier.") {
+            let hub = self.links.clone();
+            tokio::spawn(async move {
+                let result = match hub {
+                    Some(hub) => hub.op(&op, params).await,
+                    None => Err(RpcError::new(-32001, "links are off")
+                        .with_data(json!({ "feature": "profile.link" }))),
+                };
+                let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+            });
+            return;
+        }
+        if op.starts_with("token.") {
+            let result =
+                match &self.tokens {
+                    Some(t) => t.op(&op, params),
+                    None => Err(RpcError::new(-32001, "tokens are off")
+                        .with_data(json!({ "feature": "profile.remote" }))),
+                };
+            tokio::spawn(async move {
+                let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+            });
+            return;
+        }
+        if let Some(name) = op.strip_prefix("function.") {
+            let name = name.to_string();
+            let scratch = self.scratch.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::desktop::call(&name, &params, &scratch)
+                        .unwrap_or_else(|| Err(RpcError::new(-32002, format!("function not found: {name}"))))
+                })
+                .await
+                .unwrap_or_else(|e| Err(RpcError::new(-32603, format!("function task failed: {e}"))));
+                let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+            });
+            return;
+        }
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || crate::workspace_ops::run(&op, params))
                 .await
@@ -266,6 +365,24 @@ impl Backend for RuntimeBackend {
 
     fn agent_call(&mut self, agent: String, call: u64, method: String, params: Value) {
         let rt = self.rt.clone();
+        if let Some(a) = self.tui.get(&agent) {
+            let config = crate::tui::driver_config(&agent, a);
+            tokio::spawn(async move {
+                let result = match config {
+                    Ok(config) => {
+                        let (tx, _rx) = mpsc::unbounded_channel();
+                        let mut d = parrot_driver_tui::TuiDriver::new(
+                            config,
+                            parrot_driver::traits::DriverContext { updates: tx },
+                        );
+                        d.call(&method, params).await
+                    }
+                    Err(detail) => Err(RpcError::new(DRIVER_FAILED, detail)),
+                };
+                let _ = rt.input(Input::AgentReply { agent, call, result }).await;
+            });
+            return;
+        }
         let cmd = self.resolve(&agent);
         tokio::spawn(async move {
             let result = match cmd {
@@ -282,13 +399,13 @@ const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Runs a driver for one call, such as `agent/list`, then stops it.
 async fn ask_driver(cmd: &DriverCommand, method: &str, params: Value) -> Result<Value, RpcError> {
-    let no_env: [(&str, &str); 0] = [];
-    let (mut driver, _updates) = ProcessDriver::spawn(&cmd.program, &cmd.args, no_env).map_err(|e| {
-        RpcError::new(
-            DRIVER_FAILED,
-            format!("cannot start {}: {e}", cmd.program.display()),
-        )
-    })?;
+    let (mut driver, _updates) =
+        ProcessDriver::spawn(&cmd.program, &cmd.args, cmd.env.clone()).map_err(|e| {
+            RpcError::new(
+                DRIVER_FAILED,
+                format!("cannot start {}: {e}", cmd.program.display()),
+            )
+        })?;
     let asked = async {
         driver.call("initialize", initialize_params()).await?;
         driver.call(method, params).await
@@ -316,7 +433,7 @@ fn initialize_params() -> Value {
 const RESTORE_RECENT: u64 = parrot_core::subscriptions::RECENT as u64;
 
 /// Every kind of projection the core persists.
-const KINDS: [&str; 11] = [
+const KINDS: [&str; 13] = [
     "agent",
     "workspace",
     "session",
@@ -328,6 +445,8 @@ const KINDS: [&str; 11] = [
     "queue",
     "request",
     "inflight",
+    "moved",
+    "outbox",
 ];
 
 /// Reads what the core needs to continue after a restart.
@@ -365,20 +484,70 @@ fn load(store: &Store) -> parrot_store::Result<parrot_core::Restore> {
     })
 }
 
-/// Owns one binding's driver process until it is stopped or exits.
+/// How a binding's driver runs.
+enum Launch {
+    Process(DriverCommand),
+    Tui(Box<parrot_driver_tui::Config>),
+}
+
+/// A running driver: a child process, or TUI control in this process.
+enum AnyDriver {
+    Process(ProcessDriver),
+    Tui(parrot_driver_tui::TuiDriver, BindingId),
+}
+
+impl AnyDriver {
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
+        match self {
+            AnyDriver::Process(d) => d.call(method, params).await,
+            AnyDriver::Tui(d, _) => d.call(method, params).await,
+        }
+    }
+
+    async fn stop(&mut self) {
+        match self {
+            AnyDriver::Process(d) => {
+                d.stop().await;
+            }
+            AnyDriver::Tui(d, binding) => {
+                let _ = d.call("binding/stop", json!({ "binding": binding })).await;
+            }
+        }
+    }
+
+    fn stderr(&self) -> String {
+        match self {
+            AnyDriver::Process(d) => d.stderr(),
+            AnyDriver::Tui(..) => String::new(),
+        }
+    }
+}
+
+/// Owns one binding's driver until it is stopped or exits.
 async fn run_binding(
     rt: Sink,
     binding: BindingId,
-    cmd: DriverCommand,
+    how: Launch,
     start: Value,
     start_call: u64,
     mut cmds: mpsc::UnboundedReceiver<BindingCmd>,
 ) {
-    let no_env: [(&str, &str); 0] = [];
-    let (mut driver, mut updates) = match ProcessDriver::spawn(&cmd.program, &cmd.args, no_env) {
+    let spawned = match how {
+        Launch::Process(cmd) => ProcessDriver::spawn(&cmd.program, &cmd.args, cmd.env.clone())
+            .map(|(d, u)| (AnyDriver::Process(d), u))
+            .map_err(|err| format!("cannot start {}: {err}", cmd.program.display())),
+        Launch::Tui(config) => {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let d = parrot_driver_tui::TuiDriver::new(
+                *config,
+                parrot_driver::traits::DriverContext { updates: tx },
+            );
+            Ok((AnyDriver::Tui(d, binding.clone()), rx))
+        }
+    };
+    let (mut driver, mut updates) = match spawned {
         Ok(spawned) => spawned,
-        Err(err) => {
-            let detail = format!("cannot start {}: {err}", cmd.program.display());
+        Err(detail) => {
             let _ = rt
                 .input(Input::DriverReply {
                     binding: binding.clone(),
@@ -456,12 +625,7 @@ impl Link<'_> {
     }
 
     /// Calls the driver, feeding in updates that arrive meanwhile and those sent before the answer.
-    async fn call(
-        &mut self,
-        driver: &mut ProcessDriver,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, RpcError> {
+    async fn call(&mut self, driver: &mut AnyDriver, method: &str, params: Value) -> Result<Value, RpcError> {
         let fut = driver.call(method, params);
         tokio::pin!(fut);
         let result = loop {

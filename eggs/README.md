@@ -35,6 +35,56 @@ data-version "1"
 
 The runtime marks a session `unverified` when the CLI reports a version outside `versions`.
 
+| Node | Meaning |
+| --- | --- |
+| `driver "builtin" name=…` | The runtime runs `parrot driver <name>` |
+| `driver "command" { … }` | The runtime runs a program from the egg's `parrot` folder |
+| `run "path" args…` | The program when no variant matches, with its arguments |
+| `variant os=… arch=… run=…` | The program for one platform. The first match wins. Either key may be left out |
+| `cli "name" versions=…` | The harness CLI and the semver range this data covers |
+| `data-version "1"` | The data version, reported as `driver.data` on the agent |
+| `controls "native" "tui"` | How the agent can be driven. The first is the default. `native` when left out |
+| `bindings 1` | How many bindings one driver process serves. Any number when left out |
+
+A program can live in a Hatchery variant folder, such as `variants/linux/driver`. Only the variant for this machine is installed. The runtime ignores nodes it does not know.
+
+## Probe scenarios
+
+A probe is a list of steps. `parrot probe <agent> <scenario>` runs `probes/<scenario>.kdl` through the agent's driver against the real CLI. It writes `transcript.jsonl`, `frames.jsonl` and `probe.json` into `--out`.
+
+```kdl
+description "One short turn."
+control "native"
+timeout-secs 180
+option "model" "default"
+prompt "Reply with the single word: hello."
+wait "idle" timeout-secs=120
+```
+
+| Step | Does |
+| --- | --- |
+| `prompt "text"` | Sends a prompt |
+| `wait "state"` | Waits for a state, such as `idle`, or for `request` |
+| `answer "choice"` | Answers the newest request |
+| `cancel` | Cancels the turn |
+| `keys "Enter" text="…"` | Types and presses keys, under TUI control |
+| `sleep-ms 500` | Waits |
+
+## Installing
+
+The runtime installs eggs into `<state_dir>/eggs`. An agent with no installed egg uses the copy of this folder compiled into the runtime. The runtime refuses an egg whose `requires` does not hold, and says why.
+
+| Command | Does |
+| --- | --- |
+| `parrot eggs install aiviarium/claude --registry eggs` | Installs from a registry folder. This folder works as one |
+| `parrot eggs install ./eggs/claude` | Installs one package folder |
+| `parrot eggs list` | Lists each agent's egg and where it came from |
+| `parrot eggs check [dir…]` | Checks package folders, or what the runtime would load |
+| `parrot eggs pack <dir…> --out DIR` | Writes `.egg` files. `--publish DIR` publishes them into a static registry instead |
+| `parrot eggs remove aiviarium/claude` | Removes an installed package |
+
+The schemas of `driver.kdl` and the probes are in `spec/schema/driver-data/`, with examples in `spec/examples/driver-data/`.
+
 ## How a driver finds its data
 
 The runtime starts every driver with `PARROT_DRIVER_DATA` set to the installed egg's `parrot` folder. A built-in driver reads its files from there. Without the variable, it uses the copy of this folder compiled into it, so a fresh install works offline.

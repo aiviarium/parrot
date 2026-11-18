@@ -1,0 +1,14 @@
+// ACP agents report their own modes and config options. These are the fallbacks for an agent that
+// reports none, and the renames driver data applies before a session opens.
+option "model" role="model" label="Model" applies="now" {
+  choice "default" label="Default"
+}
+option "mode" role="mode" label="Mode" applies="now" {
+  choice "default" label="Manual" tags="ask"
+  choice "bypassPermissions" label="Bypass permissions" tags="bypass"
+}
+option "effort" role="effort" label="Reasoning level" applies="next-turn" {
+  choice "low" label="Low"
+  choice "medium" label="Medium"
+  choice "high" label="High"
+}

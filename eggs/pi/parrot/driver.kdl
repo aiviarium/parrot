@@ -1,0 +1,4 @@
+driver "builtin" name="pi"
+cli "pi" versions=">=1.0"
+data-version "1"
+controls "native"

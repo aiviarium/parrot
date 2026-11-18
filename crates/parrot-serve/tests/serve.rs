@@ -135,6 +135,7 @@ async fn websocket_with_token() {
         token: "tok_test".into(),
         scopes: vec!["read".into()],
         sessions: None,
+        provides: None,
     };
     let tokens = StaticTokens([("s3cret".to_string(), peer.clone())].into());
     tokio::spawn(websocket::serve_websocket(rt.clone(), listener, Arc::new(tokens)));

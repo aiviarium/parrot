@@ -1,0 +1,11 @@
+// T3 enforces approvals in the harness; a thread started with full access is host.
+level "read" { tool "read"; }
+level "write" { tool "edit"; }
+level "host" {
+  tool "execute"
+  tool "other"
+}
+
+map level="read" network=#false { when mode="approval-required"; }
+map level="write" network=#false { when mode="auto-accept-edits"; }
+map level="host" network=#true { when mode="full-access"; }

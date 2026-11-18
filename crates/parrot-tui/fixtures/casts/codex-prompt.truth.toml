@@ -1,7 +1,7 @@
 # Ground truth for codex-prompt.cast: the state a person sees on the screen.
 # Spans by hand from text anchors: 'loading' under the logo, the update and trust dialogs, the approval question, the model pickers, 'esc to interrupt' until 'Worked for' or 'Conversation interrupted' (the turn also runs while the answer streams without a working line), the prompt row; the 60 ms between the logo and the update dialog is '*'.
 cast = "codex-prompt.cast"
-profile = "../profiles/codex.toml"
+profile = "../profiles/codex.kdl"
 holdout = false
 spans = [
   [0.000, "starting"],

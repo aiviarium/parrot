@@ -1,0 +1,5 @@
+description "The same turn under TUI control, to record screens for the profile."
+control "tui"
+timeout-secs 180
+prompt "Reply with the single word: hello."
+wait "idle" timeout-secs=120

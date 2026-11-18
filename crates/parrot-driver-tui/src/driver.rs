@@ -61,6 +61,56 @@ pub struct Config {
     /// Profile states that are dialogs, and the request kind each one opens.
     pub dialogs: HashMap<String, RequestKind>,
     pub transcript: Option<TranscriptDir>,
+    /// How the harness takes the injected MCP server (spec 26), if it takes one.
+    pub mcp: Option<McpStyle>,
+}
+
+/// How a harness is told about the `parrot` MCP server. The token is only ever in the
+/// environment, as `PARROT_MCP_TOKEN`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpStyle {
+    /// `--mcp-config <json>`, which names the token's variable.
+    Claude,
+    /// `-c mcp_servers.parrot.*` overrides with `bearer_token_env_var`.
+    Codex,
+}
+
+/// The variable that carries the per-binding MCP token.
+pub const MCP_TOKEN_ENV: &str = "PARROT_MCP_TOKEN";
+
+/// The arguments that inject `mcp` in `style`.
+pub fn mcp_args(style: McpStyle, mcp: &parrot_proto::driver::McpInjection) -> Vec<String> {
+    match style {
+        McpStyle::Claude => {
+            let server = match (&mcp.url, &mcp.command) {
+                (Some(url), _) => json!({"type": "http", "url": url,
+                    "headers": {"Authorization": format!("Bearer ${{{MCP_TOKEN_ENV}}}")}}),
+                (None, Some(c)) => json!({"type": "stdio", "command": c.first(), "args": c.get(1..)}),
+                (None, None) => return vec![],
+            };
+            vec![
+                "--mcp-config".into(),
+                json!({"mcpServers": {"parrot": server}}).to_string(),
+            ]
+        }
+        McpStyle::Codex => match (&mcp.url, &mcp.command) {
+            (Some(url), _) => vec![
+                "-c".into(),
+                format!("mcp_servers.parrot.url={}", json!(url)),
+                "-c".into(),
+                format!("mcp_servers.parrot.bearer_token_env_var={}", json!(MCP_TOKEN_ENV)),
+            ],
+            (None, Some(c)) if !c.is_empty() => vec![
+                "-c".into(),
+                format!("mcp_servers.parrot.command={}", json!(c[0])),
+                "-c".into(),
+                format!("mcp_servers.parrot.args={}", json!(&c[1..])),
+                "-c".into(),
+                format!("mcp_servers.parrot.env_vars={}", json!([MCP_TOKEN_ENV])),
+            ],
+            _ => vec![],
+        },
+    }
 }
 
 impl Config {
@@ -92,6 +142,13 @@ impl Config {
             states: states.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             dialogs: dialogs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             transcript: None,
+            mcp: if agent.contains("codex") {
+                Some(McpStyle::Codex)
+            } else if agent.contains("claude") {
+                Some(McpStyle::Claude)
+            } else {
+                None
+            },
         }
     }
 
@@ -288,6 +345,15 @@ impl Shared {
     fn agent(&self) -> Agent {
         let mut features = Map::new();
         features.insert("session.stream".into(), json!({}));
+        if let Some(f) = crate::input::feature(self.config.profile.action("attach").is_some()) {
+            features.insert("attachments".into(), f);
+        }
+        if self.config.profile.action("steer").is_some() {
+            features.insert("session.steer".into(), json!({"when": "next_step"}));
+        }
+        if self.config.mcp.is_some() {
+            features.insert("functions.mcp".into(), json!({}));
+        }
         Agent {
             id: self.config.agent.clone(),
             env: String::new(),
@@ -320,6 +386,10 @@ impl Shared {
             .command
             .split_first()
             .ok_or_else(|| RpcError::new(-32603, "no harness command"))?;
+        let mut args = args.to_vec();
+        if let (Some(style), Some(mcp)) = (c.mcp, &start.mcp) {
+            args.extend(mcp_args(style, mcp));
+        }
         let mut cmd = match &c.guard {
             Some(exe) => PtyCommand::new(exe.to_string_lossy())
                 .args(["guard", "--", program.as_str()])
@@ -329,6 +399,9 @@ impl Shared {
         cmd = cmd.cwd(&start.cwd);
         for (k, v) in &c.env {
             cmd = cmd.env(k, v);
+        }
+        if let Some(mcp) = &start.mcp {
+            cmd = cmd.env(MCP_TOKEN_ENV, &mcp.token);
         }
         let started_at = SystemTime::now();
         let (session, pty) = Session::spawn(&cmd, SessionConfig::for_automation(c.size))
@@ -407,12 +480,28 @@ impl Shared {
 
     async fn prompt(self: &Arc<Self>, p: BindingPromptParams) -> Result<Value, RpcError> {
         let b = self.binding(&p.binding)?;
+        let profile = &self.config.profile;
+        let input = crate::input::input(&p, profile.action("attach").is_some());
+        for (name, why) in &input.skipped {
+            self.emit(
+                &b.id,
+                DriverUpdateKind::Notice {
+                    level: parrot_proto::subscribe::NoticeLevel::Warning,
+                    text: format!("attachment {name} was left out: {why}"),
+                    code: Some("x.parrot/attachment".into()),
+                },
+            );
+        }
+        let running = b.inner.lock().unwrap().turn.is_some();
+        if running && profile.action("steer").is_some() {
+            return self.steer(&b, &p, &input).await;
+        }
         let key = {
             let mut inner = b.inner.lock().unwrap();
             if inner.turn.is_some() || inner.state != Some(State::Idle) {
                 return Err(RpcError::new(
                     -32001,
-                    "the harness is not idle; this driver cannot steer",
+                    "the harness is not idle and its profile has no steer action",
                 ));
             }
             inner.turns += 1;
@@ -429,7 +518,7 @@ impl Shared {
             inner.state = Some(State::Running);
             key
         };
-        b.transcript.lock().unwrap().expect_echo(&p.text);
+        b.transcript.lock().unwrap().expect_echo(&input.text);
         self.emit(&b.id, state_kind(State::Running, None));
         let turn = b
             .inner
@@ -444,6 +533,16 @@ impl Shared {
         set.insert("text".into(), json!(p.text));
         set.insert("status".into(), json!("sent"));
         set.insert("message".into(), json!(p.message));
+        if let Some(c) = p.context.as_ref().filter(|c| !c.is_empty()) {
+            set.insert("context".into(), json!(c));
+        }
+        if let Some(a) = p.attachments.as_ref().filter(|a| !a.is_empty()) {
+            let named: Vec<Value> = a
+                .iter()
+                .map(|a| json!({"name": a.name, "type": a.media_type}))
+                .collect();
+            set.insert("attachments".into(), Value::Array(named));
+        }
         self.emit(
             &b.id,
             DriverUpdateKind::Item {
@@ -457,25 +556,29 @@ impl Shared {
                 },
             },
         );
+        if let Err(e) = attach(&b, &input.paths).await {
+            self.end_turn(&b, TurnStatus::Failed, Some(e.clone()));
+            return Err(failed(format!("the attachments were not sent: {e}")));
+        }
+        let text = input.text.clone();
         // A newline typed into most TUIs sends the first line alone, so several lines go in as a paste.
-        let profile = &self.config.profile;
-        let action = if p.text.contains('\n') && profile.action("submit-paste").is_some() {
+        let action = if text.contains('\n') && profile.action("submit-paste").is_some() {
             "submit-paste"
         } else {
             "submit"
         };
         let result = if profile.action(action).is_some() {
-            let vars = HashMap::from([("text".to_string(), p.text.clone())]);
+            let vars = HashMap::from([("text".to_string(), text.clone())]);
             b.tui
                 .act(action, &vars)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         } else {
-            let typed = if p.text.contains('\n') {
-                b.session.paste(&p.text).await
+            let typed = if text.contains('\n') {
+                b.session.paste(&text).await
             } else {
-                b.session.type_text(&p.text).await
+                b.session.type_text(&text).await
             };
             match typed {
                 Ok(()) => b.session.press("enter").await.map_err(|e| e.to_string()),
@@ -488,6 +591,43 @@ impl Shared {
         }
         Ok(to_value(&BindingPromptResult {
             disposition: BindingDisposition::Started,
+        }))
+    }
+
+    /// A prompt typed into a running turn with the profile's `steer` action.
+    async fn steer(
+        &self,
+        b: &Binding,
+        p: &BindingPromptParams,
+        input: &crate::input::Input,
+    ) -> Result<Value, RpcError> {
+        attach(b, &input.paths).await.map_err(failed)?;
+        b.transcript.lock().unwrap().expect_echo(&input.text);
+        let vars = HashMap::from([("text".to_string(), input.text.clone())]);
+        b.tui
+            .act("steer", &vars)
+            .await
+            .map_err(|e| RpcError::new(-32001, format!("the steer was refused: {e}")))?;
+        let turn = b.inner.lock().unwrap().turn.as_ref().map(|t| t.key.clone());
+        let mut set = Map::new();
+        set.insert("text".into(), json!(p.text));
+        set.insert("status".into(), json!("sent"));
+        set.insert("message".into(), json!(p.message));
+        self.emit(
+            &b.id,
+            DriverUpdateKind::Item {
+                item: ItemPatch {
+                    id: p.message.clone(),
+                    kind: Some(Open::Known(ItemKind::User)),
+                    turn,
+                    source: Some(ItemSource::Tui),
+                    set: Some(set),
+                    ..Default::default()
+                },
+            },
+        );
+        Ok(to_value(&BindingPromptResult {
+            disposition: BindingDisposition::Steered,
         }))
     }
 
@@ -840,6 +980,15 @@ fn state_kind(state: State, detail: Option<String>) -> DriverUpdateKind {
     }
 }
 
+/// Runs the profile's `attach` action once per path.
+async fn attach(b: &Binding, paths: &[String]) -> Result<(), String> {
+    for path in paths {
+        let vars = HashMap::from([("path".to_string(), path.clone())]);
+        b.tui.act("attach", &vars).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 async fn watch_screen(shared: Arc<Shared>, b: Arc<Binding>, mut events: broadcast::Receiver<TuiEvent>) {
     shared.evaluate(&b, &b.tui.snapshot());
     let mut tick = tokio::time::interval(TICK);
@@ -873,6 +1022,17 @@ async fn follow_transcript(shared: Arc<Shared>, b: Arc<Binding>, mut tail: Tail)
         }
         for line in tail.poll() {
             let ev = b.transcript.lock().unwrap().line(&line);
+            let turn_key = {
+                let inner = b.inner.lock().unwrap();
+                inner
+                    .turn
+                    .as_ref()
+                    .map(|t| t.key.clone())
+                    .or(inner.last_turn.clone())
+            };
+            if let Ok(raw) = serde_json::from_str::<Value>(&line) {
+                shared.emit(&b.id, crate::frame::transcript_frame(raw, turn_key.as_deref()));
+            }
             if let Some(s) = ev.session
                 && known_ref.as_ref() != Some(&s)
             {
@@ -900,6 +1060,11 @@ async fn follow_transcript(shared: Arc<Shared>, b: Arc<Binding>, mut tail: Tail)
                     item.turn = turn.clone();
                 }
                 shared.emit(&b.id, DriverUpdateKind::Item { item });
+            }
+            // The transcript says when a turn ended, before the screen settles.
+            let busy = b.inner.lock().unwrap().turn.as_ref().is_some_and(|t| t.busy);
+            if ev.turn_done && busy {
+                shared.end_turn(&b, TurnStatus::Completed, None);
             }
         }
         if b.session.is_closed() {

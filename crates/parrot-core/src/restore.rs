@@ -38,10 +38,11 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     let mut take = |kind: &str| by_kind.remove(kind).unwrap_or_default();
 
     for (id, value) in take("agent") {
-        cx.state.sessions.agents.insert(id, value);
+        crate::agents::restore(cx.state, id, value);
     }
     for (id, value) in take("workspace") {
         sessions::restore_workspace(cx.state, &id, &value);
+        crate::tree::restore_workspace(cx.state, &id, &value);
     }
     for (id, value) in take("session") {
         sessions::restore(cx.state, &id, &value);
@@ -65,6 +66,16 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     for (created, session, item) in stored_items {
         items::restore(cx.state, &session, item, created);
     }
+    for (id, value) in take("tree") {
+        crate::tree::restore(cx.state, &id, &value);
+    }
+    for (id, value) in take("seed") {
+        crate::seeds::restore(cx.state, &id, &value);
+    }
+    let ids: Vec<String> = cx.state.sessions.by_id.keys().cloned().collect();
+    for id in ids {
+        crate::tree::ensure(cx.state, &id);
+    }
     for (id, value) in take("options") {
         options::restore(cx.state, &id, &value);
     }
@@ -82,6 +93,11 @@ pub fn restore(cx: &mut Cx, r: Restore) {
     }
     for (message, value) in take("inflight") {
         uncertain(cx, &message, &value);
+    }
+    for kind in ["moved", "outbox"] {
+        for (id, value) in take(kind) {
+            crate::links::restore(cx, kind, &id, &value);
+        }
     }
 
     for binding in stopped {
@@ -111,6 +127,9 @@ pub fn restore(cx: &mut Cx, r: Restore) {
         let q = queue::queue_state(cx.state, &session);
         cx.publish(Some(session), json!({ "type": "queue", "queue": q }));
     }
+
+    // Running tasks were interrupted (E7).
+    crate::tasks::after_restore(cx);
 
     let agents: Vec<String> = cx.state.sessions.agents.keys().cloned().collect();
     for agent in agents {
