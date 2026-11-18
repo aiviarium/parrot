@@ -98,6 +98,8 @@ pub struct MapState {
     pub cwd: String,
     pub thread_id: Option<String>,
     pub turn: Option<TurnState>,
+    /// The key of the last turn that ended.
+    pub last_turn: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub approval: String,
@@ -144,6 +146,7 @@ impl MapState {
             requests: BTreeMap::new(),
             echoes: vec![],
             echoed: HashSet::new(),
+            last_turn: None,
             items: HashMap::new(),
             streaming: BTreeSet::new(),
             changes: HashMap::new(),
@@ -499,6 +502,7 @@ impl MapState {
         let Some(t) = self.turn.take() else {
             return out;
         };
+        self.last_turn = Some(t.key.clone());
         for id in std::mem::take(&mut self.streaming) {
             out.push(self.item(ItemPatch {
                 id,
@@ -1061,7 +1065,10 @@ impl MapState {
             .echoes
             .iter()
             .position(|(_, m)| u.client_id.as_deref() == Some(m.as_str()))
-            .or_else(|| self.echoes.iter().position(|(t, _)| *t == text))?;
+            .or_else(|| self.echoes.iter().position(|(t, _)| *t == text))
+            // Codex 0.167 reports `clientId: null` and the text with context and attachments
+            // folded in, so otherwise the oldest prompt not yet echoed is the one.
+            .or_else(|| (!self.echoes.is_empty()).then_some(0))?;
         let (_, message) = self.echoes.remove(pos);
         self.echoed.insert(u.id.clone());
         Some(message)

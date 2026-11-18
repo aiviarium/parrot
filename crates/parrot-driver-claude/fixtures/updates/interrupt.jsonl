@@ -8,7 +8,6 @@
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_04:0","append":{"text":"Counting slowly"}}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_04:1","kind":"assistant","turn":"turn-1","set":{"text":""},"streaming":true}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_04:1","append":{"text":"One, two, "}}}}
-{"binding":"b1","update":{"type":"item","item":{"id":"u31","kind":"user","turn":"turn-1","set":{"text":"[Request interrupted by user]","status":"handled"}}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_04:0","streaming":false}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_04:1","streaming":false}}}
 {"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"interrupted","stop":"cancelled","continuable":true,"input":"m1","started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","usage":{"tokens":{"input":3,"output":5},"cost":{"amount":0.0008,"currency":"USD"}}}}}

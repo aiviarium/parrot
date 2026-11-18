@@ -21,9 +21,12 @@ impl Client {
     }
 
     fn start_with(scenario: &str, extra: Vec<(std::ffi::OsString, std::ffi::OsString)>) -> Client {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/scenarios")
-            .join(format!("{scenario}.jsonl"));
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = if scenario.contains('/') {
+            root.join(scenario)
+        } else {
+            root.join("fixtures/scenarios").join(format!("{scenario}.jsonl"))
+        };
         let config = Config {
             claude_bin: env!("CARGO_BIN_EXE_fake-claude").into(),
             env: [("PARROT_FAKE_CLAUDE_SCENARIO".into(), path.into())]
@@ -330,4 +333,47 @@ async fn answer_sends_running_before_the_turn_ends_and_options_still_apply() {
         )
         .await;
     assert_eq!(r["level"], "write");
+}
+
+#[tokio::test]
+async fn recorded_trace_plays_end_to_end() {
+    let mut c = Client::start("../parrot-conform/fixtures/traces/claude-2.1.327.jsonl");
+    c.bind().await;
+    let agents = c.call("agent/list", json!({})).await;
+    assert_eq!(agents["agents"][0]["harness"]["verified"], true, "{agents}");
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "message": "m1", "text": "Name the color", "steer": false,
+                "attachments": [{"name": "red.png", "type": "image/png", "data": "iVBORw0KGgo="}]}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    let req = c
+        .wait(|u| u["update"]["type"] == "request" && u["update"]["request"]["status"] == "open")
+        .await;
+    let id = req["update"]["request"]["id"].as_str().unwrap().to_owned();
+    c.call(
+        "binding/answer",
+        json!({"binding": "b1", "request": id, "answer": {"choice": "allow"}}),
+    )
+    .await;
+    let done = c
+        .wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running")
+        .await;
+    assert_eq!(done["update"]["turn"]["status"], "completed");
+    let r = c
+        .call(
+            "binding/prompt",
+            json!({"binding": "b1", "message": "m2", "text": "Count", "steer": false}),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    c.wait(|u| u["update"]["item"]["append"].is_object()).await;
+    c.call("binding/cancel", json!({"binding": "b1"})).await;
+    let done = c
+        .wait(|u| u["update"]["type"] == "turn" && u["update"]["turn"]["status"] != "running")
+        .await;
+    assert_eq!(done["update"]["turn"]["status"], "interrupted");
+    c.wait(is_state("idle")).await;
 }

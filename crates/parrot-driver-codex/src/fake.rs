@@ -77,8 +77,70 @@ pub fn parse_scenario(text: &str) -> Result<Vec<Step>, ScenarioError> {
     Ok(steps)
 }
 
+/// Reads a scenario, or a recorded trace (`{"dir", "at", "msg"}` lines, see [`parse_trace`]).
 pub fn load_scenario(path: &Path) -> Result<Vec<Step>, ScenarioError> {
-    parse_scenario(&std::fs::read_to_string(path)?)
+    let text = std::fs::read_to_string(path)?;
+    if is_trace(&text) {
+        parse_trace(&text)
+    } else {
+        parse_scenario(&text)
+    }
+}
+
+/// Whether the text is a recorded trace rather than a scenario.
+pub fn is_trace(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("//"))
+        .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        .is_some_and(|v| v.get("dir").is_some() && v.get("msg").is_some())
+}
+
+/// Turns a recorded trace into scenario steps, so the fake replays a real app-server's lines.
+///
+/// A request from the client becomes an `expect` on its method, and an answer to a server
+/// request becomes an `await_response` on its decision. Notifications from the client are
+/// skipped. Output lines are emitted as recorded, except that the answer to a client request
+/// carries the id the client sent this time.
+pub fn parse_trace(text: &str) -> Result<Vec<Step>, ScenarioError> {
+    let mut steps = Vec::new();
+    let mut client_ids: Vec<Value> = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let bad = |message: String| ScenarioError::Bad { line: i + 1, message };
+        let v: Value = serde_json::from_str(line).map_err(|e| bad(e.to_string()))?;
+        let mut msg = v
+            .get("msg")
+            .cloned()
+            .ok_or_else(|| bad("a trace line has msg".into()))?;
+        match v.get("dir").and_then(Value::as_str) {
+            Some("in") => match (msg.get("method"), msg.get("id")) {
+                (Some(m), Some(id)) => {
+                    client_ids.push(id.clone());
+                    steps.push(Step::Expect(json!({"method": m})));
+                }
+                (None, Some(id)) => steps.push(Step::AwaitResponse {
+                    id: id.clone(),
+                    pattern: msg.pointer("/result/decision").map(|d| json!({"decision": d})),
+                }),
+                _ => {}
+            },
+            Some("out") => {
+                if msg.get("method").is_none()
+                    && let Some(id) = msg.get("id")
+                    && client_ids.contains(id)
+                {
+                    msg["id"] = json!("{{id}}");
+                }
+                steps.push(Step::Emit(msg));
+            }
+            _ => return Err(bad("dir is in or out".into())),
+        }
+    }
+    Ok(steps)
 }
 
 /// Whether `value` has everything `pattern` names.

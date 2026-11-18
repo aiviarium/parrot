@@ -28,8 +28,12 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::data::load_error;
 use crate::mapping::{self, MapState};
+use crate::rollout;
 use crate::wire::{self, Message, RequestId, ServerNotification};
 use crate::{frame, input};
+use parrot_driver::correlate::{self, Fold};
+use parrot_proto::driver::{BindingForkParams, BindingForkResult, HistoryDiscoverParams, HistoryReadParams};
+use parrot_proto::session::{Ref, RefStrength};
 
 /// The variable that names the `codex` binary.
 pub const CODEX_BIN_ENV: &str = "PARROT_CODEX_BIN";
@@ -50,6 +54,10 @@ pub struct Config {
     pub env: Vec<(OsString, OsString)>,
     /// Start the CLI through `parrot guard --`, which needs the current executable to be `parrot`.
     pub guard: bool,
+    /// Where Codex keeps its rollouts; `None` for `$CODEX_HOME/sessions` or `~/.codex/sessions`.
+    pub sessions: Option<std::path::PathBuf>,
+    /// Shadow mode (32.1): read the rollout beside the app-server and report differences.
+    pub shadow: bool,
 }
 
 impl Config {
@@ -64,6 +72,8 @@ impl Config {
             args: vec!["app-server".into()],
             env: vec![],
             guard,
+            sessions: None,
+            shadow: parrot_driver::correlate::shadow_from_env(),
         }
     }
 }
@@ -87,6 +97,68 @@ struct Binding {
     stopping: AtomicBool,
     /// Signalled when Codex raises a request, so a start can return on it (Appendix E4).
     raised: Notify,
+    /// The items of this binding, kept for shadow mode.
+    fold: Mutex<Fold>,
+}
+
+impl Binding {
+    fn record(&self, shadow: bool, updates: &[DriverUpdate]) {
+        if shadow {
+            let mut f = self.fold.lock().unwrap();
+            for u in updates {
+                f.push(&to_value(u));
+            }
+        }
+    }
+}
+
+/// Whether the updates end a turn.
+fn ends_turn(updates: &[DriverUpdate]) -> bool {
+    updates.iter().any(|u| {
+        matches!(&u.update, Open::Known(DriverUpdateKind::Turn { turn }) if turn.status != parrot_proto::state::TurnStatus::Running)
+    })
+}
+
+/// Shadow mode at the end of a turn: reads the rollout and reports where its last turn differs
+/// from what the app-server said. Codex writes the rollout as it goes, so this waits briefly.
+async fn shadow_turn(driver: Arc<Driver>, b: Arc<Binding>) {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let Some(root) = driver.sessions() else {
+        return;
+    };
+    let thread = b.state.lock().unwrap().thread_id.clone();
+    let Some(thread) = thread else {
+        return;
+    };
+    let notices: Vec<Value> =
+        match rollout::find(&root, &thread).and_then(|p| std::fs::read_to_string(p).ok()) {
+            None => vec![correlate::notice(
+                &b.id,
+                &correlate::Difference {
+                    kind: "*".into(),
+                    item: thread.clone(),
+                    text: format!("no rollout for thread {thread}"),
+                },
+            )],
+            Some(text) => {
+                let mut disk = Fold::new();
+                for u in rollout::updates(&b.id, &text) {
+                    disk.push(&to_value(&u));
+                }
+                let live = b.fold.lock().unwrap().clone();
+                let data = &crate::data::data().correlate;
+                // Turn ids are the same in both sources, so the turn that ended is found by its id.
+                let pairs =
+                    correlate::correlate(data, &live.last_turn(), &disk.turn_or_last(live.last_turn_id()));
+                correlate::differences(data, &pairs, "native", "transcript")
+                    .iter()
+                    .map(|d| correlate::notice(&b.id, d))
+                    .collect()
+            }
+        };
+    for n in notices {
+        driver.send(&Notification::new("update", n));
+    }
 }
 
 struct Driver {
@@ -159,6 +231,10 @@ fn codex_error(e: wire::RpcError) -> RpcError {
 }
 
 impl Driver {
+    fn sessions(&self) -> Option<std::path::PathBuf> {
+        self.config.sessions.clone().or_else(rollout::sessions_root)
+    }
+
     fn send<T: serde::Serialize>(&self, msg: &T) {
         let _ = self
             .out
@@ -188,9 +264,56 @@ impl Driver {
                 "features": {},
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
-                agents: vec![agent()],
+                agents: vec![probed(&self.config.codex_bin).await],
             })),
             "binding/start" => self.start(params(p)?).await,
+            "binding/fork" => {
+                let p: BindingForkParams = params(p)?;
+                let b = self.binding(&p.binding)?;
+                let (thread, latest) = {
+                    let s = b.state.lock().unwrap();
+                    (
+                        s.thread_id.clone(),
+                        s.turn.as_ref().map(|t| t.key.clone()).or(s.last_turn.clone()),
+                    )
+                };
+                if p.at.is_some() && p.at != latest {
+                    return Err(RpcError::new(-32001, "Codex forks only at the latest turn"));
+                }
+                let thread = thread.ok_or_else(|| RpcError::new(-32004, "the thread has not started yet"))?;
+                let r = b
+                    .request("thread/fork", json!({"threadId": thread}), None)
+                    .await
+                    .map_err(codex_error)?;
+                let id = r
+                    .pointer("/thread/id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::new(-32603, "codex thread/fork gave no thread id"))?;
+                Ok(to_value(&BindingForkResult {
+                    reference: Ref {
+                        id: id.to_owned(),
+                        strength: RefStrength::Strong,
+                    },
+                }))
+            }
+            "history/discover" => {
+                let p: HistoryDiscoverParams = params(p)?;
+                let root = self
+                    .sessions()
+                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                Ok(to_value(&rollout::discover(&root, &p)))
+            }
+            "history/read" => {
+                let p: HistoryReadParams = params(p)?;
+                let root = self
+                    .sessions()
+                    .ok_or_else(|| RpcError::new(-32603, "no home folder"))?;
+                let path = rollout::find(&root, &p.reference.id)
+                    .ok_or_else(|| RpcError::new(-32602, format!("no rollout for {}", p.reference.id)))?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| RpcError::new(-32603, format!("cannot read the rollout: {e}")))?;
+                Ok(to_value(&rollout::read(&text, p.cursor.as_deref())))
+            }
             "binding/prompt" => self.prompt(params(p)?).await,
             "binding/cancel" => {
                 let p: BindingCancelParams = params(p)?;
@@ -430,6 +553,7 @@ impl Driver {
             next: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
             raised: Notify::new(),
+            fold: Mutex::new(Fold::new()),
         });
         self.bindings
             .lock()
@@ -653,6 +777,7 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
                 };
                 if let Some(on_ok) = w.on_ok {
                     let updates = on_ok(&mut b.state.lock().unwrap(), &result);
+                    b.record(driver.config.shadow, &updates);
                     driver.emit(updates);
                 }
                 let _ = w.tx.send(Ok(result));
@@ -664,6 +789,7 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             }
             Message::Request { id, method, params } => {
                 let (updates, reply) = b.state.lock().unwrap().server_request(&id, &method, &params);
+                b.record(driver.config.shadow, &updates);
                 let raised = !updates.is_empty();
                 driver.emit(updates);
                 if let Some(reply) = reply {
@@ -676,7 +802,12 @@ async fn read_loop(driver: Arc<Driver>, b: Arc<Binding>, stdout: ChildStdout) {
             Message::Notification { method, params } => {
                 let n = ServerNotification::parse(&method, &params);
                 let updates = b.state.lock().unwrap().step(&n, &at);
+                b.record(driver.config.shadow, &updates);
+                let ended = ends_turn(&updates);
                 driver.emit(updates);
+                if ended && driver.config.shadow {
+                    tokio::spawn(shadow_turn(driver.clone(), b.clone()));
+                }
             }
         }
     }
@@ -724,6 +855,8 @@ pub fn agent() -> Agent {
     let mut features = Map::new();
     features.insert("session.stream".into(), json!({}));
     features.insert("session.resume".into(), json!({}));
+    features.insert("session.history".into(), json!({}));
+    features.insert("session.fork".into(), json!({"at": ["turn"]}));
     features.insert("session.steer".into(), json!({"when": "next_step"}));
     features.insert("attachments".into(), input::feature());
     features.insert(
@@ -759,6 +892,51 @@ pub fn agent() -> Agent {
         meta: None,
         extra: Map::new(),
     }
+}
+
+/// The Codex versions the driver was checked against: at least the first, below the second.
+pub const VERIFIED: (&str, &str) = ("0.167.0", "0.168.0");
+
+/// [`agent`] with what the CLI and its config files tell without a session: the version, sign-in,
+/// skills and MCP server names. What can't be found out is left out.
+pub async fn probed(bin: &std::ffi::OsStr) -> Agent {
+    use parrot_driver::probe;
+    let mut a = agent();
+    let home = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".codex")));
+    match probe::version(bin).await {
+        Some(v) => {
+            a.harness = Some(parrot_proto::agent::HarnessInfo {
+                verified: probe::in_range(&v, VERIFIED.0, VERIFIED.1),
+                version: v,
+            })
+        }
+        None => {
+            a.installed = false;
+            a.usable = false;
+            a.detail = Some("codex --version did not answer".into());
+        }
+    }
+    let auth_file = home.as_ref().is_some_and(|h| h.join("auth.json").is_file());
+    if auth_file || std::env::var_os("OPENAI_API_KEY").is_some() {
+        a.auth = AuthStatus::SignedIn;
+    }
+    let mut meta = Map::new();
+    if let Some(h) = &home {
+        let skills = probe::folders_with(&h.join("skills"), "SKILL.md");
+        if !skills.is_empty() {
+            meta.insert("skills".into(), json!(skills));
+        }
+        let servers = probe::toml_tables(&h.join("config.toml"), "mcp_servers");
+        if !servers.is_empty() {
+            meta.insert("mcpServers".into(), json!(servers));
+        }
+    }
+    if !meta.is_empty() {
+        a.meta = Some(meta);
+    }
+    a
 }
 
 /// The current time in RFC 3339, UTC, to the millisecond.
