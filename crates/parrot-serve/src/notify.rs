@@ -74,19 +74,20 @@ pub fn targets_from_env() -> Vec<Target> {
     let Ok(spec) = std::env::var("PARROT_NOTIFY") else {
         return Vec::new();
     };
-    spec.split_whitespace()
-        .filter_map(|t| {
-            if let Some(url) = t.strip_prefix("webhook:") {
-                return Some(Target::Webhook(url.to_string()));
-            }
-            let rest = t.strip_prefix("ntfy:")?;
-            let (server, topic) = rest.rsplit_once('/')?;
-            Some(Target::Ntfy {
-                server: server.to_string(),
-                topic: topic.to_string(),
-            })
-        })
-        .collect()
+    spec.split_whitespace().filter_map(parse_target).collect()
+}
+
+/// One target: `webhook:<url>` or `ntfy:<server>/<topic>`.
+pub fn parse_target(t: &str) -> Option<Target> {
+    if let Some(url) = t.strip_prefix("webhook:") {
+        return Some(Target::Webhook(url.to_string()));
+    }
+    let rest = t.strip_prefix("ntfy:")?;
+    let (server, topic) = rest.rsplit_once('/')?;
+    Some(Target::Ntfy {
+        server: server.to_string(),
+        topic: topic.to_string(),
+    })
 }
 
 async fn deliver(target: &Target, body: &Value) -> std::io::Result<()> {

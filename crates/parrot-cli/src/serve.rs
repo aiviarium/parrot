@@ -103,15 +103,32 @@ pub async fn run(
             core.state.functions.runtime.insert(name, spec);
         }
     }
+    let config = parrot_serve::config::Config::load(&dir)?;
+    for (agent, a) in &config.tui {
+        core.state
+            .sessions
+            .agents
+            .insert(agent.clone(), parrot_serve::tui::agent_record(agent, a));
+    }
     let scratch = dir.join("files");
     let _ = std::fs::create_dir_all(&scratch);
-    let notifier = parrot_serve::notify::Notifier::new(parrot_serve::notify::targets_from_env());
+    let mut targets = parrot_serve::notify::targets_from_env();
+    targets.extend(
+        config
+            .notify
+            .iter()
+            .filter_map(|t| parrot_serve::notify::parse_target(t)),
+    );
+    let mut notifier = parrot_serve::notify::Notifier::new(targets);
+    notifier.url = config.notify_url.clone();
+    let tui = config.tui.clone();
     let backend_hub = hub.clone();
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
             .with_links(backend_hub)
             .with_scratch(scratch)
             .with_notifier(notifier)
+            .with_tui(tui)
     });
     hub.attach(rt.clone());
 
