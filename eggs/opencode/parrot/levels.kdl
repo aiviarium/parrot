@@ -1,0 +1,18 @@
+// opencode asks before a tool whose level is above the session's; the level of each tool decides
+// how a permission request is judged (spec 15.2). An unknown tool counts as host.
+level "read" {
+  tool "read"
+  tool "grep"
+  tool "glob"
+  tool "list"
+}
+level "write" {
+  tool "edit"
+  tool "write"
+  tool "patch"
+}
+level "host" {
+  tool "bash"
+  tool "webfetch"
+  tool "task"
+}

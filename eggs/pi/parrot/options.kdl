@@ -1,0 +1,10 @@
+// pi reports its models and thinking levels at runtime; these are the values it falls back to.
+option "model" role="model" label="Model" applies="now" default="default" {
+  choice "default" label="Default"
+}
+option "effort" role="effort" label="Thinking" applies="now" default="off" {
+  choice "off" label="Off"
+  choice "low" label="Low"
+  choice "medium" label="Medium"
+  choice "high" label="High"
+}

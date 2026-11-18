@@ -6,8 +6,10 @@
 {"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"running","continuable":false,"started":"2026-01-01T00:00:00.000Z"}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_x:final:0","kind":"reasoning","turn":"turn-1","set":{"text":"Plan it."},"streaming":false}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"toolu_task","kind":"tool","turn":"turn-1","set":{"tool":"Task","title":"Task","input":{"description":"Look around","prompt":"List files","subagent_type":"general-purpose"},"status":"running","caller":"model"},"streaming":false}}}
-{"binding":"b1","update":{"type":"item","item":{"id":"msg_y:final:0","kind":"assistant","turn":"turn-1","parent":"toolu_task","set":{"text":"From the subagent."},"streaming":false}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"toolu_task:subagent","kind":"subagent","turn":"turn-1","parent":"toolu_task","set":{"key":"toolu_task","title":"Look around","status":"running"}}}}
+{"binding":"b1","subagent":"toolu_task","update":{"type":"item","item":{"id":"msg_y:final:0","kind":"assistant","turn":"turn-1","set":{"text":"From the subagent."},"streaming":false}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"toolu_task","set":{"status":"ok","output":[{"type":"text","text":"Two files."}]},"streaming":false}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"toolu_task:subagent","set":{"status":"ok"}}}}
 {"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"completed","stop":"budget","continuable":true,"started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","usage":{"tokens":{"input":1,"output":1},"cost":{"amount":1.5,"currency":"USD"}}}}}
 {"binding":"b1","update":{"type":"usage","usage":{"tokens":{"input":1,"output":1},"cost":{"amount":1.5,"currency":"USD"}}}}
 {"binding":"b1","update":{"type":"state","state":"idle","background":[]}}

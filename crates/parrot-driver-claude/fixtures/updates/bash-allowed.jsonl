@@ -14,6 +14,6 @@
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_03:0","kind":"assistant","turn":"turn-1","set":{"text":""},"streaming":true}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_03:0","append":{"text":"There are two entries."}}}}
 {"binding":"b1","update":{"type":"item","item":{"id":"msg_fake_03:0","kind":"assistant","turn":"turn-1","set":{"text":"There are two entries."},"streaming":false}}}
-{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"completed","stop":"end","continuable":false,"input":"m1","started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","usage":{"tokens":{"input":14,"output":26},"cost":{"amount":0.0031,"currency":"USD"},"context":{"used":40,"window":200000}}}}}
-{"binding":"b1","update":{"type":"usage","usage":{"tokens":{"input":14,"output":26},"cost":{"amount":0.0031,"currency":"USD"},"context":{"used":40,"window":200000}}}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"completed","stop":"end","continuable":false,"input":"m1","started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","usage":{"tokens":{"input":14,"output":26},"cost":{"amount":0.0031,"currency":"USD"},"context":{"used":15,"window":200000}}}}}
+{"binding":"b1","update":{"type":"usage","usage":{"tokens":{"input":14,"output":26},"cost":{"amount":0.0031,"currency":"USD"},"context":{"used":15,"window":200000}}}}
 {"binding":"b1","update":{"type":"state","state":"idle","background":[]}}
