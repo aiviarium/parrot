@@ -8,7 +8,7 @@ use parrot_proto::option::PermissionLevel;
 use parrot_proto::principal::Isolation;
 use parrot_proto::rpc::RpcError;
 use parrot_proto::session::{BindingStatus, BindingVia, Ref, RefStrength};
-use parrot_proto::state::State as SessionState;
+use parrot_proto::state::{State as SessionState, TurnStatus};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -287,6 +287,25 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             let mut turn = turn.clone();
             turn.id = map_key(cx, binding, "trn", &turn.id, None);
             turn.binding = binding.to_string();
+            // Retry and continue read whether a turn runs and what a failed one was given.
+            let running = turn.status == TurnStatus::Running;
+            let failed = (turn.status == TurnStatus::Failed).then(|| {
+                let input = turn.input.as_ref().map(|key| {
+                    cx.state
+                        .bindings
+                        .info
+                        .get(binding)
+                        .and_then(|b| b.items.get(key))
+                        .cloned()
+                        .unwrap_or_else(|| key.clone())
+                });
+                input
+                    .and_then(|id| crate::items::get(cx.state, &session, &id))
+                    .and_then(|item| item.get("text").and_then(Value::as_str).map(String::from))
+                    .into_iter()
+                    .collect()
+            });
+            crate::actions::note_turn(cx.state, &session, running, failed);
             cx.publish(sid, json!({ "type": "turn", "turn": turn }));
         }
         DriverUpdateKind::Ref { reference } => {
@@ -360,6 +379,7 @@ pub fn exited(cx: &mut Cx, binding: &str, detail: &str) {
         return;
     };
     persist(cx, binding);
+    crate::requests::binding_gone(cx, binding);
     queue::on_exit(cx, &session);
     let current = crate::directory::binding_of(cx.state, &session).as_deref() == Some(binding);
     if !current {

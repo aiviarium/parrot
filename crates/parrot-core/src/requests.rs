@@ -49,17 +49,13 @@ pub struct PendingAnswer {
     pub key: Option<String>,
 }
 
-/// Whether `conn` holds `scope`.
-// Stands in for `crate::principals::allows` until the principals module provides it.
-pub(crate) fn allows(_state: &State, _conn: &str, _scope: &str) -> bool {
-    true
+/// Whether `conn` holds the scope named `scope`; unknown names are never held.
+pub(crate) fn allows(state: &State, conn: &str, scope: &str) -> bool {
+    serde_json::from_value::<parrot_proto::principal::Scope>(serde_json::Value::String(scope.to_string()))
+        .is_ok_and(|scope| crate::principals::allows(state, conn, scope))
 }
 
-/// The principal behind a connection, for `answeredBy`.
-// Stands in for a principals lookup until that module provides one.
-fn principal_of(_state: &State, conn: &str) -> String {
-    conn.to_string()
-}
+use crate::principals::principal_of;
 
 /// The level of the ceiling over a session, if any (spec 22). Ceilings come later.
 pub fn ceiling_level(_state: &State, _session: &str) -> Option<PermissionLevel> {
@@ -338,18 +334,9 @@ pub fn tick(cx: &mut Cx) {
 
 /// A connection closed: expire its `connection` requests.
 pub fn disconnected(cx: &mut Cx, conn: &str) {
+    // Requests survive a client leaving (spec 14): another client, or the same one after
+    // reconnecting, can still answer. Only the harness side ends them.
     cx.state.requests.session_conn.retain(|_, c| c != conn);
-    let gone: Vec<String> = cx
-        .state
-        .requests
-        .by_id
-        .iter()
-        .filter(|(_, r)| r.request.answerable == Answerable::Connection && r.conn.as_deref() == Some(conn))
-        .map(|(id, _)| id.clone())
-        .collect();
-    for id in gone {
-        expire(cx, &id);
-    }
 }
 
 /// A binding's harness or driver went away: its `connection` requests can't be answered.

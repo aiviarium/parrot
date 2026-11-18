@@ -3,7 +3,7 @@
 use parrot_core::bindings::BindingRecord;
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::sessions::SessionRecord;
-use parrot_core::{Core, Effect, Input};
+use parrot_core::{Core, Effect, Input, Peer};
 use parrot_proto::request::RequestStatus;
 use serde_json::{Value, json};
 
@@ -33,6 +33,19 @@ fn core() -> (Core, ManualClock) {
             agent: "fake".into(),
         },
     );
+    // The tests' clients are owners that have done the handshake, so scope checks pass.
+    for conn in ["con_1", "con_2", "con_9"] {
+        core.handle(Input::Connected {
+            conn: conn.into(),
+            peer: Peer::Owner,
+        });
+        core.handle(Input::Call {
+            conn: conn.into(),
+            id: Some(json!(format!("init-{conn}"))),
+            method: "initialize".into(),
+            params: json!({ "protocol": [1], "peer": { "kind": "client", "name": conn, "version": "1" }, "features": {} }),
+        });
+    }
     (core, clock)
 }
 
@@ -161,7 +174,7 @@ fn second_answer_is_rejected() {
 }
 
 #[test]
-fn disconnect_expires_connection_requests_only() {
+fn requests_survive_a_client_leaving() {
     let (mut core, _) = core();
     parrot_core::requests::note_connection(&mut core.state, "ses_a", "con_9");
     let conn_req = driver_request(&mut core, "k1", "connection", json!({}));
@@ -169,7 +182,7 @@ fn disconnect_expires_connection_requests_only() {
     core.handle(Input::Disconnected { conn: "con_9".into() });
     assert_eq!(
         core.state.requests.by_id[&conn_req].request.status,
-        RequestStatus::Expired
+        RequestStatus::Open
     );
     assert_eq!(
         core.state.requests.by_id[&msg_req].request.status,
