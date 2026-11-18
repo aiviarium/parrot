@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 pub use crate::agents::{agents, discover};
 
 /// Sessions by id, plus the workspaces and agents they use.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Sessions {
     /// The records every module reads through `directory`.
     pub by_id: BTreeMap<String, SessionRecord>,
@@ -37,22 +37,6 @@ pub struct Sessions {
     pub calls: BTreeMap<u64, Option<(String, RequestId)>>,
     /// Whether the agents came from installed eggs, so an agent without one is unknown.
     pub eggs_loaded: bool,
-}
-
-impl Default for Sessions {
-    fn default() -> Self {
-        let agents = crate::agents::builtin();
-        Self {
-            by_id: BTreeMap::new(),
-            info: BTreeMap::new(),
-            workspaces: BTreeMap::new(),
-            agents,
-            eggs: BTreeMap::new(),
-            discovery: BTreeMap::new(),
-            calls: BTreeMap::new(),
-            eggs_loaded: false,
-        }
-    }
 }
 
 /// What the core keeps per session; other modules read it through `directory`.

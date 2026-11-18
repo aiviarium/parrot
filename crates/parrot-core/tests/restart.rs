@@ -2,6 +2,8 @@
 //! to a second one, which must start nothing, hold its queues, mark unconfirmed prompts
 //! `uncertain` and expire `connection` requests.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer, Restore, Stored};
 use serde_json::{Value, json};
@@ -64,7 +66,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         Self {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::starting_at(ids))),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::starting_at(ids))),
             clock,
             store: FakeStore::default(),
             next_id: 0,

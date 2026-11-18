@@ -1,6 +1,8 @@
 //! Deterministic simulations of the `tree` and `seed` profiles: children, tasks, waking,
 //! ceilings, budgets, workspaces, rebinds, rewinds and bundles.
 
+mod common;
+
 use parrot_core::ceilings::{Ceiling, intersect, narrows};
 use parrot_core::clock::{Clock, ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer, Restore, Stored};
@@ -73,7 +75,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         let mut sim = Self {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::starting_at(ids))),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::starting_at(ids))),
             clock,
             store: Store::default(),
             next_id: 0,

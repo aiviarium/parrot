@@ -1,6 +1,8 @@
 //! Function approvals (E5, 27.2): ceiling patterns, requests for calls above the session's level,
 //! `pending_approval` after the wait, and retries with the same key.
 
+mod common;
+
 use parrot_core::clock::{ManualClock, SeqIds};
 use parrot_core::{Core, Effect, Input, Peer};
 use serde_json::{Value, json};
@@ -16,7 +18,7 @@ impl Sim {
         let clock = ManualClock::default();
         clock.set(1_700_000_000_000);
         Sim {
-            core: Core::new(Box::new(clock.clone()), Box::new(SeqIds::default())),
+            core: common::core(Box::new(clock.clone()), Box::new(SeqIds::default())),
             clock,
             next_id: 0,
         }
