@@ -285,28 +285,25 @@ impl LinkHub {
                 return;
             };
             self.set_status(&link, "connecting", None);
-            match self.carriers.open_with_fallback(&carrier).await {
-                Ok((_, channel)) => {
-                    let via = channel.kind.clone();
-                    match Dialer::new(self.key.clone())
-                        .max_message(channel.max_message)
-                        .dial(channel.stream, &key)
-                        .await
-                    {
-                        Ok(conn) => {
-                            backoff = Duration::from_secs(1);
-                            self.clone().serve_conn(link.clone(), conn, Some(via)).await;
-                            continue;
-                        }
-                        // A key that doesn't match waits for the owner (spec 24.3).
-                        Err(LinkError::Key { .. }) => {
-                            self.set_status(&link, "down", None);
-                            return;
-                        }
-                        Err(_) => {}
+            if let Ok((_, channel)) = self.carriers.open_with_fallback(&carrier).await {
+                let via = channel.kind.clone();
+                match Dialer::new(self.key.clone())
+                    .max_message(channel.max_message)
+                    .dial(channel.stream, &key)
+                    .await
+                {
+                    Ok(conn) => {
+                        backoff = Duration::from_secs(1);
+                        self.clone().serve_conn(link.clone(), conn, Some(via)).await;
+                        continue;
                     }
+                    // A key that doesn't match waits for the owner (spec 24.3).
+                    Err(LinkError::Key { .. }) => {
+                        self.set_status(&link, "down", None);
+                        return;
+                    }
+                    Err(_) => {}
                 }
-                Err(_) => {}
             }
             self.set_status(&link, "down", None);
             tokio::time::sleep(backoff).await;

@@ -1,6 +1,8 @@
 //! The `link` profile proof: two runtimes pair over the `command` carrier, a session moves from
 //! the first to the second, and it keeps running after the first runtime stops.
 #![cfg(unix)]
+// The helpers are shared in shape with `e2e.rs`; this test uses only some of them.
+#![allow(dead_code)]
 
 use serde_json::{Value, json};
 use std::io::Write;
@@ -298,7 +300,9 @@ async fn a_session_moves_over_a_link_and_outlives_its_first_runtime() {
     }
 
     // A session runs one turn on the laptop.
-    let work = laptop.work_dir();
+    // Both runtimes reach this directory; moving the workspace itself is `workspace/transfer`.
+    let shared = tempfile::tempdir().unwrap();
+    let work = shared.path().to_path_buf();
     let work_str = work.to_str().unwrap();
     let mut l = Client::connect(&laptop, "laptop-client").await;
     l.initialize().await;

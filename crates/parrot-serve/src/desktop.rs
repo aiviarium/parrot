@@ -103,14 +103,14 @@ pub fn call(name: &str, input: &Value, scratch: &std::path::Path) -> Option<Resu
             run(&[cmd.into(), "--args".into(), args.to_string()]).map(|_| result(json!({})))
         }
         "keys" => {
-            if let Some(text) = input["text"].as_str() {
-                if let Err(e) = run(&[
+            if let Some(text) = input["text"].as_str()
+                && let Err(e) = run(&[
                     "type".into(),
                     "--args".into(),
                     json!({ "text": text }).to_string(),
-                ]) {
-                    return Some(Err(e));
-                }
+                ])
+            {
+                return Some(Err(e));
             }
             match input["press"].as_array() {
                 Some(keys) if !keys.is_empty() => {
