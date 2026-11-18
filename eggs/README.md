@@ -134,7 +134,7 @@ The runtime installs eggs into `<state_dir>/eggs`. The runtime refuses an egg wh
 
 ## A signed registry
 
-A static registry can be signed, so an egg cannot change without the key. The release workflow signs the published registry with the key in the `PARROT_EGG_SIGNING_KEY` secret and prints the public key, which goes in the release notes.
+A static registry can be signed, so an egg cannot change without the key. The default registry is not signed: it is served from this repository's GitHub Pages. If the repository has a `PARROT_EGG_SIGNING_KEY` secret, the release workflow signs the registry with it and prints the public key, which goes in the release notes.
 
 ```bash
 hatchery keygen > keys.txt           # line 1 is the signing key, line 2 the public key
