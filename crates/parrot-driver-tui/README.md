@@ -1,7 +1,7 @@
 # parrot-driver-tui
 
 TUI control for the Parrot runtime. The driver runs an agent CLI on a PTY and reads each settled screen
-through a TUI profile. It answers the runtime's driver calls with keys.
+through a TUI profile. It answers the driver calls of the runtime with keys.
 
 | Call | What the driver does |
 | --- | --- |
@@ -35,4 +35,4 @@ not reported twice.
 ## Tests
 
 `tests/fake/fake-tui.sh` is a scripted TUI with a prompt, a busy line, a tool approval, a trust dialog
-at start, and a question the profile leaves out. `tests/fake/fake-tui.toml` is its profile.
+at start, and a question the profile leaves out. `tests/fake/fake-tui.kdl` is its profile.

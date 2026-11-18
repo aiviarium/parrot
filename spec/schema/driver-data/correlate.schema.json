@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CorrelateFile",
+  "description": "`correlate.kdl`: per item kind, how items of two sources match and which source wins\n(spec 32.1).",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CorrelateKind"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "CorrelateKind": {
+      "description": "`kind \"tool\" { match \"ref\" \"position\"; prefer \"native\"; history \"transcript\"; }`. `kind \"*\"`\ncovers the kinds not named.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "match": {
+          "description": "The keys tried in order: `ref` (the harness id), `position` (turn and order), `text`.",
+          "type": "array",
+          "items": true,
+          "default": []
+        },
+        "prefer": {
+          "description": "The source that wins while the binding runs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "history": {
+          "description": "The source that wins when history is read again.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "compare": {
+          "description": "Fields compared in shadow mode; all of `set` when empty.",
+          "type": "array",
+          "items": true,
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

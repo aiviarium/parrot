@@ -77,7 +77,7 @@ impl Serialize for Dur {
 }
 
 /// One value or a list of them.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum OneOrMany<T> {
     One(T),
@@ -93,7 +93,7 @@ impl<T> OneOrMany<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Position {
     /// Starts in the top third of the screen.
@@ -103,7 +103,7 @@ pub enum Position {
 }
 
 /// Conditions on one node. All given keys must hold.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Matcher {
     pub role: Option<OneOrMany<Role>>,
@@ -149,7 +149,7 @@ pub struct Matcher {
 
 /// Groups rows into a new node: from the first row matching `from` to the first row at or
 /// after it matching `to`, or to the last non-blank row of the scope.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LinesSpec {
     pub from: Re,
@@ -162,7 +162,7 @@ pub struct LinesSpec {
 }
 
 /// Matches one line of text.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LineMatcher {
     /// The line, without leading spaces, starts with this.
@@ -175,7 +175,7 @@ pub struct LineMatcher {
 }
 
 /// Re-splits a node's rows into items.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ItemSpec {
     /// A row matching this starts an item; other non-blank rows continue the previous one.
@@ -191,7 +191,7 @@ pub struct ItemSpec {
 
 /// A rule that tags nodes of the raw tree, and can change their role, group rows into a new
 /// node, or re-split a node into items.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NodeRule {
     pub tag: String,
@@ -216,7 +216,7 @@ pub struct NodeRule {
 
 /// A condition over the labelled tree, the screen and the tracker's memory. All given keys
 /// must hold.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Cond {
     /// In a `[[state]]`: that state's rule holds. Elsewhere: the current state is this one
@@ -265,7 +265,7 @@ pub struct Cond {
 }
 
 /// `not = ["working", "idle"]` (none of these states) or `not = { ... }`.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum NotCond {
     States(Vec<String>),
@@ -273,7 +273,7 @@ pub enum NotCond {
 }
 
 /// An index given as a number or as a string (after variable substitution).
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum IndexSpec {
     N(i64),
@@ -289,7 +289,7 @@ impl IndexSpec {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct StateRule {
     pub name: String,
@@ -299,19 +299,22 @@ pub struct StateRule {
 
 /// A named input sequence. `require`, `steps` and `expect` may use `$name` variables, which
 /// are substituted before they are read.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ActionDef {
     pub name: String,
     pub description: Option<String>,
+    #[schemars(with = "Option<serde_json::Value>")]
     pub require: Option<toml::Value>,
     #[serde(default)]
+    #[schemars(with = "Vec<serde_json::Value>")]
     pub steps: Vec<toml::Value>,
+    #[schemars(with = "Option<serde_json::Value>")]
     pub expect: Option<toml::Value>,
 }
 
 /// Names a function in the host program that receives the tree and returns tags.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct HookRule {
     pub name: String,
@@ -319,7 +322,7 @@ pub struct HookRule {
 
 /// Rules for a range of CLI versions. Rules with the tag, state or action name of a base rule
 /// replace it; others are added.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Variant {
     pub version: String,
@@ -331,14 +334,14 @@ pub struct Variant {
     pub action: Vec<ActionDef>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct MatchSpec {
     pub command: Option<String>,
     pub version: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Meta {
     pub id: String,
@@ -352,7 +355,7 @@ pub struct Meta {
     pub unrecognised_after: Option<Dur>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ProfileFile {
     pub profile: Meta,
@@ -382,7 +385,7 @@ pub enum Step {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SelectStep {
     /// Tag of the menu.
@@ -401,4 +404,30 @@ pub struct SelectStep {
     /// a program redrawing at startup can reset it.
     pub hold: Option<Dur>,
     pub timeout: Option<Dur>,
+}
+
+/// A string schema, for types read from strings.
+fn string_schema(description: &str) -> schemars::Schema {
+    schemars::json_schema!({"type": "string", "description": description})
+}
+
+impl schemars::JsonSchema for Re {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Regex".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        string_schema("A regular expression (Rust regex syntax)")
+    }
+}
+
+impl schemars::JsonSchema for Dur {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Duration".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "A duration such as \"300ms\" or \"10s\", or seconds as a number",
+            "type": ["string", "number"],
+        })
+    }
 }

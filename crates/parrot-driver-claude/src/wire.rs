@@ -162,6 +162,13 @@ pub struct User {
 }
 
 impl User {
+    /// A prompt of content blocks: text, images and documents.
+    pub fn blocks(blocks: Vec<Value>) -> Self {
+        let mut u = User::prompt(String::new());
+        u.message.content = Content::Blocks(blocks.into_iter().map(Open::Unknown).collect());
+        u
+    }
+
     /// A plain text prompt.
     pub fn prompt(text: impl Into<String>) -> Self {
         User {

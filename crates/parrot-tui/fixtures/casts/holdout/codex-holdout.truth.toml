@@ -1,7 +1,7 @@
 # Ground truth for codex-holdout.cast: the state a person sees on the screen.
 # Held out: labelled after the profile was frozen (commit 5daa1fb), with the same text anchors as the development casts.
 cast = "codex-holdout.cast"
-profile = "../../profiles/codex.toml"
+profile = "../../profiles/codex.kdl"
 holdout = true
 spans = [
   [0.000, "starting"],

@@ -1,7 +1,7 @@
 # Ground truth for claude-holdout-1.cast: the state a person sees on the screen.
 # Held out: labelled after the profile was frozen (commit 5daa1fb), with the same text anchors as the development casts.
 cast = "claude-holdout-1.cast"
-profile = "../../profiles/claude-code.toml"
+profile = "../../profiles/claude-code.kdl"
 holdout = true
 spans = [
   [0.000, "starting"],
