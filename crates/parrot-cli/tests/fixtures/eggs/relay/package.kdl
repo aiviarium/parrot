@@ -1,0 +1,21 @@
+format 1
+
+package {
+  group example
+  id relay
+  version "0.1.0"
+}
+
+about {
+  name "Made-up relay"
+  summary "A carrier egg for tests: it reaches a runtime on this machine through its link endpoint."
+  license MIT
+}
+
+targets {
+  parrot {
+    requires {
+      parrot "^0.1"
+    }
+  }
+}

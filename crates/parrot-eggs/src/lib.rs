@@ -5,10 +5,12 @@
 //! | --- | --- |
 //! | [`target`] | The `parrot` target: the fact `parrot=<version>` and the check of a target's files |
 //! | [`driver`] | `driver.kdl` |
+//! | [`carrier`] | `carrier.kdl`, for carrier eggs |
 //! | [`probe`] | Probe scenarios, `probes/*.kdl` |
 //! | [`store`] | Installing into `<state_dir>/eggs`, packing, and loading |
 //! | [`schema`] | The JSON Schemas of the data files |
 
+pub mod carrier;
 pub mod driver;
 mod kdlx;
 pub mod probe;

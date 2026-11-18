@@ -39,6 +39,10 @@ enum Command {
         /// An address to accept links on over TCP, such as `0.0.0.0:7421`.
         #[arg(long)]
         link_listen: Option<String>,
+        /// Where workspaces that arrive over a link go; `workspaces` in the state directory
+        /// by default.
+        #[arg(long)]
+        workspace_root: Option<PathBuf>,
     },
     /// Relays standard input and output to the local runtime's socket.
     Connect {
@@ -90,7 +94,8 @@ fn main() {
             state_dir,
             ws,
             link_listen,
-        } => block_on(serve::run(state_dir, ws, link_listen)),
+            workspace_root,
+        } => block_on(serve::run(state_dir, ws, link_listen, workspace_root)),
         Command::Connect { socket, link } => block_on(connect::run(socket, link)),
         Command::Driver { name } => block_on(driver::run(name)),
     };

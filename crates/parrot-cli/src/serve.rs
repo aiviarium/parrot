@@ -73,6 +73,7 @@ pub async fn run(
     state_dir: Option<PathBuf>,
     ws: Option<String>,
     link_listen: Option<String>,
+    workspace_root: Option<PathBuf>,
 ) -> Result<(), String> {
     let dir = match state_dir {
         Some(dir) => dir,
@@ -82,7 +83,9 @@ pub async fn run(
     let store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
     let key =
         parrot_link::StaticKey::load_or_create(&dir).map_err(|e| format!("cannot read the link key: {e}"))?;
-    let hub = parrot_serve::link_hub::LinkHub::new(key, Some(dir.join("links.json")));
+    let link_store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
+    let hub = parrot_serve::link_hub::LinkHub::with_store(key, link_store, Some(dir.join("links.json")));
+    load_carriers(&dir, &hub);
     let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
     let drivers = load_drivers(&dir);
     parrot_core::agents::load(&mut core.state, drivers.agents());
@@ -121,6 +124,7 @@ pub async fn run(
     );
     let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
+    let workspace_root = workspace_root.unwrap_or_else(|| dir.join("workspaces"));
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
             .with_links(backend_hub)
@@ -129,6 +133,7 @@ pub async fn run(
             .with_drivers(drivers)
             .with_tui(tui)
             .with_tokens(backend_tokens)
+            .with_workspace_root(workspace_root)
     });
     hub.attach(rt.clone());
 
@@ -242,4 +247,39 @@ async fn terminated() {
 #[cfg(windows)]
 async fn terminated() {
     std::future::pending().await
+}
+
+/// Registers the installed carrier eggs with the link hub; refused ones are reported on stderr.
+fn load_carriers(dir: &std::path::Path, hub: &parrot_serve::link_hub::LinkHub) {
+    use parrot_link::carrier::{Containment, EggCarrier};
+    let (carriers, problems) = parrot_eggs::Eggs::new(dir).carriers();
+    for p in problems {
+        eprintln!("parrot: {p}");
+    }
+    for c in carriers {
+        let file = match c.carrier {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("parrot: refused the carrier egg {}: {e}", c.package);
+                continue;
+            }
+        };
+        let egg = EggCarrier {
+            name: file.kind.clone(),
+            title: file.title,
+            program: c.data_dir.join(&file.run),
+            args: file.args,
+            target_schema: file.target,
+            listens: file.listens,
+            max_message: file.max_message,
+            containment: match file.containment.as_deref() {
+                Some("restricted") => Some(Containment::Restricted),
+                Some("shell") => Some(Containment::Shell),
+                _ => None,
+            },
+        };
+        if let Err(e) = hub.add_carrier(egg) {
+            eprintln!("parrot: refused the carrier egg {}: {e}", c.package);
+        }
+    }
 }

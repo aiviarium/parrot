@@ -54,7 +54,8 @@ impl Target for ParrotTarget {
 }
 
 /// Checks the files of a `parrot` folder, by path relative to it: `driver.kdl` must be valid,
-/// probes must be valid scenarios, and every other `.kdl` file must parse as KDL.
+/// probes must be valid scenarios, and every other `.kdl` file must parse as KDL. A carrier egg
+/// has a valid `carrier.kdl` and the program it runs instead of `driver.kdl`.
 pub fn check_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Vec<Problem> {
     let files: Vec<(&str, &[u8])> = files.into_iter().collect();
     let mut problems = Vec::new();
@@ -66,6 +67,7 @@ pub fn check_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> 
         }
     };
     let mut driver = None;
+    let mut carrier = None;
     for (path, bytes) in &files {
         if !path.ends_with(".kdl") || path.starts_with("variants/") {
             continue;
@@ -73,7 +75,9 @@ pub fn check_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> 
         let Some(text) = text_of(path, bytes, &mut problems) else {
             continue;
         };
-        let result = if *path == "driver.kdl" {
+        let result = if *path == crate::carrier::FILE {
+            crate::carrier::CarrierFile::parse(&text).map(|c| carrier = Some(c))
+        } else if *path == "driver.kdl" {
             DriverFile::parse(&text).map(|d| driver = Some(d))
         } else if path.starts_with("probes/") {
             Probe::parse(&text).map(drop)
@@ -83,6 +87,19 @@ pub fn check_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> 
         if let Err(errs) = result {
             problems.extend(errs.into_iter().map(|e| Problem::in_file(*path, e)));
         }
+    }
+    // A carrier egg has `carrier.kdl` and its program instead of a driver (spec 24.2).
+    if let Some(c) = carrier {
+        if !files.iter().any(|(f, _)| *f == c.run) {
+            problems.push(Problem::in_file(
+                crate::carrier::FILE,
+                format!("runs {}, which is not in the parrot folder", c.run),
+            ));
+        }
+        return problems;
+    }
+    if files.iter().any(|(f, _)| *f == crate::carrier::FILE) {
+        return problems;
     }
     match driver {
         None if !problems.iter().any(|p| p.path.as_deref() == Some("driver.kdl")) => {

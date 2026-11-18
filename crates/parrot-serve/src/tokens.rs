@@ -160,13 +160,20 @@ impl TokenStore {
             "token.create" => self.create(&params),
             "token.list" => {
                 let records = self.records.lock().unwrap();
-                Ok(json!({ "tokens": records.iter().map(|r| r.token.clone()).collect::<Vec<_>>() }))
+                let by = params["by"].as_str();
+                Ok(json!({ "tokens": records
+                    .iter()
+                    .filter(|r| by.is_none_or(|b| r.token["createdBy"] == b))
+                    .map(|r| r.token.clone())
+                    .collect::<Vec<_>>() }))
             }
             "token.revoke" => {
                 let id = params["token"].as_str().unwrap_or_default();
+                // A link revokes only the tokens it created itself.
+                let by = params["by"].as_str();
                 let mut records = self.records.lock().unwrap();
                 let before = records.len();
-                records.retain(|r| r.token["id"] != id);
+                records.retain(|r| r.token["id"] != id || by.is_some_and(|b| r.token["createdBy"] != b));
                 if records.len() == before {
                     return Err(RpcError::new(-32002, format!("token not found: {id}")));
                 }
@@ -197,6 +204,10 @@ impl TokenStore {
         }
         if let Some(e) = p["expires"].as_str() {
             token["expires"] = json!(e);
+        }
+        // The core sets `by` for a token minted over a link, which may later list and revoke it.
+        if let Some(by) = p["by"].as_str() {
+            token["createdBy"] = json!(by);
         }
         let mut records = self.records.lock().unwrap();
         records.push(Record {
@@ -275,6 +286,34 @@ mod tests {
                 .op("token.create", json!({ "name": "x", "scopes": ["root"] }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_link_sees_and_revokes_only_its_own_tokens() {
+        let store = TokenStore::memory();
+        let own = store
+            .op("token.create", json!({ "name": "owner", "scopes": ["read"] }))
+            .unwrap();
+        let linked = store
+            .op(
+                "token.create",
+                json!({ "name": "via", "scopes": ["read"], "sessions": ["ses_a"], "by": "lnk_a" }),
+            )
+            .unwrap();
+        assert_eq!(linked["token"]["createdBy"], "lnk_a");
+        let listed = store.op("token.list", json!({ "by": "lnk_a" })).unwrap();
+        assert_eq!(listed["tokens"].as_array().unwrap().len(), 1);
+        let own_id = own["token"]["id"].as_str().unwrap();
+        let e = store
+            .op("token.revoke", json!({ "token": own_id, "by": "lnk_a" }))
+            .unwrap_err();
+        assert_eq!(e.code, -32002);
+        assert!(store.check(own["secret"].as_str().unwrap()).is_some());
+        let linked_id = linked["token"]["id"].as_str().unwrap();
+        store
+            .op("token.revoke", json!({ "token": linked_id, "by": "lnk_a" }))
+            .unwrap();
+        assert!(store.check(linked["secret"].as_str().unwrap()).is_none());
     }
 
     #[test]

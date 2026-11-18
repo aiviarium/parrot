@@ -7,6 +7,7 @@
 //! carrier ([`carrier::open`]) and runs [`noise::Dialer`] over it.
 
 pub mod base32;
+pub mod base64;
 pub mod carrier;
 pub mod endpoint;
 pub mod error;
