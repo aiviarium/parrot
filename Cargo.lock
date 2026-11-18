@@ -1306,7 +1306,9 @@ dependencies = [
  "parrot-store",
  "parrot-workspace",
  "serde_json",
+ "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1411,6 +1413,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "parrot-core",
+ "parrot-driver",
  "parrot-proto",
  "parrot-store",
  "rustix",
