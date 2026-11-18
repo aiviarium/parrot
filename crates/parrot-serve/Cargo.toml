@@ -1,0 +1,21 @@
+[package]
+name = "parrot-serve"
+description = "Transports and dispatch for the Parrot runtime: local socket, named pipe, WebSocket, stdio"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+tokio-tungstenite.workspace = true
+parrot-proto.workspace = true
+parrot-core.workspace = true
+parrot-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
