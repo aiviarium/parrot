@@ -41,7 +41,7 @@ data-version "1"
 
 The runtime marks a session `unverified` when the CLI reports a version outside `versions`. Each
 egg states the release line its data was checked against, such as the pi egg's
-`>=0.73.0, <0.74.0`. The runtime compares only a version the CLI reports.
+`>=1.5.0, <1.6.0`. The runtime compares only a version the CLI reports.
 
 | Node | Meaning |
 | --- | --- |

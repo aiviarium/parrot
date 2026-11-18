@@ -332,6 +332,15 @@ pub enum Event {
         #[serde(flatten)]
         extra: Extra,
     },
+    TurnEnd {
+        /// Kept untyped: the frame carries the record, and a turn ends on `agent_settled`.
+        #[serde(default)]
+        message: Value,
+        #[serde(default)]
+        tool_results: Vec<Value>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
     AgentEnd {
         #[serde(flatten)]
         extra: Extra,
@@ -339,6 +348,86 @@ pub enum Event {
     AgentSettled {
         #[serde(default)]
         aborted: bool,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    QueueUpdate {
+        #[serde(default)]
+        steering: Vec<String>,
+        #[serde(default)]
+        follow_up: Vec<String>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    ThinkingLevelChanged {
+        #[serde(default)]
+        level: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    SessionInfoChanged {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    EntryAppended {
+        #[serde(default)]
+        entry: Value,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    ExtensionError {
+        #[serde(default)]
+        extension_path: String,
+        #[serde(default)]
+        event: String,
+        #[serde(default)]
+        error: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    BashExecutionUpdate {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        delta: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    AutoRetryStart {
+        #[serde(default)]
+        attempt: u64,
+        #[serde(default)]
+        max_attempts: u64,
+        #[serde(default)]
+        delay_ms: u64,
+        #[serde(default)]
+        error_message: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    SummarizationRetryScheduled {
+        #[serde(default)]
+        attempt: u64,
+        #[serde(default)]
+        max_attempts: u64,
+        #[serde(default)]
+        delay_ms: u64,
+        #[serde(default)]
+        error_message: String,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    SummarizationRetryAttemptStart {
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    SummarizationRetryFinished {
         #[serde(flatten)]
         extra: Extra,
     },
@@ -360,13 +449,29 @@ pub enum Event {
         #[serde(default)]
         success: bool,
         #[serde(default)]
+        attempt: u64,
+        #[serde(default)]
         final_error: Option<String>,
+        #[serde(flatten)]
+        extra: Extra,
+    },
+    CompactionStart {
+        #[serde(default)]
+        reason: String,
         #[serde(flatten)]
         extra: Extra,
     },
     CompactionEnd {
         #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
         result: Option<Value>,
+        #[serde(default)]
+        aborted: bool,
+        #[serde(default)]
+        will_retry: bool,
+        #[serde(default)]
+        error_message: Option<String>,
         #[serde(flatten)]
         extra: Extra,
     },
@@ -558,5 +663,47 @@ mod tests {
         };
         assert!(is_error);
         assert_eq!(extra["durationMs"], 3);
+    }
+
+    /// The event names pi 1.5.1 sends are all known, so their fields are typed rather than raw.
+    #[test]
+    fn pi_1_5_events_are_known() {
+        let lines = [
+            r#"{"type":"turn_end","message":{"role":"assistant","content":[]},"toolResults":[]}"#,
+            r#"{"type":"queue_update","steering":[],"followUp":[]}"#,
+            r#"{"type":"thinking_level_changed","level":"low"}"#,
+            r#"{"type":"session_info_changed","name":"trace-check"}"#,
+            r#"{"type":"entry_appended","entry":{"type":"custom","id":"e1"}}"#,
+            r#"{"type":"extension_error","extensionPath":"/opt/pi/demo.ts","event":"tool_call","error":"boom"}"#,
+            r#"{"type":"bash_execution_update","id":"req-1","delta":"hello\n"}"#,
+            r#"{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"529"}"#,
+            r#"{"type":"summarization_retry_scheduled","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"terminated"}"#,
+            r#"{"type":"summarization_retry_attempt_start","source":"compaction","reason":"threshold"}"#,
+            r#"{"type":"summarization_retry_finished"}"#,
+            r#"{"type":"compaction_start","reason":"manual"}"#,
+            r#"{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false,"errorMessage":"Compaction failed: Already compacted"}"#,
+        ];
+        for line in lines {
+            let parsed = parse_inbound(line).unwrap();
+            assert!(
+                matches!(parsed, Open::Known(Inbound::Event(_))),
+                "unknown event {line}"
+            );
+        }
+        let Some(Open::Known(Inbound::Event(Event::CompactionEnd {
+            reason,
+            result,
+            error_message,
+            ..
+        }))) = parse_inbound(lines[12])
+        else {
+            panic!("not a compaction end");
+        };
+        assert_eq!(reason.as_deref(), Some("manual"));
+        assert!(result.is_none());
+        assert_eq!(
+            error_message.as_deref(),
+            Some("Compaction failed: Already compacted")
+        );
     }
 }

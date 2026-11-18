@@ -70,13 +70,22 @@ fn header(text: &str) -> (Option<String>, Option<String>) {
     (None, None)
 }
 
-/// The first user prompt, for a session's title.
+/// A session's display name, from the last `session_info` entry, else its first user prompt.
 fn title(text: &str) -> Option<String> {
+    let mut name = None;
+    let mut first = None;
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v["type"] != "message" || v["message"]["role"] != json!("user") {
+        if v["type"] == "session_info" {
+            name = v["name"]
+                .as_str()
+                .filter(|n| !n.trim().is_empty())
+                .map(|n| n.chars().take(80).collect());
+            continue;
+        }
+        if first.is_some() || v["type"] != "message" || v["message"]["role"] != json!("user") {
             continue;
         }
         let content = &v["message"]["content"];
@@ -86,11 +95,11 @@ fn title(text: &str) -> Option<String> {
                 .iter()
                 .find_map(|b| b.get("text").and_then(Value::as_str).map(str::to_owned))
         });
-        if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
-            return Some(text.chars().take(80).collect());
-        }
+        first = text
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| t.chars().take(80).collect());
     }
-    None
+    name.or(first)
 }
 
 /// `history/discover` under `root`.
@@ -204,6 +213,22 @@ impl Replay {
     fn entry(&mut self, entry: &Value) {
         match entry["type"].as_str() {
             Some("message") => self.message(entry),
+            Some("custom_message") => {
+                // An extension's message is context the user sees, and belongs to the turn it
+                // arrived in.
+                let Some(text) = text_of(&entry["content"]) else {
+                    return;
+                };
+                let id = format!("{}:custom", entry["id"].as_str().unwrap_or("entry"));
+                self.updates.push(self.item(ItemPatch {
+                    id,
+                    kind: Some(Open::Known(ItemKind::User)),
+                    turn: self.turn.clone(),
+                    source: Some(parrot_proto::item::ItemSource::Transcript),
+                    set: Some(map_of("text", json!(text))),
+                    ..Default::default()
+                }));
+            }
             Some("compaction") => {
                 let mut set = Map::new();
                 set.insert("trigger".into(), json!("auto"));
@@ -380,8 +405,37 @@ impl Replay {
                     }
                 }
             }
+            Some("bashExecution") => {
+                // The `bash` RPC command stores what it ran beside the tool results.
+                let id = format!("{}:bash", entry_id);
+                let mut set = map_of("tool", json!("bash"));
+                set.insert("title".into(), json!(describe_bash(&message["command"])));
+                set.insert("input".into(), json!({"command": message["command"]}));
+                let cancelled = message["cancelled"] == true;
+                set.insert("status".into(), json!(if cancelled { "error" } else { "ok" }));
+                set.insert("caller".into(), json!("user"));
+                if let Some(output) = message["output"].as_str().filter(|o| !o.is_empty()) {
+                    set.insert("output".into(), json!(output));
+                }
+                self.updates.push(self.item(ItemPatch {
+                    id,
+                    kind: Some(Open::Known(ItemKind::Tool)),
+                    turn: self.turn.clone(),
+                    source: Some(parrot_proto::item::ItemSource::Transcript),
+                    set: Some(set),
+                    streaming: Some(false),
+                    ..Default::default()
+                }));
+            }
             _ => {}
         }
+    }
+}
+
+fn describe_bash(command: &Value) -> String {
+    match command.as_str() {
+        Some(command) if !command.is_empty() => format!("bash: {command}"),
+        _ => "bash".to_owned(),
     }
 }
 
@@ -439,6 +493,42 @@ mod tests {
 {"type":"message","id":"e3","parentId":"e2","timestamp":"2026-01-02T03:04:06.500Z","message":{"role":"toolResult","toolCallId":"call-1","isError":false,"content":[{"type":"text","text":"hello"}],"nestedCalls":{"complete":true,"calls":[{"id":"inner-1","name":"grep","status":"ok","arguments":{"pattern":"x"}}]}}}
 {"type":"compaction","id":"c1","parentId":"e3","timestamp":"2026-01-02T03:05:00.000Z","summary":"Talked about notes."}
 "#;
+
+    #[test]
+    fn a_session_name_wins_as_the_title_and_later_entries_become_items() {
+        let text = concat!(
+            r#"{"type":"session","version":3,"id":"sess-made-up","timestamp":"2026-01-02T03:04:05.000Z","cwd":"/work/demo"}"#,
+            "\n",
+            r#"{"type":"session_info","id":"e1","parentId":null,"timestamp":"2026-01-02T03:04:05.100Z","name":"Refactor auth"}"#,
+            "\n",
+            r#"{"type":"message","id":"e2","parentId":"e1","timestamp":"2026-01-02T03:04:05.200Z","message":{"role":"user","content":[{"type":"text","text":"Fix the tests"}]}}"#,
+            "\n",
+            r#"{"type":"custom_message","id":"e3","parentId":"e2","timestamp":"2026-01-02T03:04:05.300Z","customType":"demo","content":[{"type":"text","text":"Injected context"}],"display":true}"#,
+            "\n",
+            r#"{"type":"message","id":"e4","parentId":"e3","timestamp":"2026-01-02T03:04:05.400Z","message":{"role":"bashExecution","command":"ls -la","output":"total 0","exitCode":0,"cancelled":false,"timestamp":1733234567890}}"#,
+            "\n",
+        );
+        assert_eq!(title(text).as_deref(), Some("Refactor auth"));
+        let read = read(text, None);
+        let items: Vec<&ItemPatch> = read
+            .updates
+            .iter()
+            .filter_map(|u| match &u.update {
+                Open::Known(DriverUpdateKind::Item { item }) => Some(item),
+                _ => None,
+            })
+            .collect();
+        assert!(items.iter().any(|i| i.kind == Some(Open::Known(ItemKind::User))
+            && i.set.as_ref().and_then(|s| s.get("text")) == Some(&json!("Injected context"))));
+        let bash = items.iter().find(|i| {
+            i.set
+                .as_ref()
+                .is_some_and(|s| s.get("tool") == Some(&json!("bash")))
+        });
+        let bash = bash.expect("the bash execution is a tool item");
+        assert_eq!(bash.set.as_ref().unwrap()["output"], json!("total 0"));
+        assert_eq!(bash.set.as_ref().unwrap()["caller"], json!("user"));
+    }
 
     #[test]
     fn discovers_and_reads_a_session() {

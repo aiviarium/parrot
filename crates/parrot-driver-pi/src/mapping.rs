@@ -191,6 +191,11 @@ impl MapState {
         ]
     }
 
+    /// The thinking levels the current model offers, as pi names them; `off` is not a level here.
+    pub fn set_levels(&mut self, levels: &[String]) {
+        self.thinking = levels.iter().filter(|l| *l != "off").cloned().collect();
+    }
+
     fn thinking_value(&self) -> Option<String> {
         self.current_thinking
             .as_ref()
@@ -220,7 +225,7 @@ impl MapState {
         if let Some(key) = state.model_key() {
             self.model = Some(key.clone());
         }
-        self.thinking = levels.iter().filter(|l| *l != "off").cloned().collect();
+        self.set_levels(levels);
         self.current_thinking = state.thinking_level.clone().filter(|l| l != "off");
         if let Some(id) = &state.session_id
             && self.session_id.as_ref() != Some(id)
@@ -425,12 +430,16 @@ impl MapState {
                 tool_call_id,
                 result,
                 is_error,
+                extra,
                 ..
             } => {
                 let mut set = map_of("status", json!(if is_error { "error" } else { "ok" }));
                 let text = result_text(&result);
                 if !text.is_empty() {
                     set.insert("output".into(), json!(clip(&text)));
+                }
+                if let Some(ms) = extra.get("durationMs").and_then(Value::as_u64) {
+                    set.insert("durationMs".into(), json!(ms));
                 }
                 out.push(self.item(ItemPatch {
                     id: tool_call_id.clone(),
@@ -441,8 +450,48 @@ impl MapState {
                 // A tool may have called other tools; they hang under it (Appendix C).
                 out.extend(self.nested(&tool_call_id, &result));
             }
+            Event::TurnEnd { .. } => {}
             Event::AgentEnd { .. } => {}
             Event::AgentSettled { aborted, .. } => out.extend(self.settled(aborted, now)),
+            Event::QueueUpdate { .. }
+            | Event::SessionInfoChanged { .. }
+            | Event::EntryAppended { .. }
+            | Event::BashExecutionUpdate { .. } => {}
+            Event::ThinkingLevelChanged { level, .. } => {
+                let level = (level != "off").then_some(level);
+                if self.current_thinking != level {
+                    self.current_thinking = level;
+                    out.push(self.options_update());
+                }
+            }
+            Event::ExtensionError {
+                extension_path,
+                event,
+                error,
+                ..
+            } => out.push(self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "An extension of pi failed in {event} ({}): {error}",
+                    basename(&extension_path)
+                ),
+                "extension_error",
+            )),
+            Event::AutoRetryStart {
+                attempt,
+                max_attempts,
+                error_message,
+                ..
+            } => out.push(self.notice(
+                NoticeLevel::Info,
+                format!(
+                    "pi is retrying after an error (attempt {attempt} of {max_attempts}): {error_message}"
+                ),
+                "retry",
+            )),
+            Event::SummarizationRetryScheduled { .. }
+            | Event::SummarizationRetryAttemptStart { .. }
+            | Event::SummarizationRetryFinished { .. } => {}
             Event::ExtensionUiRequest {
                 id,
                 method,
@@ -464,9 +513,30 @@ impl MapState {
                     ));
                 }
             }
-            Event::CompactionEnd { result, .. } => {
-                if let Some(result) = result {
-                    out.extend(self.compacted(&result, "auto"));
+            Event::CompactionStart { .. } => {}
+            Event::CompactionEnd {
+                reason,
+                result,
+                error_message,
+                ..
+            } => {
+                // The end event is the one place both a manual and an automatic compaction report
+                // their result, so the item is made here rather than from the `compact` answer.
+                match (result, error_message) {
+                    (Some(result), _) => {
+                        let trigger = if reason.as_deref() == Some("manual") {
+                            "manual"
+                        } else {
+                            "auto"
+                        };
+                        out.extend(self.compacted(&result, trigger));
+                    }
+                    (None, Some(message)) => out.push(self.notice(
+                        NoticeLevel::Warning,
+                        format!("pi could not compact the context: {message}"),
+                        "compaction_failed",
+                    )),
+                    (None, None) => {}
                 }
             }
         }
@@ -727,12 +797,11 @@ impl MapState {
             .collect()
     }
 
-    /// The text of the prompt a turn was started with, for a fork at that turn.
-    pub fn turn_input_text(&self, turn: &str) -> Option<&str> {
-        self.turn_inputs
-            .iter()
-            .find(|(key, _)| key == turn)
-            .map(|(_, text)| text.as_str())
+    /// The order and text of the prompt a turn was started with, for a fork at that turn.
+    pub fn turn_input(&self, turn: &str) -> Option<(usize, usize, &str)> {
+        let index = self.turn_inputs.iter().position(|(key, _)| key == turn)?;
+        let (_, text) = &self.turn_inputs[index];
+        Some((index, self.turn_inputs.len(), text.as_str()))
     }
 
     fn tool_start(&mut self, id: &str, name: &str, args: &Value) -> DriverUpdate {
@@ -1004,6 +1073,11 @@ fn clip(text: &str) -> String {
     } else {
         text.to_owned()
     }
+}
+
+/// The last segment of a path, for naming an extension in a notice.
+fn basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 fn describe(tool: &str, args: &Value) -> String {
