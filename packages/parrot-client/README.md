@@ -18,7 +18,7 @@ await client.prompt("ses_1", "hello")
 `src/schema.ts` is generated. Do not edit it. Run `bun run generate` in this package after a change to
 the schema. `bun run test` fails when the file is stale.
 
-It holds every type the schema defines, and three maps:
+It has every type the schema defines, and three maps:
 
 | Map | Holds | Used by |
 | --- | --- | --- |
