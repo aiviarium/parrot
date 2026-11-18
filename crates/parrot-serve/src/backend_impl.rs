@@ -49,12 +49,7 @@ use tokio::sync::mpsc;
 /// The error code sent back when a driver cannot be started or reached.
 const DRIVER_FAILED: i64 = -32000;
 
-/// How to run a driver: the program and its arguments.
-#[derive(Debug, Clone)]
-struct DriverCommand {
-    program: PathBuf,
-    args: Vec<String>,
-}
+use crate::drivers::DriverCommand;
 
 /// Where driver inputs go: the runtime, or a channel in tests.
 #[derive(Clone)]
@@ -155,6 +150,7 @@ impl RuntimeBackend {
             DriverCommand {
                 program: program.into(),
                 args: args.into_iter().map(Into::into).collect(),
+                env: Vec::new(),
             },
         );
         self
@@ -164,16 +160,7 @@ impl RuntimeBackend {
         if let Some(cmd) = self.commands.get(agent) {
             return Ok(cmd.clone());
         }
-        match agent {
-            "claude" | "codex" => {
-                let program = std::env::current_exe().map_err(|e| format!("cannot find parrot: {e}"))?;
-                Ok(DriverCommand {
-                    program,
-                    args: vec!["driver".into(), agent.into()],
-                })
-            }
-            _ => Err(format!("no driver for agent {agent}")),
-        }
+        crate::drivers::resolve(agent)
     }
 
     /// An internal call id, counting down from `u64::MAX`.
@@ -265,6 +252,16 @@ impl Backend for RuntimeBackend {
         if writer.send(Write::Sync(done)).is_ok() {
             let _ = wait.recv();
         }
+    }
+
+    fn workspace(&mut self, call: u64, op: String, params: Value) {
+        let rt = self.rt.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || crate::workspace_ops::run(&op, params))
+                .await
+                .unwrap_or_else(|e| Err(RpcError::new(-32603, format!("workspace task failed: {e}"))));
+            let _ = rt.input(Input::WorkspaceReply { call, result }).await;
+        });
     }
 
     fn agent_call(&mut self, agent: String, call: u64, method: String, params: Value) {

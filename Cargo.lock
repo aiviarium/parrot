@@ -1298,9 +1298,14 @@ dependencies = [
  "parrot-conform",
  "parrot-core",
  "parrot-driver",
+ "parrot-driver-acp",
  "parrot-driver-claude",
  "parrot-driver-codex",
+ "parrot-driver-opencode",
+ "parrot-driver-pi",
+ "parrot-driver-t3",
  "parrot-driver-tui",
+ "parrot-eggs",
  "parrot-guard",
  "parrot-link",
  "parrot-mcp",
@@ -1349,6 +1354,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "parrot-driver-acp"
+version = "0.1.0"
+dependencies = [
+ "parrot-driver",
+ "parrot-guard",
+ "parrot-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "parrot-driver-claude"
 version = "0.1.0"
 dependencies = [
@@ -1376,6 +1395,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "parrot-driver-opencode"
+version = "0.1.0"
+dependencies = [
+ "parrot-driver",
+ "parrot-guard",
+ "parrot-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "parrot-driver-pi"
+version = "0.1.0"
+dependencies = [
+ "parrot-driver",
+ "parrot-guard",
+ "parrot-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "parrot-driver-t3"
+version = "0.1.0"
+dependencies = [
+ "parrot-driver",
+ "parrot-guard",
+ "parrot-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "parrot-driver-tui"
 version = "0.1.0"
 dependencies = [
@@ -1389,6 +1450,17 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "parrot-eggs"
+version = "0.1.0"
+dependencies = [
+ "parrot-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

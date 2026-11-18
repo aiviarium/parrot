@@ -1,0 +1,28 @@
+[package]
+name = "parrot-driver-pi"
+description = "The pi driver over pi RPC, with a fake pi for tests"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "fake-pi"
+path = "src/bin/fake-pi.rs"
+test = false
+
+[dependencies]
+parrot-proto.workspace = true
+parrot-driver.workspace = true
+parrot-guard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

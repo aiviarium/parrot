@@ -19,6 +19,8 @@ pub trait Backend: Send + 'static {
     fn persist(&mut self, record: Value);
     /// Returns once every record persisted so far is written.
     fn sync(&mut self) {}
+    /// Run a workspace operation; answer with `Input::WorkspaceReply`.
+    fn workspace(&mut self, _call: u64, _op: String, _params: Value) {}
     /// Told of every timer; the executor schedules the `Input::Tick` itself.
     fn timer_at(&mut self, _at_ms: u64) {}
     /// Call a driver without a binding (`agent/list`); answer with `Input::AgentReply`.
@@ -188,6 +190,7 @@ impl Executor {
                 params,
             } => self.backend.driver_call(binding, call, method, params),
             Effect::StopBinding { binding } => self.backend.stop_binding(binding),
+            Effect::Workspace { call, op, params } => self.backend.workspace(call, op, params),
             Effect::AgentCall {
                 agent,
                 call,

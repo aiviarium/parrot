@@ -35,9 +35,7 @@ pub struct Sessions {
 
 impl Default for Sessions {
     fn default() -> Self {
-        let mut agents = BTreeMap::new();
-        agents.insert("claude".to_string(), builtin_agent("claude", "Claude Code"));
-        agents.insert("codex".to_string(), builtin_agent("codex", "Codex"));
+        let agents = crate::agents::builtin();
         Self {
             by_id: BTreeMap::new(),
             info: BTreeMap::new(),
@@ -47,24 +45,6 @@ impl Default for Sessions {
             calls: BTreeMap::new(),
         }
     }
-}
-
-/// A built-in agent before its driver has answered `agent/list`.
-fn builtin_agent(id: &str, name: &str) -> Value {
-    json!({
-        "id": id,
-        "name": name,
-        "driver": { "name": id, "version": env!("CARGO_PKG_VERSION"), "kind": "builtin", "data": "1" },
-        "installed": true,
-        "auth": "unknown",
-        "usable": true,
-        "controls": ["native"],
-        "features": {},
-        "levels": [],
-        "isolation": ["none"],
-        "options": [],
-        "actions": [],
-    })
 }
 
 /// What the core keeps per session; other modules read it through `directory`.
@@ -448,6 +428,10 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
     if let Some(r) = &resume {
         start["resume"] = json!(r);
     }
+    // The injected MCP server for this binding (spec 26), when functions are on.
+    if let Some(mcp) = crate::functions::mcp_for(cx, session, &id) {
+        start["mcp"] = mcp;
+    }
     cx.state.bindings.by_id.insert(
         id.clone(),
         BindingRecord {
@@ -499,6 +483,8 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
     let result = match method {
         // Prompts belong to the queue, which owns turn dispatch.
         "session/prompt" | "session/cancel" => return queue::call(cx, conn, id, method, params),
+        // Moving a session between runtimes belongs to the links (E1).
+        "session/offer" | "session/commit" => return crate::links::call(cx, conn, id, method, params),
         "session/new" => new(cx, conn, id, params),
         "session/list" => list(cx, conn, params),
         "session/get" => get(cx, conn, params),

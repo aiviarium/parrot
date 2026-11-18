@@ -1,0 +1,28 @@
+[package]
+name = "parrot-driver-t3"
+description = "The T3 Code driver: Parrot driving T3 Code over its MCP tools"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "fake-t3"
+path = "src/bin/fake-t3.rs"
+test = false
+
+[dependencies]
+parrot-proto.workspace = true
+parrot-driver.workspace = true
+parrot-guard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

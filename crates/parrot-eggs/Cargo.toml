@@ -1,0 +1,20 @@
+[package]
+name = "parrot-eggs"
+description = "Driver eggs for the Parrot runtime: the parrot Hatchery target, installed drivers and their data"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+parrot-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
