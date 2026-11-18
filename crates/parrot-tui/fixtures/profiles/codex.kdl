@@ -244,3 +244,16 @@ action name="clear-prompt" description="Delete what is typed in the prompt." {
   (array)steps key="ctrl+u"
   expect empty="prompt" within="3s"
 }
+
+// An image or file goes in as its pasted path, which the CLI turns into an attachment.
+action name="attach" description="Attach a file by pasting its path." {
+  require hold="300ms" {
+    state "idle" "working"
+  }
+  steps paste="$path "
+  steps timeout="5s" {
+    wait {
+      not empty="prompt"
+    }
+  }
+}

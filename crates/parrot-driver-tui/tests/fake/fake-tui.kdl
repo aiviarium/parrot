@@ -40,6 +40,12 @@ action name="submit" {
   expect no-text-matches="Type a prompt" within="5s"
 }
 
+// The fake reads whole lines, so an attachment is its path typed ahead of the prompt.
+action name="attach" {
+  require state="idle" hold="200ms"
+  (array)steps type="@$path "
+}
+
 action name="choose" {
   require hold="200ms" {
     state "awaiting-approval" "onboarding"

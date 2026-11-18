@@ -347,3 +347,78 @@ async fn agent_list_reports_tui_control() {
     assert_eq!(r["agents"][0]["controls"], json!(["tui"]));
     assert_eq!(r["agents"][0]["driver"]["data"], "fake-tui");
 }
+
+#[tokio::test]
+async fn attachments_go_through_the_attach_action_and_frames_rebuild_items() {
+    let (mut h, started) = Harness::start(false).await;
+    started.unwrap();
+    h.state("idle").await;
+    h.clear();
+    let r = h
+        .call(
+            "binding/prompt",
+            json!({ "binding": "b1", "message": "msg_1", "text": "look", "steer": false,
+                "attachments": [
+                    { "name": "dot.png", "type": "image/png", "data": "iVBORw0KGgo=" },
+                    { "name": "far.png", "type": "image/png", "uri": "https://example.test/far.png" }
+                ] }),
+        )
+        .await;
+    assert_eq!(r["disposition"], "started");
+    let n = h.until("notice", |u| u["update"]["type"] == "notice").await;
+    assert!(n["update"]["text"].as_str().unwrap().contains("far.png"), "{n}");
+    h.turn_done("turn-1").await;
+    h.state("idle").await;
+    h.until("assistant item", |u| u["update"]["item"]["kind"] == "assistant")
+        .await;
+    let screen = h.screen().await;
+    let text = screen["text"].as_str().unwrap();
+    assert!(
+        text.contains("Done: @") && text.contains("dot.png look"),
+        "{screen}"
+    );
+
+    let frames: Vec<Value> = h
+        .seen
+        .iter()
+        .filter(|u| u["update"]["type"] == "frame")
+        .map(|u| {
+            assert_eq!(u["update"]["source"], "transcript");
+            u["update"]["data"].clone()
+        })
+        .collect();
+    assert!(!frames.is_empty());
+    let echo = "look".to_owned();
+    let rebuilt: Vec<Value> = parrot_driver_tui::frame::rebuild("b1", &frames, &[echo])
+        .iter()
+        .map(|u| serde_json::to_value(u).unwrap())
+        .collect();
+    let live: Vec<Value> = h
+        .seen
+        .iter()
+        .filter(|u| u["update"]["item"]["source"] == "transcript")
+        .cloned()
+        .collect();
+    assert_eq!(rebuilt, live);
+    h.stop().await;
+}
+
+#[test]
+fn mcp_is_injected_without_the_token_in_argv() {
+    use parrot_driver_tui::driver::{McpStyle, mcp_args};
+    let mcp = serde_json::from_value(json!({ "url": "http://127.0.0.1:4711/mcp", "token": "tok-made-up" }))
+        .unwrap();
+    let claude = mcp_args(McpStyle::Claude, &mcp);
+    assert_eq!(claude[0], "--mcp-config");
+    let config: Value = serde_json::from_str(&claude[1]).unwrap();
+    assert_eq!(
+        config["mcpServers"]["parrot"]["headers"]["Authorization"],
+        "Bearer ${PARROT_MCP_TOKEN}"
+    );
+    let codex = mcp_args(McpStyle::Codex, &mcp);
+    assert_eq!(
+        codex[3],
+        "mcp_servers.parrot.bearer_token_env_var=\"PARROT_MCP_TOKEN\""
+    );
+    assert!(!claude.iter().chain(&codex).any(|a| a.contains("tok-made-up")));
+}

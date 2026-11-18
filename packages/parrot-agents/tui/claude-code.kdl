@@ -260,3 +260,23 @@ action name="clear-prompt" description="Delete what is typed in the prompt." {
   (array)steps key="ctrl+u"
   expect empty="prompt" within="3s"
 }
+
+// An image or file goes in as its pasted path, which the CLI turns into an attachment.
+action name="attach" description="Attach a file by pasting its path." {
+  require hold="300ms" {
+    state "idle" "working"
+  }
+  steps paste="$path "
+  steps timeout="5s" {
+    wait {
+      not empty="prompt"
+    }
+  }
+}
+
+// A prompt sent while Claude Code works joins the running turn at its next step.
+action name="steer" description="Send a prompt into the running turn." {
+  require state="working" hold="300ms"
+  steps paste="$text"
+  steps key="enter"
+}

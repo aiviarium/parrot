@@ -1463,6 +1463,7 @@ dependencies = [
 name = "parrot-driver-tui"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "parrot-driver",
  "parrot-guard",
  "parrot-proto",
