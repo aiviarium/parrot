@@ -13,6 +13,7 @@ doctest = false
 [dependencies]
 parrot-proto.workspace = true
 parrot-driver.workspace = true
+parrot-guard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

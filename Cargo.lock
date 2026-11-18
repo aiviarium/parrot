@@ -1349,6 +1349,7 @@ name = "parrot-driver-claude"
 version = "0.1.0"
 dependencies = [
  "parrot-driver",
+ "parrot-guard",
  "parrot-proto",
  "serde",
  "serde_json",

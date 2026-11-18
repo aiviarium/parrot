@@ -1,0 +1,24 @@
+{"binding":"b1","update":{"type":"ref","ref":{"id":"sess-fake-0002","strength":"strong"}}}
+{"binding":"b1","update":{"type":"options","options":[{"id":"model","role":"model","label":"Model","schema":{"type":"string"},"value":"claude-opus-5-5","applies":"now"},{"id":"permissionMode","role":"mode","label":"Permission mode","schema":{"type":"string","enum":["default","acceptEdits","plan","bypassPermissions","dontAsk"]},"value":"plan","applies":"now"}],"level":"read","network":false}}
+{"binding":"b1","update":{"type":"options","options":[{"id":"model","role":"model","label":"Model","schema":{"type":"string"},"value":"claude-opus-5-5","applies":"now"},{"id":"permissionMode","role":"mode","label":"Permission mode","schema":{"type":"string","enum":["default","acceptEdits","plan","bypassPermissions","dontAsk"]},"value":"someFutureMode","applies":"now"}],"level":"read","network":false}}
+{"binding":"b1","update":{"type":"item","item":{"id":"u-1","kind":"compaction","set":{"trigger":"auto"}}}}
+{"binding":"b1","update":{"type":"state","state":"running","background":[]}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"running","continuable":false,"started":"2026-01-01T00:00:00.000Z"}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"msg_x:final:0","kind":"reasoning","turn":"turn-1","set":{"text":"Plan it."},"streaming":false}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"toolu_task","kind":"tool","turn":"turn-1","set":{"tool":"Task","title":"Task","input":{"description":"Look around","prompt":"List files","subagent_type":"general-purpose"},"status":"running","caller":"model"},"streaming":false}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"msg_y:final:0","kind":"assistant","turn":"turn-1","parent":"toolu_task","set":{"text":"From the subagent."},"streaming":false}}}
+{"binding":"b1","update":{"type":"item","item":{"id":"toolu_task","set":{"status":"ok","output":[{"type":"text","text":"Two files."}]},"streaming":false}}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-1","status":"completed","stop":"budget","continuable":true,"started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","usage":{"tokens":{"input":1,"output":1},"cost":{"amount":1.5,"currency":"USD"}}}}}
+{"binding":"b1","update":{"type":"usage","usage":{"tokens":{"input":1,"output":1},"cost":{"amount":1.5,"currency":"USD"}}}}
+{"binding":"b1","update":{"type":"state","state":"idle","background":[]}}
+{"binding":"b1","update":{"type":"state","state":"running","background":[]}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-2","status":"running","continuable":false,"started":"2026-01-01T00:00:00.000Z"}}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-2","status":"failed","stop":"error","continuable":false,"started":"2026-01-01T00:00:00.000Z","ended":"2026-01-01T00:00:00.000Z","error":{"code":"error_some_future_kind","message":"the turn failed","retryable":true},"usage":{}}}}
+{"binding":"b1","update":{"type":"usage","usage":{}}}
+{"binding":"b1","update":{"type":"state","state":"idle","background":[]}}
+{"binding":"b1","update":{"type":"state","state":"running","background":[]}}
+{"binding":"b1","update":{"type":"turn","turn":{"id":"turn-3","status":"running","continuable":false,"started":"2026-01-01T00:00:00.000Z"}}}
+{"binding":"b1","update":{"type":"request","request":{"id":"perm-9","turn":"turn-3","item":"toolu_w","kind":"approval","title":"Write: /work/demo/notes.txt","subject":{"type":"tool","tool":"Write","input":{"file_path":"/work/demo/notes.txt","content":"hi\n"},"editable":true},"level":"write","choices":[{"id":"allow","label":"Allow","intent":"allow","scope":"once"},{"id":"suggestion-0","label":"Allow for this session","intent":"allow","scope":"session","amends":{"type":"setMode","mode":"acceptEdits","destination":"session"}},{"id":"deny","label":"Deny","intent":"deny"}],"blocking":true,"answerable":"connection","notify":"normal","status":"open"}}}
+{"binding":"b1","update":{"type":"state","state":"requires_action","background":[]}}
+{"binding":"b1","update":{"type":"request","request":{"id":"perm-9","turn":"turn-3","item":"toolu_w","kind":"approval","title":"Write: /work/demo/notes.txt","subject":{"type":"tool","tool":"Write","input":{"file_path":"/work/demo/notes.txt","content":"hi\n"},"editable":true},"level":"write","choices":[{"id":"allow","label":"Allow","intent":"allow","scope":"once"},{"id":"suggestion-0","label":"Allow for this session","intent":"allow","scope":"session","amends":{"type":"setMode","mode":"acceptEdits","destination":"session"}},{"id":"deny","label":"Deny","intent":"deny"}],"blocking":true,"answerable":"connection","notify":"normal","status":"cancelled"}}}
+{"binding":"b1","update":{"type":"state","state":"running","background":[]}}
