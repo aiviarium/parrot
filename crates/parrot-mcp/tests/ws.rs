@@ -41,6 +41,8 @@ async fn echo_server() -> (u16, tokio::sync::mpsc::UnboundedReceiver<String>) {
                 let Ok(tls) = acceptor.accept(tcp).await else {
                     return;
                 };
+                // The error type is tungstenite's, fixed by `accept_hdr_async`.
+                #[allow(clippy::result_large_err)]
                 let callback = |req: &Request, mut resp: Response| {
                     let asked = req
                         .headers()
