@@ -70,8 +70,10 @@ fn installs_from_the_in_repo_registry() {
     ));
     assert!(out.contains("installed aiviarium/acp 0.1.0"), "{out}");
     // A driver egg needs its binary, so it installs from the folders with the variants in.
-    common::egg_template();
-    let staged = common::bin_dir().join(format!("test-eggs-{}/registry", std::process::id()));
+    let staged = common::egg_template()
+        .parent()
+        .expect("the template has a parent")
+        .join("registry");
     let out = ok(parrot(
         &[
             "eggs",

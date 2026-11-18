@@ -17,20 +17,9 @@ use tokio::sync::mpsc;
 const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(10);
 
-/// The `fake-pi` binary beside `parrot`, built once.
 fn fake_pi() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args(["build", "--locked", "-p", "parrot-driver-pi", "--bin", "fake-pi"])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-pi failed");
-        let path = Path::new(PARROT).with_file_name(format!("fake-pi{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no fake-pi at {}", path.display());
-        path
-    })
+    PATH.get_or_init(|| common::workspace_bin("fake-pi"))
 }
 
 /// A running `parrot serve` in a temporary directory, killed on drop.

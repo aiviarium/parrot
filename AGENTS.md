@@ -21,13 +21,16 @@ These are what CI runs:
 ```bash
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --workspace
+cargo nextest run --locked --workspace
+cargo test --locked --workspace --doc
 bun install --frozen-lockfile
 bun run check
 bun run typecheck
 bun run test
 vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md
 ```
+
+Run the tests with [cargo-nextest](https://nexte.st), which runs every test binary at once. `cargo test --workspace` still works but runs the binaries one after another. A test that needs a workspace binary, such as a fake CLI, calls `workspace_bin` in `crates/parrot-cli/tests/common/mod.rs`. Do not start `cargo build -p` from a test: a narrower build resolves features differently and rebuilds the dependency graph.
 
 CI runs the Rust jobs for a change to `crates/`, `Cargo.toml` or `Cargo.lock`. It runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
 

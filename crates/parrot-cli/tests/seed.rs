@@ -19,23 +19,12 @@ use tokio::sync::mpsc;
 const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(20);
 
-/// Builds a fake CLI once and returns its path, beside the `parrot` binary.
-fn fake(package: &str, bin: &str) -> PathBuf {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let status = Command::new(cargo)
-        .args(["build", "--locked", "-p", package, "--bin", bin])
-        .status()
-        .expect("cargo runs");
-    assert!(status.success(), "building {bin} failed");
-    Path::new(PARROT).with_file_name(format!("{bin}{}", std::env::consts::EXE_SUFFIX))
-}
-
 fn fakes() -> &'static (PathBuf, PathBuf) {
     static PATHS: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
     PATHS.get_or_init(|| {
         (
-            fake("parrot-driver-claude", "fake-claude"),
-            fake("parrot-driver-codex", "fake-codex"),
+            common::workspace_bin("fake-claude"),
+            common::workspace_bin("fake-codex"),
         )
     })
 }
