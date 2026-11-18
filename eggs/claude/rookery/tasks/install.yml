@@ -24,13 +24,13 @@
   failed_when: false
 - name: Install selected Claude version without a root-owned profile
   ansible.builtin.command:
-    argv: [/bin/bash, /opt/rookery-tools/claude-install.sh, "{{ rookery_claude_version | default('2.1.327') }}"]
-    creates: "{{ rookery_home }}/.local/share/claude/versions/{{ rookery_claude_version | default('2.1.327') }}"
+    argv: [/bin/bash, /opt/rookery-tools/claude-install.sh, "{{ rookery_claude_cli_version | default('2.1.327') }}"]
+    creates: "{{ rookery_home }}/.local/share/claude/versions/{{ rookery_claude_cli_version | default('2.1.327') }}"
   become_user: "{{ rookery_user }}"
   environment:
     HOME: "{{ rookery_home }}"
     DISABLE_AUTOUPDATER: '1'
-  when: rookery_claude_current.rc != 0 or (rookery_claude_current.stdout | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('0', true)) is version(rookery_claude_version | default('2.1.327'), '<')
+  when: rookery_claude_current.rc != 0 or (rookery_claude_current.stdout | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('0', true)) is version(rookery_claude_cli_version | default('2.1.327'), '<')
 # The desktop tools, for every project of the agent. Recorded in ~/.claude.json;
 # the command is only started when Claude Code uses it.
 - name: See whether Claude Code knows the desktop tools

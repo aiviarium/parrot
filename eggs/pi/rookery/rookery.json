@@ -4,7 +4,7 @@
       "id": "cli",
       "group": "Coding Agents",
       "label": "Pi",
-      "description": "The Pi coding agent, from npm. The version is `rookery_pi_version` in the profile's ansible_vars.",
+      "description": "The Pi coding agent, from npm. The version is `rookery_pi_cli_version` in the profile's ansible_vars.",
       "summary": "Pi (`pi`). It signs in from inside the program, or takes API keys from the environment.",
       "commands": [
         "pi"

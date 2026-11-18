@@ -4,7 +4,7 @@
       "id": "cli",
       "group": "Coding Agents",
       "label": "Codex",
-      "description": "OpenAI's coding agent, from npm. The version is `rookery_codex_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
+      "description": "OpenAI's coding agent, from npm. The version is `rookery_codex_cli_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
       "summary": "Codex (`codex`). Being installed does not mean signed in: `codex login status` tells.",
       "commands": [
         "codex"

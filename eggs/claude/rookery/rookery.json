@@ -4,7 +4,7 @@
       "id": "cli",
       "group": "Coding Agents",
       "label": "Claude Code",
-      "description": "Anthropic's coding agent, from its official installer. The version is `rookery_claude_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
+      "description": "Anthropic's coding agent, from its official installer. The version is `rookery_claude_cli_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
       "summary": "Claude Code (`claude`). Being installed does not mean signed in: `claude auth status` tells.",
       "commands": [
         "claude"

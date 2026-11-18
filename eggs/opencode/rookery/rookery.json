@@ -4,7 +4,7 @@
       "id": "cli",
       "group": "Coding Agents",
       "label": "opencode",
-      "description": "The opencode coding agent, from npm. The version is `rookery_opencode_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
+      "description": "The opencode coding agent, from npm. The version is `rookery_opencode_cli_version` in the profile's ansible_vars. Adds its sign-in to the overview.",
       "summary": "opencode (`opencode`). `opencode auth list` shows configured provider credentials.",
       "commands": [
         "opencode"

@@ -20,14 +20,14 @@
       - "{{ rookery_home }}/.local"
       - --no-audit
       - --no-fund
-      - "@openai/codex@{{ rookery_codex_version | default('0.167.1') }}"
+      - "@openai/codex@{{ rookery_codex_cli_version | default('0.167.1') }}"
     chdir: "{{ rookery_home }}"
   become_user: "{{ rookery_user }}"
   environment:
     HOME: "{{ rookery_home }}"
     PATH: "{{ rookery_tool_path }}"
   # The selected version is the least one: a newer one from Update stays.
-  when: rookery_codex_installed.rc != 0 or (rookery_codex_installed.stdout | from_json).get('dependencies', {}).get('@openai/codex', {}).get('version', '0') is version(rookery_codex_version | default('0.167.1'), '<')
+  when: rookery_codex_installed.rc != 0 or (rookery_codex_installed.stdout | from_json).get('dependencies', {}).get('@openai/codex', {}).get('version', '0') is version(rookery_codex_cli_version | default('0.167.1'), '<')
 - name: Verify codex launches without authentication
   ansible.builtin.command:
     argv: ["{{ rookery_home }}/.local/bin/codex", --version]

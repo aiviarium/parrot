@@ -92,11 +92,6 @@ mod tests {
                 .versions
                 .as_deref()
                 .unwrap_or_else(|| panic!("{id}: driver.kdl has no cli versions"));
-            // The pi egg's rookery target defaults to 1.5.2 while its driver.kdl lists <0.74.0.
-            if id == "pi" && range_str == ">=0.73.0, <0.74.0" {
-                checked += 1;
-                continue;
-            }
             let req = hatchery::semver::VersionReq::parse(range_str)
                 .unwrap_or_else(|e| panic!("{id}: invalid versions {range_str:?}: {e}"));
 
@@ -105,25 +100,35 @@ mod tests {
                 serde_json::from_str(&std::fs::read_to_string(rookery_dir.join("rookery.json")).unwrap())
                     .unwrap();
             let features = manifest_json["features"].as_array().unwrap();
-            let mut defaults = Vec::new();
+            let mut found_any = false;
             for feature in features {
+                let feature_id = feature["id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{id}: feature missing id"));
+                let expected_var = format!("rookery_{id}_{feature_id}_version");
                 if let Some(tasks_rel) = feature["tasks"].as_str() {
                     let text = std::fs::read_to_string(rookery_dir.join(tasks_rel)).unwrap();
-                    defaults.extend(extract_rookery_version_defaults(&text));
+                    let defaults = extract_rookery_version_defaults(&text);
+                    assert!(
+                        !defaults.is_empty(),
+                        "{id}/{feature_id}: no {expected_var} | default('...') found in {tasks_rel}"
+                    );
+                    for (var, ver_str) in defaults {
+                        assert_eq!(
+                            var, expected_var,
+                            "{id}/{feature_id}: expected version variable {expected_var}, found {var}"
+                        );
+                        let ver = hatchery::semver::Version::parse(&ver_str)
+                            .unwrap_or_else(|e| panic!("{id}: {var} default {ver_str:?} is not semver: {e}"));
+                        assert!(
+                            req.matches(&ver),
+                            "{id}: {var} default {ver} is outside parrot/driver.kdl cli versions {range_str:?}"
+                        );
+                        found_any = true;
+                    }
                 }
             }
-            assert!(
-                !defaults.is_empty(),
-                "{id}: no rookery_*_version | default('...') found in rookery tasks"
-            );
-            for (var, ver_str) in defaults {
-                let ver = hatchery::semver::Version::parse(&ver_str)
-                    .unwrap_or_else(|e| panic!("{id}: {var} default {ver_str:?} is not semver: {e}"));
-                assert!(
-                    req.matches(&ver),
-                    "{id}: {var} default {ver} is outside parrot/driver.kdl cli versions {range_str:?}"
-                );
-            }
+            assert!(found_any, "{id}: no feature version defaults verified");
             checked += 1;
         }
         assert!(

@@ -21,14 +21,14 @@
       - --no-audit
       - --no-fund
       - --ignore-scripts
-      - "@earendil-works/pi-coding-agent@{{ rookery_pi_version | default('1.5.2') }}"
+      - "@earendil-works/pi-coding-agent@{{ rookery_pi_cli_version | default('1.5.2') }}"
     chdir: "{{ rookery_home }}"
   become_user: "{{ rookery_user }}"
   environment:
     HOME: "{{ rookery_home }}"
     PATH: "{{ rookery_tool_path }}"
   # The selected version is the least one: a newer one from Update stays.
-  when: rookery_pi_installed.rc != 0 or (rookery_pi_installed.stdout | from_json).get('dependencies', {}).get('@earendil-works/pi-coding-agent', {}).get('version', '0') is version(rookery_pi_version | default('1.5.2'), '<')
+  when: rookery_pi_installed.rc != 0 or (rookery_pi_installed.stdout | from_json).get('dependencies', {}).get('@earendil-works/pi-coding-agent', {}).get('version', '0') is version(rookery_pi_cli_version | default('1.5.2'), '<')
 - name: Verify pi launches without authentication
   ansible.builtin.command:
     argv: ["{{ rookery_home }}/.local/bin/pi", --version]

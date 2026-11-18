@@ -182,7 +182,9 @@ targets {
 ```
 
 Its `rookery/` folder holds `rookery.json` and Ansible tasks under `tasks/` that install the CLI or
-server on the host and define its status, sign-in and update actions. Keep the default in
-`rookery_*_version | default('…')` inside `parrot/driver.kdl`'s `cli` `versions` range so a
-freshly provisioned host matches the driver data. Run `parrot eggs check <dir>` and
-`rookery plugin check <dir>` to verify both targets locally.
+server on the host and define its status, sign-in and update actions. Each feature reads its own
+`rookery_<egg>_<feature>_version` variable (such as `rookery_claude_cli_version` or
+`rookery_t3_server_version`, plus `rookery_t3_server_sha256` for non-default T3 releases) so it
+never collides with Rookery's built-in role defaults. Keep its `| default('…')` inside
+`parrot/driver.kdl`'s `cli` `versions` range so a freshly provisioned host matches the driver data.
+Run `parrot eggs check <dir>` and `rookery plugin check <dir>` to verify both targets locally.

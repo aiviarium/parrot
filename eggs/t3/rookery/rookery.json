@@ -4,7 +4,7 @@
       "id": "server",
       "group": "Agent Orchestrator",
       "label": "T3 Code",
-      "description": "An orchestrator with a web interface that runs and supervises the coding agents, reachable from your browser. It is not an agent itself and needs at least one of them to be useful. The version is `rookery_t3_version` in the profile's ansible_vars.",
+      "description": "An orchestrator with a web interface that runs and supervises the coding agents, reachable from your browser. It is not an agent itself and needs at least one of them to be useful. The version is `rookery_t3_server_version` in the profile's ansible_vars (set `rookery_t3_server_sha256` for versions not built into the plugin).",
       "summary": "T3 Code (`t3`) runs as the user service `t3code` and serves its web interface on port 3773.",
       "commands": [
         "t3"
