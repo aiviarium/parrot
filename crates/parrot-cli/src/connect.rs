@@ -31,18 +31,12 @@ fn exit_with(result: std::io::Result<()>) -> ! {
     }
 }
 
-#[cfg(unix)]
 async fn run_link(sock: &std::path::Path) -> Result<(), String> {
     let path = parrot_link::endpoint::link_socket_path(sock);
     let stream = parrot_link::endpoint::connect_link_socket(&path)
         .await
         .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
     exit_with(relay(stream).await)
-}
-
-#[cfg(windows)]
-async fn run_link(_sock: &std::path::Path) -> Result<(), String> {
-    Err("connect --link is not supported on Windows yet".into())
 }
 
 #[cfg(unix)]

@@ -194,8 +194,7 @@ fn load_drivers(dir: &std::path::Path) -> parrot_serve::drivers::Drivers {
     drivers
 }
 
-/// The link endpoint `link.sock` beside the socket (E9).
-#[cfg(unix)]
+/// The link endpoint: `link.sock` beside the socket, or the local pipe with `-link` (E9).
 async fn serve_link_local(
     hub: Arc<parrot_serve::link_hub::LinkHub>,
     socket: &std::path::Path,
@@ -206,14 +205,6 @@ async fn serve_link_local(
     parrot_serve::link_hub::serve_link_socket(hub, listener)
         .await
         .map_err(|e| format!("link socket: {e}"))
-}
-
-#[cfg(windows)]
-async fn serve_link_local(
-    _hub: Arc<parrot_serve::link_hub::LinkHub>,
-    _socket: &std::path::Path,
-) -> Result<(), String> {
-    std::future::pending().await
 }
 
 #[cfg(unix)]

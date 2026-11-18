@@ -103,119 +103,16 @@ mod windows {
     use crate::dispatch::Runtime;
     use crate::framing::serve_lines;
     use parrot_core::Peer;
-    use std::ffi::c_void;
     use std::io;
-    use std::ptr::null_mut;
-    use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-    };
-    use windows_sys::Win32::Security::{
-        GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
-    };
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    /// The current user's SID as a string, such as `S-1-5-21-…`.
-    pub fn user_sid() -> io::Result<String> {
-        // SAFETY: plain Win32 calls on buffers sized as the API reports; every handle and
-        // allocation is released before returning.
-        unsafe {
-            let mut token: HANDLE = null_mut();
-            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let mut len = 0u32;
-            GetTokenInformation(token, TokenUser, null_mut(), 0, &mut len);
-            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-            let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len);
-            CloseHandle(token);
-            if ok == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let user = &*(buf.as_ptr() as *const TOKEN_USER);
-            let mut wide: *mut u16 = null_mut();
-            if ConvertSidToStringSidW(user.User.Sid, &mut wide) == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let mut n = 0;
-            while *wide.add(n) != 0 {
-                n += 1;
-            }
-            let sid = String::from_utf16_lossy(std::slice::from_raw_parts(wide, n));
-            LocalFree(wide.cast());
-            Ok(sid)
-        }
-    }
-
-    /// `\\.\pipe\parrot-<user SID>`.
-    pub fn default_pipe_name() -> io::Result<String> {
-        Ok(format!(r"\\.\pipe\parrot-{}", user_sid()?))
-    }
-
-    /// A security descriptor that grants the current user alone full access.
-    struct UserOnly(PSECURITY_DESCRIPTOR);
-
-    impl UserOnly {
-        fn new() -> io::Result<Self> {
-            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{})", user_sid()?)
-                .encode_utf16()
-                .chain([0])
-                .collect();
-            let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-            // SAFETY: `sddl` is NUL-terminated; `sd` is freed in `Drop`.
-            let ok = unsafe {
-                ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    sddl.as_ptr(),
-                    SDDL_REVISION_1,
-                    &mut sd,
-                    null_mut(),
-                )
-            };
-            if ok == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(Self(sd))
-        }
-
-        fn create(&self, name: &str, first: bool) -> io::Result<NamedPipeServer> {
-            let mut attrs = SECURITY_ATTRIBUTES {
-                nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: self.0,
-                bInheritHandle: 0,
-            };
-            // SAFETY: `attrs` and the descriptor it points to outlive the call.
-            unsafe {
-                ServerOptions::new()
-                    .first_pipe_instance(first)
-                    .reject_remote_clients(true)
-                    .create_with_security_attributes_raw(name, &mut attrs as *mut _ as *mut c_void)
-            }
-        }
-    }
-
-    impl Drop for UserOnly {
-        fn drop(&mut self) {
-            // SAFETY: allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
-            unsafe {
-                LocalFree(self.0);
-            }
-        }
-    }
-
-    // SAFETY: the descriptor is only read after creation.
-    unsafe impl Send for UserOnly {}
-    unsafe impl Sync for UserOnly {}
+    pub use parrot_link::pipe::{default_pipe_name, user_sid};
 
     /// Serves the named pipe forever. The ACL admits only the current user, so every client is
     /// the owner.
     pub async fn serve_pipe(rt: Runtime, name: &str) -> io::Result<()> {
-        let acl = UserOnly::new()?;
-        let mut server = acl.create(name, true)?;
+        let mut listener = parrot_link::pipe::Listener::bind(name)?;
         loop {
-            server.connect().await?;
-            let connected = server;
-            server = acl.create(name, false)?;
+            let connected = listener.accept().await?;
             let rt = rt.clone();
             tokio::spawn(async move {
                 let (r, w) = tokio::io::split(connected);

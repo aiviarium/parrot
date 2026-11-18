@@ -15,6 +15,8 @@ pub mod frame;
 pub mod keys;
 pub mod noise;
 pub mod pairing;
+#[cfg(windows)]
+pub mod pipe;
 
 pub use error::LinkError;
 pub use keys::{PublicKey, StaticKey, runtime_id};

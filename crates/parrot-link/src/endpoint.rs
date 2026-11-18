@@ -3,14 +3,122 @@
 //! handshake over a TCP listener. A stream accepted here is only a candidate until
 //! [`crate::noise::Listener::accept`] authenticates it.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// The file name of the link endpoint.
 pub const LINK_SOCKET: &str = "link.sock";
 
-/// `link.sock` in the directory of the local socket `sock`.
+/// `link.sock` in the directory of the local socket `sock`, or the local pipe's name with
+/// `-link` on Windows.
 pub fn link_socket_path(sock: &Path) -> PathBuf {
-    sock.with_file_name(LINK_SOCKET)
+    #[cfg(unix)]
+    {
+        sock.with_file_name(LINK_SOCKET)
+    }
+    #[cfg(windows)]
+    {
+        let name = sock
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "parrot".into());
+        sock.with_file_name(format!("{name}-link"))
+    }
+}
+
+/// A link endpoint that accepts candidate connections.
+#[cfg(unix)]
+pub type LinkListener = tokio::net::UnixListener;
+
+/// A candidate connection, from either end. Only the handshake makes it a link: a Unix socket,
+/// or a named pipe's server or client end.
+pub enum LinkStream {
+    #[cfg(unix)]
+    Socket(tokio::net::UnixStream),
+    #[cfg(windows)]
+    Server(tokio::net::windows::named_pipe::NamedPipeServer),
+    #[cfg(windows)]
+    Client(tokio::net::windows::named_pipe::NamedPipeClient),
+}
+
+impl std::fmt::Debug for LinkStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LinkStream")
+    }
+}
+
+impl tokio::io::AsyncRead for LinkStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Self::Socket(stream) => std::pin::Pin::new(stream).poll_read(cx, buf),
+            #[cfg(windows)]
+            Self::Server(stream) => std::pin::Pin::new(stream).poll_read(cx, buf),
+            #[cfg(windows)]
+            Self::Client(stream) => std::pin::Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for LinkStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Self::Socket(stream) => std::pin::Pin::new(stream).poll_write(cx, buf),
+            #[cfg(windows)]
+            Self::Server(stream) => std::pin::Pin::new(stream).poll_write(cx, buf),
+            #[cfg(windows)]
+            Self::Client(stream) => std::pin::Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Self::Socket(stream) => std::pin::Pin::new(stream).poll_flush(cx),
+            #[cfg(windows)]
+            Self::Server(stream) => std::pin::Pin::new(stream).poll_flush(cx),
+            #[cfg(windows)]
+            Self::Client(stream) => std::pin::Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match self.get_mut() {
+            #[cfg(unix)]
+            Self::Socket(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
+            #[cfg(windows)]
+            Self::Server(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
+            #[cfg(windows)]
+            Self::Client(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
+/// Accepts the next connection on `listener`.
+pub async fn accept_link(listener: &mut LinkListener) -> io::Result<LinkStream> {
+    #[cfg(unix)]
+    {
+        Ok(LinkStream::Socket(accept_same_user(listener).await?))
+    }
+    #[cfg(windows)]
+    {
+        Ok(LinkStream::Server(listener.accept().await?))
+    }
 }
 
 #[cfg(unix)]
@@ -23,6 +131,7 @@ mod unix {
     use std::path::Path;
     use tokio::net::{UnixListener, UnixStream};
 
+    use super::LinkStream;
     fn uid() -> u32 {
         rustix::process::geteuid().as_raw()
     }
@@ -96,12 +205,38 @@ mod unix {
 
     /// Connects to the link endpoint after checking its directory, so a relay never writes to a
     /// socket another user could have placed.
-    pub async fn connect_link_socket(path: &Path) -> io::Result<UnixStream> {
+    pub async fn connect_link_socket(path: &Path) -> io::Result<LinkStream> {
         let dir = path.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "link socket path has no directory")
         })?;
         check_private_dir(dir)?;
-        UnixStream::connect(path).await
+        Ok(LinkStream::Socket(UnixStream::connect(path).await?))
+    }
+}
+
+#[cfg(windows)]
+pub use windows::*;
+
+#[cfg(windows)]
+mod windows {
+    use std::io;
+    use std::path::Path;
+
+    use super::{LinkListener, LinkStream};
+
+    /// The pipe's ACL admits only this user, so its folder needs no check of its own.
+    pub fn check_private_dir(_dir: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Creates the link pipe, refusing the name when a runtime already serves it.
+    pub fn bind_link_socket(path: &Path) -> io::Result<LinkListener> {
+        crate::pipe::Listener::bind(&path.to_string_lossy())
+    }
+
+    /// Connects to the link pipe. The ACL on the server end decides who may.
+    pub async fn connect_link_socket(path: &Path) -> io::Result<LinkStream> {
+        Ok(LinkStream::Client(crate::pipe::connect(path)?))
     }
 }
 
@@ -109,11 +244,21 @@ mod unix {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn link_socket_sits_beside_sock() {
         assert_eq!(
             link_socket_path(Path::new("/run/user/1000/parrot/sock")),
             Path::new("/run/user/1000/parrot/link.sock")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_link_pipe_sits_beside_the_local_pipe() {
+        assert_eq!(
+            link_socket_path(Path::new(r"\\.\pipe\parrot-S-1-5-21-1-2-3-500")),
+            Path::new(r"\\.\pipe\parrot-S-1-5-21-1-2-3-500-link")
         );
     }
 

@@ -536,11 +536,13 @@ fn new_link_id() -> String {
     crate::dispatch::new_conn_id().replacen("con_", "lnk_", 1)
 }
 
-/// Accepts link candidates on the link endpoint `link.sock` forever.
-#[cfg(unix)]
-pub async fn serve_link_socket(hub: Arc<LinkHub>, listener: tokio::net::UnixListener) -> std::io::Result<()> {
+/// Accepts link candidates on the link endpoint, `link.sock` or a private pipe, forever.
+pub async fn serve_link_socket(
+    hub: Arc<LinkHub>,
+    mut listener: parrot_link::endpoint::LinkListener,
+) -> std::io::Result<()> {
     loop {
-        let stream = parrot_link::endpoint::accept_same_user(&listener).await?;
+        let stream = parrot_link::endpoint::accept_link(&mut listener).await?;
         tokio::spawn(hub.clone().accept(stream));
     }
 }
