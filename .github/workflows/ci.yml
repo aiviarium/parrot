@@ -109,15 +109,18 @@ jobs:
         with:
           shared-key: platform-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The tests build the workspace binaries and examples they need through a helper, which
-      # would otherwise run cargo, holding the lock, inside several test processes at once.
-      - name: Build the workspace, its tests and its examples
-        run: cargo build --locked --workspace --tests --examples
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      # Built as the whole workspace, with the platform crates picked by a filter: a build of a
+      # few packages resolves features differently, so the helper that builds the binaries
+      # some tests start would rebuild the dependency graph inside the test run.
       - name: Test the platform crates
-        run: cargo nextest run --locked --profile ci -p parrot-term -p parrot-guard -p parrot-driver -p parrot-serve -p parrot-link -p parrot-eggs -p parrot-tui -p parrot-driver-tui -p parrot-cli
+        run: >-
+          cargo nextest run --locked --profile ci --workspace -E 'package(parrot-term) |
+          package(parrot-guard) | package(parrot-driver) | package(parrot-serve) |
+          package(parrot-link) | package(parrot-eggs) | package(parrot-tui) |
+          package(parrot-driver-tui) | package(parrot-cli)'
 
   typescript:
     needs: changes
