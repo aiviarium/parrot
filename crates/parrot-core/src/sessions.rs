@@ -1,6 +1,6 @@
 //! Sessions, workspaces and agents (spec 6, 8, 9.1, 9.2, 9.4).
 
-use crate::bindings::{self, BindingRecord};
+use crate::bindings::{self, BindingInfo, BindingRecord};
 use crate::principals::{check, check_session, parse, principal_of};
 use crate::{Cx, Effect, Reply, State, queue, subscriptions};
 use parrot_proto::agent::Control;
@@ -19,7 +19,10 @@ use std::collections::BTreeMap;
 /// Sessions by id, plus the workspaces and agents they use.
 #[derive(Debug)]
 pub struct Sessions {
+    /// The records every module reads through `directory`.
     pub by_id: BTreeMap<String, SessionRecord>,
+    /// What this module keeps beside them, by session id.
+    pub info: BTreeMap<String, SessionInfo>,
     pub workspaces: BTreeMap<String, WorkspaceRecord>,
     /// Agents as `Agent` JSON (spec 6), by id.
     pub agents: BTreeMap<String, Value>,
@@ -31,6 +34,7 @@ impl Default for Sessions {
         agents.insert("claude".to_string(), claude_agent());
         Self {
             by_id: BTreeMap::new(),
+            info: BTreeMap::new(),
             workspaces: BTreeMap::new(),
             agents,
         }
@@ -54,13 +58,18 @@ fn claude_agent() -> Value {
     })
 }
 
-/// What the core keeps per session.
-#[derive(Debug, Clone)]
+/// What the core keeps per session; other modules read it through `directory`.
+#[derive(Debug, Clone, Default)]
 pub struct SessionRecord {
     pub id: String,
     pub parent: Option<String>,
     pub binding: Option<String>,
     pub agent: String,
+}
+
+/// The rest of a session, kept by this module.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
     pub title: Option<String>,
     pub workspace: String,
     pub cwd: String,
@@ -78,13 +87,9 @@ pub struct SessionRecord {
     pub archived: bool,
 }
 
-impl Default for SessionRecord {
+impl Default for SessionInfo {
     fn default() -> Self {
         Self {
-            id: String::new(),
-            parent: None,
-            binding: None,
-            agent: String::new(),
             title: None,
             workspace: String::new(),
             cwd: String::new(),
@@ -135,18 +140,19 @@ pub fn timestamp(ms: u64) -> String {
 
 /// The `Session` JSON (spec 9).
 pub fn session_json(state: &State, id: &str) -> Option<Value> {
-    let s = state.sessions.by_id.get(id)?;
-    let binding = s
+    let r = state.sessions.by_id.get(id)?;
+    let s = state.sessions.info.get(id).cloned().unwrap_or_default();
+    let binding = r
         .binding
         .as_deref()
         .and_then(|b| bindings::binding_json(state, b));
-    let advisory = s
+    let advisory = r
         .binding
         .as_deref()
-        .and_then(|b| state.bindings.by_id.get(b))
+        .and_then(|b| state.bindings.info.get(b))
         .is_none_or(|b| b.isolation < parrot_proto::principal::Isolation::Sandbox);
     let mut v = json!({
-        "id": s.id,
+        "id": r.id,
         "runtime": state.principals.runtime,
         "workspace": s.workspace,
         "cwd": s.cwd,
@@ -171,7 +177,7 @@ pub fn session_json(state: &State, id: &str) -> Option<Value> {
     if let Some(m) = &s.mcp {
         v["mcp"] = json!(m);
     }
-    if let Some(p) = &s.parent {
+    if let Some(p) = &r.parent {
         v["parent"] = json!({ "session": p });
         v["kind"] = json!("child");
     }
@@ -180,13 +186,14 @@ pub fn session_json(state: &State, id: &str) -> Option<Value> {
 
 /// The `SessionSummary` JSON (spec 9).
 pub fn summary_json(state: &State, id: &str) -> Option<Value> {
-    let s = state.sessions.by_id.get(id)?;
+    let r = state.sessions.by_id.get(id)?;
+    let s = state.sessions.info.get(id).cloned().unwrap_or_default();
     let mut v = json!({
-        "id": s.id,
+        "id": r.id,
         "runtime": state.principals.runtime,
         "state": s.state,
-        "kind": if s.parent.is_some() { "child" } else { "root" },
-        "agent": s.agent,
+        "kind": if r.parent.is_some() { "child" } else { "root" },
+        "agent": r.agent,
         "env": state.principals.env,
         "archived": s.archived,
         "updated": timestamp(s.updated_ms),
@@ -194,7 +201,7 @@ pub fn summary_json(state: &State, id: &str) -> Option<Value> {
     if let Some(t) = &s.title {
         v["title"] = json!(t);
     }
-    if let Some(p) = &s.parent {
+    if let Some(p) = &r.parent {
         v["parent"] = json!(p);
     }
     Some(v)
@@ -202,7 +209,7 @@ pub fn summary_json(state: &State, id: &str) -> Option<Value> {
 
 /// Persist a session and publish it to its subscribers and the index.
 pub fn changed(cx: &mut Cx, id: &str) {
-    if let Some(s) = cx.state.sessions.by_id.get_mut(id) {
+    if let Some(s) = cx.state.sessions.info.get_mut(id) {
         s.updated_ms = s.updated_ms.max(cx.now_ms);
     }
     let (Some(session), Some(summary)) = (session_json(cx.state, id), summary_json(cx.state, id)) else {
@@ -221,11 +228,12 @@ pub fn changed(cx: &mut Cx, id: &str) {
 
 /// Start a new binding for a session: emits `StartBinding` with the `BindingStart` of spec 30.1.
 pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<String> {
-    let s = cx.state.sessions.by_id.get(session)?.clone();
+    let agent = cx.state.sessions.by_id.get(session)?.agent.clone();
+    let s = cx.state.sessions.info.get(session).cloned().unwrap_or_default();
     let resume = s
         .bindings
         .last()
-        .and_then(|b| cx.state.bindings.by_id.get(b))
+        .and_then(|b| cx.state.bindings.info.get(b))
         .and_then(|b| b.reference.clone());
     let via = if resume.is_some() { BindingVia::Resume } else { via };
     let id = cx.ids.next("bnd");
@@ -239,7 +247,7 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
     let mut start = json!({
         "session": session,
         "binding": id,
-        "agent": s.agent,
+        "agent": agent,
         "workspace": workspace,
         "cwd": s.cwd,
         "options": s.options,
@@ -254,7 +262,12 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
         BindingRecord {
             id: id.clone(),
             session: session.to_string(),
-            agent: s.agent.clone(),
+            agent: agent.clone(),
+        },
+    );
+    cx.state.bindings.info.insert(
+        id.clone(),
+        BindingInfo {
             control: s.control,
             status: BindingStatus::Starting,
             via,
@@ -264,12 +277,14 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
     );
     if let Some(rec) = cx.state.sessions.by_id.get_mut(session) {
         rec.binding = Some(id.clone());
+    }
+    if let Some(rec) = cx.state.sessions.info.get_mut(session) {
         rec.bindings.push(id.clone());
         rec.state = SessionState::Starting;
     }
     cx.emit(Effect::StartBinding {
         binding: id.clone(),
-        agent: s.agent,
+        agent,
         start,
     });
     bindings::persist(cx, &id);
@@ -284,7 +299,7 @@ pub fn start_binding(cx: &mut Cx, session: &str, via: BindingVia) -> Option<Stri
 /// Whether the session's current binding is starting or running.
 pub fn active(state: &State, session: &str) -> bool {
     crate::directory::binding_of(state, session)
-        .and_then(|b| state.bindings.by_id.get(&b))
+        .and_then(|b| state.bindings.info.get(&b))
         .is_some_and(|b| matches!(b.status, BindingStatus::Starting | BindingStatus::Running))
 }
 
@@ -395,6 +410,12 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
         SessionRecord {
             id: sid.clone(),
             agent: p.agent.clone(),
+            ..Default::default()
+        },
+    );
+    cx.state.sessions.info.insert(
+        sid.clone(),
+        SessionInfo {
             title: p.title.clone(),
             workspace,
             cwd: p.cwd.clone().unwrap_or(path),
@@ -434,9 +455,14 @@ fn list(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
         .sessions
         .by_id
         .values()
-        .filter(|s| s.archived == archived)
+        .filter(|s| {
+            let info = cx.state.sessions.info.get(&s.id);
+            info.is_none_or(|i| i.archived == archived)
+                && p.workspace
+                    .as_ref()
+                    .is_none_or(|x| info.is_some_and(|i| &i.workspace == x))
+        })
         .filter(|s| p.parent.as_ref().is_none_or(|x| s.parent.as_ref() == Some(x)))
-        .filter(|s| p.workspace.as_ref().is_none_or(|x| &s.workspace == x))
         .filter(|s| p.agent.as_ref().is_none_or(|x| &s.agent == x))
         .filter(|s| crate::principals::sees(cx.state, conn, &s.id))
         .collect();
@@ -468,7 +494,7 @@ fn start(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: SessionStartParams = parse(params)?;
     check_session(cx.state, conn, Scope::Manage, &p.session)?;
     if let Some(options) = p.options
-        && let Some(s) = cx.state.sessions.by_id.get_mut(&p.session)
+        && let Some(s) = cx.state.sessions.info.get_mut(&p.session)
     {
         s.options.extend(options);
     }
@@ -489,7 +515,7 @@ pub fn stop_session(cx: &mut Cx, session: &str) {
     let Some(binding) = crate::directory::binding_of(cx.state, session) else {
         return;
     };
-    if let Some(b) = cx.state.bindings.by_id.get_mut(&binding) {
+    if let Some(b) = cx.state.bindings.info.get_mut(&binding) {
         b.stop_requested = true;
     }
     cx.call_driver(
@@ -511,7 +537,7 @@ fn stop(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
 fn rename(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: SessionRenameParams = parse(params)?;
     check_session(cx.state, conn, Scope::Manage, &p.session)?;
-    if let Some(s) = cx.state.sessions.by_id.get_mut(&p.session) {
+    if let Some(s) = cx.state.sessions.info.get_mut(&p.session) {
         s.title = Some(p.title);
     }
     changed(cx, &p.session);
@@ -521,7 +547,7 @@ fn rename(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
 fn archive(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
     let p: SessionArchiveParams = parse(params)?;
     check_session(cx.state, conn, Scope::Manage, &p.session)?;
-    if let Some(s) = cx.state.sessions.by_id.get_mut(&p.session) {
+    if let Some(s) = cx.state.sessions.info.get_mut(&p.session) {
         s.archived = p.archived;
     }
     changed(cx, &p.session);
@@ -537,6 +563,7 @@ fn delete(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
         json!({ "type": "deleted", "kind": "session", "id": p.session }),
     );
     cx.state.sessions.by_id.remove(&p.session);
+    cx.state.sessions.info.remove(&p.session);
     cx.state.items.by_session.remove(&p.session);
     queue::forget(cx, &p.session);
     cx.persist(json!({ "op": "delete", "kind": "session", "id": p.session }));

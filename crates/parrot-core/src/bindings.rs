@@ -16,15 +16,23 @@ use std::collections::BTreeMap;
 /// Bindings by id.
 #[derive(Debug, Default)]
 pub struct Bindings {
+    /// The records every module reads through `directory`.
     pub by_id: BTreeMap<String, BindingRecord>,
+    /// What this module keeps beside them, by binding id.
+    pub info: BTreeMap<String, BindingInfo>,
 }
 
-/// What the core keeps per binding.
-#[derive(Debug, Clone)]
+/// What the core keeps per binding; other modules read it through `directory`.
+#[derive(Debug, Clone, Default)]
 pub struct BindingRecord {
     pub id: String,
     pub session: String,
     pub agent: String,
+}
+
+/// The rest of a binding, kept by this module.
+#[derive(Debug, Clone)]
+pub struct BindingInfo {
     pub control: Control,
     pub reference: Option<Ref>,
     pub isolation: Isolation,
@@ -43,12 +51,9 @@ pub struct BindingRecord {
     pub frames: u64,
 }
 
-impl Default for BindingRecord {
+impl Default for BindingInfo {
     fn default() -> Self {
         Self {
-            id: String::new(),
-            session: String::new(),
-            agent: String::new(),
             control: Control::Native,
             reference: None,
             isolation: Isolation::None,
@@ -97,11 +102,12 @@ pub fn derive_id(prefix: &str, parts: &[&str]) -> String {
 
 /// The `Binding` JSON (spec 9).
 pub fn binding_json(state: &State, id: &str) -> Option<Value> {
-    let b = state.bindings.by_id.get(id)?;
+    let r = state.bindings.by_id.get(id)?;
+    let b = state.bindings.info.get(id).cloned().unwrap_or_default();
     let mut v = json!({
-        "id": b.id,
-        "session": b.session,
-        "agent": b.agent,
+        "id": r.id,
+        "session": r.session,
+        "agent": r.agent,
         "env": state.principals.env,
         "control": b.control,
         "isolation": b.isolation,
@@ -133,7 +139,7 @@ pub fn persist(cx: &mut Cx, id: &str) {
 
 /// Apply a `binding/start` result (spec 30.1) to a binding still starting.
 pub fn started(cx: &mut Cx, binding: &str, result: &Value) {
-    let Some(b) = cx.state.bindings.by_id.get_mut(binding) else {
+    let Some(b) = cx.state.bindings.info.get_mut(binding) else {
         return;
     };
     if b.status == BindingStatus::Starting {
@@ -160,7 +166,9 @@ pub fn started(cx: &mut Cx, binding: &str, result: &Value) {
     if let Some(n) = result.get("network").and_then(Value::as_bool) {
         b.network = Some(n);
     }
-    let session = b.session.clone();
+    let Some(session) = crate::directory::session_of(cx.state, binding) else {
+        return;
+    };
     persist(cx, binding);
     sessions::changed(cx, &session);
 }
@@ -179,16 +187,17 @@ pub fn on_reply(cx: &mut Cx, _call: u64, result: Result<Value, RpcError>) {
 
 /// The Parrot id for a driver key, derived once and remembered (spec 30.4).
 fn map_key(cx: &mut Cx, binding: &str, kind: &str, key: &str, harness_ref: Option<&Ref>) -> String {
-    let Some(b) = cx.state.bindings.by_id.get_mut(binding) else {
+    let Some(session) = crate::directory::session_of(cx.state, binding) else {
         return key.to_string();
     };
+    let b = cx.state.bindings.info.entry(binding.to_string()).or_default();
     let map = if kind == "trn" { &mut b.turns } else { &mut b.items };
     if let Some(id) = map.get(key) {
         return id.clone();
     }
     let id = match harness_ref {
-        Some(r) if r.strength == RefStrength::Strong => derive_id(kind, &[&b.session, kind, &r.id]),
-        _ => derive_id(kind, &[&b.session, binding, kind, key]),
+        Some(r) if r.strength == RefStrength::Strong => derive_id(kind, &[&session, kind, &r.id]),
+        _ => derive_id(kind, &[&session, binding, kind, key]),
     };
     map.insert(key.to_string(), id.clone());
     id
@@ -214,11 +223,11 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             background,
             detail,
         } => {
-            if cx.state.bindings.by_id.get(binding).map(|b| b.status) == Some(BindingStatus::Starting) {
+            if cx.state.bindings.info.get(binding).map(|b| b.status) == Some(BindingStatus::Starting) {
                 started(cx, binding, &Value::Null);
             }
             let changed = {
-                let Some(s) = cx.state.sessions.by_id.get_mut(&session) else {
+                let Some(s) = cx.state.sessions.info.get_mut(&session) else {
                     return;
                 };
                 let changed = s.state != *state;
@@ -250,7 +259,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             let known = cx
                 .state
                 .bindings
-                .by_id
+                .info
                 .get(binding)
                 .and_then(|b| b.items.get(&patch.id))
                 .cloned();
@@ -258,7 +267,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
                 (Some(id), _, _) => id,
                 // The echo of a runtime prompt takes the message id (Appendix E4).
                 (None, true, Some(m)) => {
-                    if let Some(b) = cx.state.bindings.by_id.get_mut(binding) {
+                    if let Some(b) = cx.state.bindings.info.get_mut(binding) {
                         b.items.insert(patch.id.clone(), m.clone());
                     }
                     m
@@ -281,14 +290,14 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             cx.publish(sid, json!({ "type": "turn", "turn": turn }));
         }
         DriverUpdateKind::Ref { reference } => {
-            if let Some(b) = cx.state.bindings.by_id.get_mut(binding) {
+            if let Some(b) = cx.state.bindings.info.get_mut(binding) {
                 b.reference = Some(reference.clone());
             }
             persist(cx, binding);
             sessions::changed(cx, &session);
         }
         DriverUpdateKind::Mcp { servers } => {
-            if let Some(s) = cx.state.sessions.by_id.get_mut(&session) {
+            if let Some(s) = cx.state.sessions.info.get_mut(&session) {
                 s.mcp = Some(servers.clone());
             }
             sessions::changed(cx, &session);
@@ -301,16 +310,21 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
             cx.publish(sid, u);
         }
         DriverUpdateKind::Frame { source, data } => {
-            let Some(b) = cx.state.bindings.by_id.get_mut(binding) else {
-                return;
-            };
+            let agent = cx
+                .state
+                .bindings
+                .by_id
+                .get(binding)
+                .map(|b| b.agent.clone())
+                .unwrap_or_default();
+            let b = cx.state.bindings.info.entry(binding.to_string()).or_default();
             let idx = b.frames;
             b.frames += 1;
             let version = cx
                 .state
                 .sessions
                 .agents
-                .get(&b.agent)
+                .get(&agent)
                 .and_then(|a| a.pointer("/driver/data"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
@@ -326,7 +340,7 @@ pub fn on_update(cx: &mut Cx, update: &DriverUpdate) {
 
 /// The driver process for a binding exited: `stopped` if a stop was asked for, else `lost`.
 pub fn exited(cx: &mut Cx, binding: &str, detail: &str) {
-    let Some(b) = cx.state.bindings.by_id.get_mut(binding) else {
+    let Some(b) = cx.state.bindings.info.get_mut(binding) else {
         return;
     };
     if matches!(
@@ -342,14 +356,16 @@ pub fn exited(cx: &mut Cx, binding: &str, detail: &str) {
     };
     b.status = status;
     b.stopped_ms = Some(cx.now_ms);
-    let session = b.session.clone();
+    let Some(session) = crate::directory::session_of(cx.state, binding) else {
+        return;
+    };
     persist(cx, binding);
     queue::on_exit(cx, &session);
     let current = crate::directory::binding_of(cx.state, &session).as_deref() == Some(binding);
     if !current {
         return;
     }
-    if let Some(s) = cx.state.sessions.by_id.get_mut(&session) {
+    if let Some(s) = cx.state.sessions.info.get_mut(&session) {
         s.state = state;
         s.background.clear();
     }

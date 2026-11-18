@@ -119,7 +119,7 @@ pub fn push(cx: &mut Cx, session: &str, entry: Entry, front: bool) {
 
 /// Whether a prompt can be sent to the session right now.
 fn ready(state: &State, session: &str) -> bool {
-    let idle = state.sessions.by_id.get(session).map(|s| s.state) == Some(SessionState::Idle);
+    let idle = state.sessions.info.get(session).map(|s| s.state) == Some(SessionState::Idle);
     idle && sessions::active(state, session) && !is_busy(state, session)
 }
 
@@ -422,7 +422,7 @@ fn cancel(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Rep
     let running = cx
         .state
         .sessions
-        .by_id
+        .info
         .get(&p.session)
         .is_some_and(|s| matches!(s.state, SessionState::Running | SessionState::RequiresAction))
         || is_busy(cx.state, &p.session);
