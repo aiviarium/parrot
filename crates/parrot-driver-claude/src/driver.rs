@@ -53,10 +53,7 @@ pub struct Config {
 impl Config {
     /// `PARROT_CLAUDE_BIN` or `claude`, guarded when running as `parrot`.
     pub fn from_env() -> Self {
-        let guard = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_stem().map(|s| s == "parrot"))
-            .unwrap_or(false);
+        let guard = parrot_guard::can_guard();
         Config {
             claude_bin: std::env::var_os(CLAUDE_BIN_ENV).unwrap_or_else(|| "claude".into()),
             env: vec![],
@@ -176,6 +173,7 @@ impl Driver {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![probed(&self.config.claude_bin).await],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/fork" => {
@@ -646,9 +644,9 @@ pub fn agent() -> Agent {
         json!({"prompt": false, "cancel": false}),
     );
     Agent {
-        id: "claude".into(),
+        id: parrot_proto::driver_data::agent_id("claude"),
         env: String::new(),
-        name: "Claude Code".into(),
+        name: parrot_proto::driver_data::agent_name("Claude Code"),
         driver: AgentDriver {
             name: "claude".into(),
             version: env!("CARGO_PKG_VERSION").into(),

@@ -31,7 +31,7 @@ parrot-workspace = { path = "crates/parrot-workspace" }
 parrot-mcp = { path = "crates/parrot-mcp" }
 parrot-link = { path = "crates/parrot-link" }
 parrot-conform = { path = "crates/parrot-conform" }
-hatchery = { git = "https://github.com/aiviarium/hatchery", rev = "cfb6e540f3c6234c112a250ed4e0ce3badcafeea" }
+hatchery = { git = "https://github.com/aiviarium/hatchery", rev = "cfb6e540f3c6234c112a250ed4e0ce3badcafeea", features = ["http"] }
 semver = "1"
 kdl = { version = "6.7", default-features = false, features = ["span"] }
 schemars = { version = "1", features = ["preserve_order"] }

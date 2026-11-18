@@ -87,6 +87,9 @@ pub struct AgentListParams {
 #[serde(rename_all = "camelCase")]
 pub struct AgentListResult {
     pub agents: Vec<Agent>,
+    /// How to install a driver egg, when the runtime has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

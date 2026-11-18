@@ -41,9 +41,17 @@ pub struct Args {
     /// Print every message received by a failing fixture.
     #[arg(long, short)]
     pub verbose: bool,
-    /// The driver command to test, such as `parrot driver claude`.
+    /// The state directory whose installed eggs are used: for `--agent` without a command, and
+    /// for the `parrot serve` each runtime fixture starts. The default state directory if left out.
+    #[arg(long)]
+    pub state_dir: Option<PathBuf>,
+    /// The driver command to test, such as `parrot-driver-claude`. Without one, the driver of
+    /// `--agent`'s installed egg is tested.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
+    /// The environment the egg's driver is started with, set when `command` is resolved.
+    #[arg(skip)]
+    pub driver_env: Vec<(OsString, OsString)>,
 }
 
 /// A temporary directory removed on drop.
@@ -73,11 +81,32 @@ impl Drop for Scratch {
     }
 }
 
-pub fn run(args: Args) -> i32 {
-    if !args.runtime && args.command.is_empty() {
-        eprintln!(
-            "parrot conform: give a driver command, such as `parrot conform parrot driver claude`, or --runtime"
-        );
+fn state_dir(args: &Args) -> Result<PathBuf, String> {
+    match &args.state_dir {
+        Some(d) => Ok(d.clone()),
+        None => crate::serve::default_state_dir().map_err(|e| e.to_string()),
+    }
+}
+
+/// The driver of `--agent`'s installed egg, as the runtime would start it.
+fn resolve_driver(args: &mut Args) -> Result<(), String> {
+    let (drivers, _) = parrot_serve::drivers::Drivers::load(&state_dir(args)?);
+    let cmd = drivers
+        .resolve(&args.agent)
+        .map_err(|e| format!("{e}; install its egg with `parrot eggs install`, or give a driver command"))?;
+    args.command = std::iter::once(cmd.program.to_string_lossy().into_owned())
+        .chain(cmd.args)
+        .collect();
+    args.driver_env = cmd.env.into_iter().map(|(k, v)| (k.into(), v.into())).collect();
+    Ok(())
+}
+
+pub fn run(mut args: Args) -> i32 {
+    if !args.runtime
+        && args.command.is_empty()
+        && let Err(e) = resolve_driver(&mut args)
+    {
+        eprintln!("parrot conform: {e}");
         return 2;
     }
     let fixtures = match load(&args) {
@@ -200,6 +229,7 @@ fn run_one(args: &Args, name: &str, meta: &Meta, steps: &[Step]) -> Result<Repor
     ]);
     let wait = Duration::from_secs(args.wait);
     if !args.runtime {
+        let env: Vec<_> = args.driver_env.iter().cloned().chain(env).collect();
         let mut driver = Process::spawn(&args.command, &env)
             .map_err(|e| format!("cannot start {}: {e}", args.command.join(" ")))?;
         driver.set_wait(wait);
@@ -234,6 +264,7 @@ fn runtime(
         Some(socket) => (None, socket.clone()),
         None => {
             let socket = scratch.0.join("sock");
+            link_eggs(&state_dir(args)?, &scratch.0.join("state"))?;
             (Some(start_serve(&scratch.0, &socket, env)?), socket)
         }
     };
@@ -252,6 +283,17 @@ fn runtime(
     _: impl FnOnce(&mut dyn Target) -> Report,
 ) -> Result<Report, String> {
     Err("conform --runtime needs a Unix socket".into())
+}
+
+/// Gives a fixture's runtime the eggs installed in `from`, by a link to its `eggs` folder.
+#[cfg(unix)]
+fn link_eggs(from: &Path, state: &Path) -> Result<(), String> {
+    let eggs = from.join("eggs");
+    if !eggs.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(state).map_err(|e| format!("cannot create {}: {e}", state.display()))?;
+    std::os::unix::fs::symlink(&eggs, state.join("eggs")).map_err(|e| format!("cannot link the eggs: {e}"))
 }
 
 #[cfg(unix)]

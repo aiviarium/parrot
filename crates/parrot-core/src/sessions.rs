@@ -35,6 +35,8 @@ pub struct Sessions {
     pub discovery: BTreeMap<u64, (String, Option<(String, RequestId)>)>,
     /// Outstanding `binding/screen` and `binding/keys` calls, to the client call they answer.
     pub calls: BTreeMap<u64, Option<(String, RequestId)>>,
+    /// Whether the agents came from installed eggs, so an agent without one is unknown.
+    pub eggs_loaded: bool,
 }
 
 impl Default for Sessions {
@@ -48,6 +50,7 @@ impl Default for Sessions {
             eggs: BTreeMap::new(),
             discovery: BTreeMap::new(),
             calls: BTreeMap::new(),
+            eggs_loaded: false,
         }
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "parrot-driver-echo"
+description = "An example third-party Parrot driver: it answers every prompt with the prompt's text"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Not a member of the Parrot workspace: it builds on its own, as a third-party driver would.
+[workspace]
+
+[dependencies]
+serde_json = "1"

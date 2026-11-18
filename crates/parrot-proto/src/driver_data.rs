@@ -27,6 +27,40 @@ use crate::option::{Applies, ConfigOption, DependsOn, OptionRole, PermissionLeve
 /// The variable naming the installed egg's `parrot` folder.
 pub const DRIVER_DATA_ENV: &str = "PARROT_DRIVER_DATA";
 
+/// The variable naming the agent a driver serves: the egg's package id, such as `gemini` for a
+/// data-only egg on the built-in ACP driver. `agent/list` reports this id.
+pub const AGENT_ENV: &str = "PARROT_DRIVER_AGENT";
+
+/// The variable carrying the agent's display name, from the egg's `about { name }`.
+pub const AGENT_NAME_ENV: &str = "PARROT_DRIVER_AGENT_NAME";
+
+/// The agent id the runtime named, else `default`.
+pub fn agent_id(default: &str) -> String {
+    std::env::var(AGENT_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_owned())
+}
+
+/// The agent name the runtime named, else `default`.
+pub fn agent_name(default: &str) -> String {
+    std::env::var(AGENT_NAME_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_owned())
+}
+
+/// The harness command of `driver.kdl`, `command "prog" "arg"…`, if it has one.
+pub fn driver_command(driver_kdl: &str) -> Option<Vec<String>> {
+    let v = to_json(driver_kdl, Children::Lists).ok()?;
+    let argv: Vec<String> = v["command"]
+        .get(0)?
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+        .or_else(|| v["command"][0].as_str().map(|s| vec![s.to_owned()]))?;
+    (!argv.is_empty()).then_some(argv)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DataError {
     #[error("{file}: {message}")]
@@ -173,6 +207,76 @@ pub struct Builtin {
     pub options: &'static str,
     pub levels: &'static str,
     pub correlate: &'static str,
+    /// The compiled-in files of the egg's version shims: `(shim folder, file, text)`.
+    pub shims: &'static [(&'static str, &'static str, &'static str)],
+}
+
+// ---- version shims ----
+
+/// One `shim` line of `driver.kdl`: for harness versions in `versions`, the files in `dir`
+/// replace the egg's own files of the same name (spec 31).
+///
+/// ```kdl
+/// shim ">=2.1.325" dir="shims/2.1.325"
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shim {
+    pub versions: semver::VersionReq,
+    /// The folder, relative to the egg's `parrot` folder.
+    pub dir: String,
+}
+
+/// The shims `driver.kdl` lists, in order. Lines that don't parse are skipped.
+pub fn shims(driver_kdl: &str) -> Vec<Shim> {
+    let Ok(v) = to_json(driver_kdl, Children::Lists) else {
+        return Vec::new();
+    };
+    v["shim"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            let versions = semver::VersionReq::parse(s["name"].as_str()?).ok()?;
+            let dir = s["dir"].as_str()?.trim_end_matches('/').to_owned();
+            Some(Shim { versions, dir })
+        })
+        .collect()
+}
+
+/// The shim for harness `version`: the last listed one whose range holds it, so lines go from
+/// the oldest range to the newest. `None` when the version is unknown or no range holds it.
+pub fn shim_for(driver_kdl: &str, version: Option<&str>) -> Option<Shim> {
+    let version = semver::Version::parse(version?.trim()).ok()?;
+    shims(driver_kdl)
+        .into_iter()
+        .rfind(|s| s.versions.matches(&version))
+}
+
+/// The text of `file` for a harness under `shim`: the shim's copy from `$PARROT_DRIVER_DATA`,
+/// else its compiled-in copy, else the egg's own file as [`read`] finds it.
+pub fn read_shimmed(
+    file: &str,
+    builtin: &Builtin,
+    base: &str,
+    shim: Option<&Shim>,
+) -> Result<(String, DataSource), DataError> {
+    if let Some(shim) = shim {
+        if let Some(dir) = std::env::var_os(DRIVER_DATA_ENV) {
+            let path = Path::new(&dir).join(&shim.dir).join(file);
+            if path.exists() {
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| DataError::Io(e, path.display().to_string()))?;
+                return Ok((text, DataSource::Egg));
+            }
+        } else if let Some((_, _, text)) = builtin
+            .shims
+            .iter()
+            .find(|(d, f, _)| *d == shim.dir && *f == file)
+        {
+            return Ok(((*text).to_owned(), DataSource::Builtin));
+        }
+    }
+    read(file, base)
 }
 
 /// An egg's data, loaded.
@@ -192,6 +296,18 @@ impl DriverData {
         let (options, _) = read("options.kdl", builtin.options)?;
         let (levels, _) = read("levels.kdl", builtin.levels)?;
         let (correlate, _) = read("correlate.kdl", builtin.correlate)?;
+        Self::parse(&driver, &options, &levels, &correlate)
+    }
+
+    /// Like [`DriverData::load`], for a harness of `version`: the files of the shim whose range
+    /// holds it replace the egg's own (spec 31).
+    pub fn load_for(builtin: Builtin, version: Option<&str>) -> Result<Self, DataError> {
+        let (driver, _) = read("driver.kdl", builtin.driver)?;
+        let shim = shim_for(&driver, version);
+        let shim = shim.as_ref();
+        let (options, _) = read_shimmed("options.kdl", &builtin, builtin.options, shim)?;
+        let (levels, _) = read_shimmed("levels.kdl", &builtin, builtin.levels, shim)?;
+        let (correlate, _) = read_shimmed("correlate.kdl", &builtin, builtin.correlate, shim)?;
         Self::parse(&driver, &options, &levels, &correlate)
     }
 
@@ -653,6 +769,44 @@ pub fn schemas() -> Vec<(&'static str, Value)> {
         ("levels", crate::schema::schema_for::<LevelsFile>()),
         ("correlate", crate::schema::schema_for::<CorrelateFile>()),
     ]
+}
+
+#[cfg(test)]
+mod shim_tests {
+    use super::*;
+
+    #[test]
+    fn the_newest_matching_shim_wins() {
+        let driver = "data-version \"1\"\nshim \">=2.0.0\" dir=\"shims/2.0\"\nshim \">=2.1.325\" dir=\"shims/2.1.325/\"\nshim \"not a range\" dir=\"x\"\n";
+        assert_eq!(shims(driver).len(), 2);
+        assert_eq!(shim_for(driver, Some("2.1.327")).unwrap().dir, "shims/2.1.325");
+        assert_eq!(shim_for(driver, Some("2.0.4")).unwrap().dir, "shims/2.0");
+        assert_eq!(shim_for(driver, Some("1.9.0")), None);
+        assert_eq!(shim_for(driver, None), None);
+    }
+
+    #[test]
+    fn a_compiled_in_shim_replaces_a_file() {
+        const SHIMS: &[(&str, &str, &str)] = &[(
+            "shims/new",
+            "options.kdl",
+            "option \"x\" role=\"mode\" label=\"X\"\n",
+        )];
+        let b = Builtin {
+            driver: "data-version \"2\"\nshim \">=3.0.0\" dir=\"shims/new\"\n",
+            shims: SHIMS,
+            ..Builtin::default()
+        };
+        let shim = shim_for(b.driver, Some("3.1.0"));
+        let (text, source) = read_shimmed("options.kdl", &b, "", shim.as_ref()).unwrap();
+        // Without PARROT_DRIVER_DATA the compiled-in copy applies.
+        if std::env::var_os(DRIVER_DATA_ENV).is_none() {
+            assert!(text.contains("option \"x\""));
+            assert_eq!(source, DataSource::Builtin);
+        }
+        let (text, _) = read_shimmed("options.kdl", &b, "base", None).unwrap();
+        assert!(std::env::var_os(DRIVER_DATA_ENV).is_some() || text == "base");
+    }
 }
 
 #[cfg(test)]

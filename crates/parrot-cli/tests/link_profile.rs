@@ -7,11 +7,12 @@
 // The helpers are shared in shape with `link_move.rs`; this test uses only some of them.
 #![allow(dead_code)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -20,27 +21,8 @@ use tokio::sync::mpsc;
 
 const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(20);
-/// Builds `fake-claude` once and returns its path, beside the `parrot` binary.
 fn fake_claude() -> &'static Path {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "parrot-driver-claude",
-                "--bin",
-                "fake-claude",
-            ])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-claude failed");
-        let path = Path::new(PARROT).with_file_name(format!("fake-claude{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no fake-claude at {}", path.display());
-        path
-    })
+    common::fake_claude()
 }
 
 fn scenario(name: &str) -> PathBuf {
@@ -67,7 +49,7 @@ impl Serve {
         let socket = dir.path().join("sock");
         let mut cmd = Command::new(PARROT);
         cmd.args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .stdin(Stdio::null());
         if let Some(scenario) = scenario {
@@ -503,6 +485,7 @@ async fn a_carrier_egg_carries_a_link() {
     // The laptop has the example carrier egg installed before it starts.
     let dir = tempfile::tempdir().unwrap();
     let egg = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eggs/relay");
+    common::with_eggs(dir.path().join("state"));
     let out = Command::new(PARROT)
         .args(["eggs", "install", egg.to_str().unwrap(), "--state-dir"])
         .arg(dir.path().join("state"))

@@ -1,31 +1,16 @@
 //! The client commands against a real `parrot serve` over `fake-claude`: new, prompt, watch until idle.
 #![cfg(unix)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 
 fn fake_claude() -> &'static Path {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "parrot-driver-claude",
-                "--bin",
-                "fake-claude",
-            ])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-claude failed");
-        Path::new(PARROT).with_file_name(format!("fake-claude{}", std::env::consts::EXE_SUFFIX))
-    })
+    common::fake_claude()
 }
 
 struct Serve {
@@ -43,7 +28,7 @@ impl Serve {
             .join(scenario);
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_CLAUDE_BIN", fake_claude())
             .env("PARROT_FAKE_CLAUDE_SCENARIO", scenario)

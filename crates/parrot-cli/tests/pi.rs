@@ -2,6 +2,8 @@
 //! client on the local socket.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -15,20 +17,9 @@ use tokio::sync::mpsc;
 const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(10);
 
-/// The `fake-pi` binary beside `parrot`, built once.
 fn fake_pi() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args(["build", "--locked", "-p", "parrot-driver-pi", "--bin", "fake-pi"])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-pi failed");
-        let path = Path::new(PARROT).with_file_name(format!("fake-pi{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no fake-pi at {}", path.display());
-        path
-    })
+    PATH.get_or_init(|| common::workspace_bin("fake-pi"))
 }
 
 /// A running `parrot serve` in a temporary directory, killed on drop.
@@ -44,7 +35,7 @@ impl Serve {
         let socket = dir.path().join("sock");
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .env("PARROT_PI_BIN", fake_pi())
             .env("FAKE_PI_HOME", dir.path().join("pi-sessions"))

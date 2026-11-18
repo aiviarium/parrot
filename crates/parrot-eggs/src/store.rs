@@ -1,20 +1,11 @@
-//! Installed eggs in `<state_dir>/eggs`, the compiled-in fallback, and loading them for the
-//! runtime.
+//! Installed eggs in `<state_dir>/eggs`, packing them, and loading them for the runtime. Nothing
+//! is compiled in: with no egg installed, the runtime has no agents.
 
 use crate::driver::DriverFile;
 use crate::target::{ParrotTarget, TARGET};
 use hatchery::{Client, Config, Manifest, RegistryConfig, Spec, block_on};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-/// Where an egg came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EggSource {
-    /// Installed with `parrot eggs install`.
-    Installed,
-    /// The copy compiled into the runtime.
-    Builtin,
-}
 
 /// One driver egg, ready for the runtime.
 #[derive(Debug, Clone)]
@@ -30,7 +21,6 @@ pub struct LoadedEgg {
     pub data_dir: PathBuf,
     /// The driver, or why this egg can't be used: an unmet `requires` or invalid data.
     pub driver: Result<DriverFile, String>,
-    pub source: EggSource,
 }
 
 /// The eggs of one runtime state directory.
@@ -60,16 +50,11 @@ impl Eggs {
         self.state_dir.join("eggs")
     }
 
-    /// Where the compiled-in eggs are written out so drivers can read them.
-    pub fn builtin_dir(&self) -> PathBuf {
-        self.state_dir.join("builtin-eggs")
-    }
-
-    /// A Hatchery client for the `parrot` target over `registries` (folders), then the
-    /// registries of `<state_dir>/hatchery.kdl`. A folder with an `index.json` is a static
-    /// registry; a folder of package folders, like the in-repo `eggs/`, is packed into one
-    /// first, held by the returned guard.
-    pub fn client(&self, registries: &[PathBuf]) -> Result<(Client, Vec<tempfile::TempDir>), String> {
+    /// A Hatchery client for the `parrot` target over `registries`, then the registries of
+    /// `<state_dir>/hatchery.kdl`. A registry is an `http(s)://` URL of a static registry, or a
+    /// folder: one with an `index.json` is a static registry, and a folder of package folders,
+    /// like the in-repo `eggs/`, is packed into one first, held by the returned guard.
+    pub fn client(&self, registries: &[String]) -> Result<(Client, Vec<tempfile::TempDir>), String> {
         let config_path = self.state_dir.join("hatchery.kdl");
         let mut config = if config_path.is_file() {
             Config::load(&config_path).map_err(|e| e.to_string())?
@@ -79,11 +64,19 @@ impl Eggs {
         let mut held = Vec::new();
         let mut lines = Vec::new();
         for r in registries {
+            if r.starts_with("https://") || r.starts_with("http://") {
+                let mut line = RegistryConfig::new("http", r.trim_end_matches('/'));
+                // Releases are installed as soon as they are published.
+                line.min_age = Some(std::time::Duration::ZERO);
+                lines.push(line);
+                continue;
+            }
+            let r = PathBuf::from(r);
             let location = if r.join("index.json").is_file() {
                 r.clone()
             } else {
                 let staged = tempfile::tempdir().map_err(|e| e.to_string())?;
-                publish_folder(r, staged.path(), &self.target)?;
+                publish_folder(&r, staged.path(), &self.target)?;
                 let path = staged.path().to_path_buf();
                 held.push(staged);
                 path
@@ -95,6 +88,7 @@ impl Eggs {
         let client = Client::builder()
             .config(config)
             .target(self.target.clone())
+            .fetch(hatchery::fetch::HttpFetch::new())
             .cache_dir(self.state_dir.join("cache").join("hatchery"))
             .build()
             .map_err(|e| e.to_string())?;
@@ -102,10 +96,18 @@ impl Eggs {
     }
 
     /// Installs a package, such as `aiviarium/claude`, `claude@^0.1` or `./eggs/claude`.
-    /// Returns `group/id version` for each package installed.
-    pub fn install(&self, spec: &str, registries: &[PathBuf]) -> Result<Vec<String>, String> {
+    /// Without `registries`, and with none in `hatchery.kdl`, the default registry is searched:
+    /// `PARROT_EGGS_REGISTRY`, else [`crate::DEFAULT_REGISTRY`]. Returns `group/id version` for
+    /// each package installed.
+    pub fn install(&self, spec: &str, registries: &[String]) -> Result<Vec<String>, String> {
         let spec = Spec::parse(spec).map_err(|e| e.to_string())?;
-        let (client, _held) = self.client(registries)?;
+        let configured = self.state_dir.join("hatchery.kdl").is_file();
+        let registries = if registries.is_empty() && !configured {
+            vec![default_registry()]
+        } else {
+            registries.to_vec()
+        };
+        let (client, _held) = self.client(&registries)?;
         let dir = self.dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
         let report = block_on(client.add(&spec, &dir)).map_err(|e| e.to_string())?;
@@ -137,8 +139,7 @@ impl Eggs {
             .collect())
     }
 
-    /// Every agent's egg: the installed ones, then the compiled-in ones for agents not
-    /// installed. Problems reading the install folder are returned beside them.
+    /// Every installed agent's egg. Problems reading the install folder are returned beside them.
     pub fn load(&self) -> (Vec<LoadedEgg>, Vec<String>) {
         let mut problems = Vec::new();
         let mut eggs: BTreeMap<String, LoadedEgg> = BTreeMap::new();
@@ -149,32 +150,11 @@ impl Eggs {
                     if crate::carrier::is_carrier(&p.dir.join(TARGET)) {
                         continue;
                     }
-                    let egg = self.loaded(&p.manifest, p.dir.join(TARGET), EggSource::Installed);
+                    let egg = self.loaded(&p.manifest, p.dir.join(TARGET));
                     eggs.insert(egg.agent.clone(), egg);
                 }
             }
             Err(e) => problems.push(format!("cannot read the installed eggs: {e}")),
-        }
-        for (id, files) in crate::builtin::packages() {
-            if eggs.contains_key(id) {
-                continue;
-            }
-            let dir = self.builtin_dir().join(id);
-            if let Err(e) = write_files(&dir, &files) {
-                problems.push(format!("cannot write the built-in egg {id}: {e}"));
-            }
-            let manifest = files
-                .get("package.kdl")
-                .and_then(|b| std::str::from_utf8(b).ok())
-                .ok_or_else(|| "no package.kdl".to_string())
-                .and_then(|t| Manifest::parse(t).map_err(|e| e.to_string()));
-            match manifest {
-                Ok(m) => {
-                    let egg = self.loaded(&m, dir.join(TARGET), EggSource::Builtin);
-                    eggs.insert(egg.agent.clone(), egg);
-                }
-                Err(e) => problems.push(format!("the built-in egg {id} is invalid: {e}")),
-            }
         }
         (eggs.into_values().collect(), problems)
     }
@@ -205,7 +185,7 @@ impl Eggs {
         }
     }
 
-    fn loaded(&self, manifest: &Manifest, data_dir: PathBuf, source: EggSource) -> LoadedEgg {
+    fn loaded(&self, manifest: &Manifest, data_dir: PathBuf) -> LoadedEgg {
         let name = manifest.name();
         let version = manifest.version().to_string();
         let driver = self.refusal(manifest).map_or_else(|| read_driver(&data_dir), Err);
@@ -216,7 +196,6 @@ impl Eggs {
             name: manifest.about.name.clone().unwrap_or_else(|| name.id.clone()),
             data_dir,
             driver,
-            source,
         }
     }
 
@@ -267,13 +246,46 @@ pub fn check_package(dir: &Path, target: &ParrotTarget) -> Vec<String> {
     problems
 }
 
+/// The registry used when none is named: `PARROT_EGGS_REGISTRY`, else [`crate::DEFAULT_REGISTRY`].
+pub fn default_registry() -> String {
+    std::env::var(crate::REGISTRY_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| crate::DEFAULT_REGISTRY.to_string())
+}
+
 /// Packs a package folder into eggs (variants first, the base egg last), checking the `parrot`
-/// target. Builds nothing.
+/// target. Builds nothing. A variant whose folder doesn't exist is left out, so a developer
+/// machine packs its own platform's variant and a release packs every platform's.
 pub fn pack(dir: &Path, target: &ParrotTarget) -> Result<Vec<hatchery::Egg>, String> {
-    let opts = hatchery::PackOptions::new()
+    let manifest = Manifest::load(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut opts = hatchery::PackOptions::new()
         .no_build(true)
         .check(target)
         .origin(hatchery::manifest::Origin::new());
+    let mut declared = 0;
+    let mut present = Vec::new();
+    for t in &manifest.targets {
+        for v in &t.variants {
+            declared += 1;
+            if dir.join(t.variant_dir(v)).is_dir() {
+                let mut pick = hatchery::VariantPick::new(t.name.clone());
+                if let Some(os) = &v.os {
+                    pick = pick.os(os.clone());
+                }
+                if let Some(arch) = &v.arch {
+                    pick = pick.arch(arch.clone());
+                }
+                present.push(pick);
+            }
+        }
+    }
+    if declared > 0 && present.len() < declared {
+        opts = opts.base(true);
+        for pick in present {
+            opts = opts.variant(pick);
+        }
+    }
     hatchery::pack(dir, &opts).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
@@ -305,27 +317,6 @@ pub fn publish_folder(src: &Path, registry: &Path, target: &ParrotTarget) -> Res
         }
     }
     Ok(out)
-}
-
-/// Writes files into `dir`, replacing it when its contents differ.
-fn write_files(dir: &Path, files: &BTreeMap<String, &[u8]>) -> std::io::Result<()> {
-    let same = files
-        .iter()
-        .all(|(p, b)| std::fs::read(dir.join(p)).is_ok_and(|have| have == *b));
-    if same {
-        return Ok(());
-    }
-    if dir.exists() {
-        std::fs::remove_dir_all(dir)?;
-    }
-    for (p, b) in files {
-        let path = dir.join(p);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, b)?;
-    }
-    Ok(())
 }
 
 fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {

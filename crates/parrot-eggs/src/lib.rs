@@ -1,5 +1,5 @@
-//! Driver eggs: the `parrot` Hatchery target, the in-repo registry in `eggs/`, installed drivers,
-//! their data files and how each runs (built in or as a command).
+//! Driver eggs: the `parrot` Hatchery target, installed drivers, their data files and how each
+//! runs (a built-in core or a command).
 //!
 //! | Module | Holds |
 //! | --- | --- |
@@ -7,11 +7,9 @@
 //! | [`driver`] | `driver.kdl` |
 //! | [`carrier`] | `carrier.kdl`, for carrier eggs |
 //! | [`probe`] | Probe scenarios, `probes/*.kdl` |
-//! | [`store`] | Installing into `<state_dir>/eggs`, the compiled-in fallback, and loading |
-//! | [`builtin`] | The in-repo eggs, compiled in |
+//! | [`store`] | Installing into `<state_dir>/eggs`, packing, and loading |
 //! | [`schema`] | The JSON Schemas of the data files |
 
-pub mod builtin;
 pub mod carrier;
 pub mod driver;
 mod kdlx;
@@ -20,22 +18,23 @@ pub mod schema;
 pub mod store;
 pub mod target;
 
-pub use driver::{CliSpec, CommandVariant, DriverFile, DriverRun};
+pub use driver::{CliSpec, CommandVariant, DriverFile, DriverRun, ShimSpec};
 pub use probe::{Probe, ProbeStep};
-pub use store::{EggSource, Eggs, LoadedEgg};
+pub use store::{Eggs, LoadedEgg};
 pub use target::{ParrotTarget, TARGET};
 
 /// The runtime version this crate answers for the `parrot` fact.
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The variable that names an egg's `parrot` folder for its driver.
-pub const DATA_ENV: &str = "PARROT_DRIVER_DATA";
+pub const DATA_ENV: &str = parrot_proto::driver_data::DRIVER_DATA_ENV;
 
-/// A file of this driver's data: from `PARROT_DRIVER_DATA` when it is set, otherwise from the
-/// copy of `agent`'s egg compiled into the runtime.
-pub fn data_file(agent: &str, file: &str) -> Option<Vec<u8>> {
-    match std::env::var_os(DATA_ENV).filter(|v| !v.is_empty()) {
-        Some(dir) => std::fs::read(std::path::Path::new(&dir).join(file)).ok(),
-        None => builtin::data_file(agent, file).map(<[u8]>::to_vec),
-    }
-}
+/// The variables that name the agent a driver serves: its id and display name.
+pub use parrot_proto::driver_data::{AGENT_ENV, AGENT_NAME_ENV};
+
+/// The registry `parrot eggs install` uses when no `--registry` is given: the static registry
+/// published with each Parrot release. `PARROT_EGGS_REGISTRY` overrides it.
+pub const DEFAULT_REGISTRY: &str = "https://aiviarium.github.io/parrot/eggs";
+
+/// The variable that replaces [`DEFAULT_REGISTRY`].
+pub const REGISTRY_ENV: &str = "PARROT_EGGS_REGISTRY";

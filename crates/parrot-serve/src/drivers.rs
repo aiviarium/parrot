@@ -1,10 +1,17 @@
-//! How the runtime finds an agent's driver: from its driver egg (the `parrot` Hatchery
-//! target), installed or compiled in. A `builtin` egg runs `parrot driver <name>`; a `command`
-//! egg runs the program in its folder for this OS and architecture. Every driver is started
-//! with `PARROT_DRIVER_DATA` set to the egg's `parrot` folder.
+//! How the runtime finds an agent's driver: from its installed driver egg (the `parrot`
+//! Hatchery target). Nothing is compiled in, so with no egg installed there are no agents.
+//!
+//! | `driver.kdl` | The runtime runs |
+//! | --- | --- |
+//! | `driver "builtin" name="acp"` | `parrot driver acp` |
+//! | `driver "builtin" name="tui"` | The TUI core in process, with the egg's `profile.kdl` (E4); see [`Drivers::tui_agent`] |
+//! | `driver "command" { … }` | The program in the egg's folder for this OS and architecture |
+//!
+//! Every driver is started with `PARROT_DRIVER_DATA` set to the egg's `parrot` folder, and with
+//! `PARROT_DRIVER_AGENT` and `PARROT_DRIVER_AGENT_NAME` set to the agent it serves.
 
 use parrot_core::agents::AgentEgg;
-use parrot_eggs::{DriverRun, EggSource, LoadedEgg};
+use parrot_eggs::{DriverRun, LoadedEgg};
 use parrot_proto::agent::{Control, DriverKind};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -30,8 +37,8 @@ impl Drivers {
         }
     }
 
-    /// The eggs of the runtime in `state_dir`: installed ones, else compiled-in ones. Problems
-    /// reading them are returned beside.
+    /// The eggs installed in the runtime in `state_dir`. Problems reading them are returned
+    /// beside.
     pub fn load(state_dir: &std::path::Path) -> (Self, Vec<String>) {
         let (eggs, problems) = parrot_eggs::Eggs::new(state_dir).load();
         (Self::new(eggs), problems)
@@ -56,11 +63,19 @@ impl Drivers {
             .driver
             .as_ref()
             .map_err(|e| format!("cannot use the driver egg of {agent}: {e}"))?;
-        let env = vec![(
-            parrot_eggs::DATA_ENV.to_string(),
-            egg.data_dir.to_string_lossy().into_owned(),
-        )];
+        let env = vec![
+            (
+                parrot_eggs::DATA_ENV.to_string(),
+                egg.data_dir.to_string_lossy().into_owned(),
+            ),
+            (parrot_eggs::AGENT_ENV.to_string(), egg.agent.clone()),
+            (parrot_eggs::AGENT_NAME_ENV.to_string(), egg.name.clone()),
+        ];
         match &driver.driver {
+            // The TUI core runs in the runtime (E4); see `tui_agent`.
+            DriverRun::Builtin { name } if name == "tui" => {
+                Err(format!("agent {agent} runs under TUI control in the runtime"))
+            }
             DriverRun::Builtin { name } => Ok(DriverCommand {
                 program: parrot_exe()?,
                 args: vec!["driver".into(), name.clone()],
@@ -90,24 +105,34 @@ impl Drivers {
     pub fn tui_agent(&self, agent: &str) -> Option<crate::config::TuiAgent> {
         let egg = self.eggs.get(agent)?;
         let driver = egg.driver.as_ref().ok()?;
-        if !driver.controls.contains(&Control::Tui) {
+        let is_core = matches!(&driver.driver, DriverRun::Builtin { name } if name == "tui");
+        if !is_core && !driver.controls.contains(&Control::Tui) {
             return None;
         }
         let profile = egg.data_dir.join(PROFILE);
         if !profile.is_file() {
             return None;
         }
+        // A data-only egg on the TUI core may give the whole command and the transcript folder.
+        let text = std::fs::read_to_string(egg.data_dir.join("driver.kdl")).unwrap_or_default();
+        let data = parrot_proto::driver_data::to_json(&text, parrot_proto::driver_data::Children::Lists)
+            .unwrap_or_default();
         let var = format!("PARROT_{}_BIN", agent.to_uppercase().replace('-', "_"));
-        let program = std::env::var(&var)
-            .ok()
-            .filter(|p| !p.is_empty())
-            .or_else(|| driver.cli.as_ref().map(|c| c.name.clone()))?;
+        let command = match std::env::var(&var).ok().filter(|p| !p.is_empty()) {
+            Some(program) => vec![program],
+            None => parrot_proto::driver_data::driver_command(&text)
+                .or_else(|| driver.cli.as_ref().map(|c| vec![c.name.clone()]))?,
+        };
+        let transcript = data["transcript"][0]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| (agent == "claude").then(|| "claude".to_string()));
         Some(crate::config::TuiAgent {
-            command: vec![program],
+            command,
             profile,
             name: Some(egg.name.clone()),
             env: Default::default(),
-            transcript: (agent == "claude").then(|| "claude".to_string()),
+            transcript,
             unrecognised_after_ms: None,
             size: std::env::var("PARROT_TUI_SIZE")
                 .ok()
@@ -145,9 +170,9 @@ fn agent_egg(egg: &LoadedEgg) -> AgentEgg {
             None,
         ),
     };
-    let driver_version = match (kind, egg.source) {
-        (DriverKind::Builtin, EggSource::Builtin) => env!("CARGO_PKG_VERSION").to_string(),
-        _ => egg.version.clone(),
+    let driver_version = match kind {
+        DriverKind::Builtin => env!("CARGO_PKG_VERSION").to_string(),
+        DriverKind::Process => egg.version.clone(),
     };
     AgentEgg {
         id: egg.agent.clone(),
@@ -164,16 +189,4 @@ fn agent_egg(egg: &LoadedEgg) -> AgentEgg {
 
 fn parrot_exe() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("cannot find parrot: {e}"))
-}
-
-/// The driver for `agent` from the compiled-in eggs alone, without `PARROT_DRIVER_DATA`.
-pub fn resolve(agent: &str) -> Result<DriverCommand, String> {
-    match agent {
-        "claude" | "codex" | "acp" | "pi" | "opencode" | "t3" => Ok(DriverCommand {
-            program: parrot_exe()?,
-            args: vec!["driver".into(), agent.into()],
-            env: Vec::new(),
-        }),
-        _ => Err(format!("no driver for agent {agent}")),
-    }
 }

@@ -63,10 +63,7 @@ pub struct Config {
 impl Config {
     /// `PARROT_OPENCODE_BIN` or `opencode`, guarded when running as `parrot`.
     pub fn from_env() -> Self {
-        let guard = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_stem().map(|s| s == "parrot"))
-            .unwrap_or(false);
+        let guard = parrot_guard::can_guard();
         let mut data = DriverData::load(builtin);
         data.fill(default_data());
         Config {
@@ -221,6 +218,7 @@ impl Driver {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![agent(&self.config.data)],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/prompt" => {
@@ -803,9 +801,9 @@ pub fn agent(data: &DriverData) -> Agent {
         json!({"cost": true, "context": true, "rateLimits": false}),
     );
     Agent {
-        id: "opencode".into(),
+        id: parrot_proto::driver_data::agent_id("opencode"),
         env: String::new(),
-        name: "opencode".into(),
+        name: parrot_proto::driver_data::agent_name("opencode"),
         driver: AgentDriver {
             name: "opencode".into(),
             version: env!("CARGO_PKG_VERSION").into(),

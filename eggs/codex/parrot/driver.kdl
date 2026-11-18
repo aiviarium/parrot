@@ -1,4 +1,6 @@
-driver "builtin" name="codex"
+driver "command" {
+  run "variants/{os}-{arch}/parrot-driver-codex{exe}"
+}
 cli "codex" versions=">=0.167.0, <0.168.0"
 data-version "1"
 controls "native"

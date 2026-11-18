@@ -208,6 +208,7 @@ impl Driver {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![agent()],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/prompt" => {
@@ -822,9 +823,9 @@ fn harness(e: String) -> RpcError {
 /// The `t3` agent as `agent/list` reports it.
 pub fn agent() -> Agent {
     Agent {
-        id: "t3".into(),
+        id: parrot_proto::driver_data::agent_id("t3"),
         env: String::new(),
-        name: "T3 Code".into(),
+        name: parrot_proto::driver_data::agent_name("T3 Code"),
         driver: AgentDriver {
             name: "t3".into(),
             version: env!("CARGO_PKG_VERSION").into(),

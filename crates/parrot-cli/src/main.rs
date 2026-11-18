@@ -53,9 +53,9 @@ enum Command {
         #[arg(long)]
         link: bool,
     },
-    /// Serves a built-in driver on standard input and output.
+    /// Serves a built-in driver core (`acp` or `tui`) on standard input and output.
     Driver {
-        /// The driver: `claude`.
+        /// The core: `acp` or `tui`.
         name: String,
     },
     /// Runs a command that never outlives the guard's parent.

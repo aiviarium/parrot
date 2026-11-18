@@ -55,10 +55,7 @@ pub struct Config {
 impl Config {
     /// The environment's configuration and the installed egg's data.
     pub fn from_env() -> Self {
-        let guard = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_stem().map(|s| s == "parrot"))
-            .unwrap_or(false);
+        let guard = parrot_guard::can_guard();
         Config {
             env: vec![],
             guard,
@@ -184,6 +181,7 @@ impl Driver {
             })),
             "agent/list" => Ok(to_value(&AgentListResult {
                 agents: vec![agent(&self.config.data)],
+                hint: None,
             })),
             "binding/start" => self.start(params(p)?).await,
             "binding/prompt" => {
@@ -881,9 +879,9 @@ pub fn agent(data: &Data) -> Agent {
         ];
     }
     Agent {
-        id: "acp".into(),
+        id: parrot_proto::driver_data::agent_id("acp"),
         env: String::new(),
-        name: data.agent_name.clone(),
+        name: parrot_proto::driver_data::agent_name(&data.agent_name),
         driver: AgentDriver {
             name: "acp".into(),
             version: env!("CARGO_PKG_VERSION").into(),

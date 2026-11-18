@@ -720,6 +720,7 @@ checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -959,6 +960,7 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "toml 1.2.1+spec-1.1.0",
+ "ureq",
  "url",
 ]
 
@@ -1468,11 +1470,6 @@ dependencies = [
  "parrot-core",
  "parrot-driver",
  "parrot-driver-acp",
- "parrot-driver-claude",
- "parrot-driver-codex",
- "parrot-driver-opencode",
- "parrot-driver-pi",
- "parrot-driver-t3",
  "parrot-driver-tui",
  "parrot-eggs",
  "parrot-guard",
@@ -1704,6 +1701,7 @@ dependencies = [
  "kdl",
  "proptest",
  "schemars",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2795,6 +2793,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac5cecf619ca81f66a96482db09687c9f7465af65f4300a8c30cca05bd5a59d"
 dependencies = [
  "base64 0.23.1",
+ "flate2",
  "log",
  "percent-encoding",
  "rustls",
@@ -3252,6 +3251,12 @@ dependencies = [
  "quote",
  "syn 3.0.10",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"

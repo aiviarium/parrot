@@ -1,0 +1,5 @@
+driver "command" {
+  run "variants/{os}-{arch}/parrot-driver-echo{exe}"
+}
+data-version "1"
+controls "native"

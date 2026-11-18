@@ -4,3 +4,5 @@ node_modules/
 .env
 .env.*
 .claude/*
+# Driver binaries, put here by scripts/pack-eggs.sh or a release build
+eggs/*/parrot/variants/

@@ -1,0 +1,8 @@
+# Each test runs in its own process, and tests from every binary run in parallel.
+[profile.default]
+# A test that hangs fails after two minutes instead of holding the run.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+fail-fast = false
+slow-timeout = { period = "30s", terminate-after = 4 }

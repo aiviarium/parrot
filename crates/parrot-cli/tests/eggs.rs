@@ -1,5 +1,8 @@
 //! `parrot eggs` against the in-repo registry `eggs/` and against a static registry packed
 //! from it.
+#![cfg(unix)]
+
+mod common;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -44,27 +47,33 @@ fn entry<'a>(list: &'a [Value], agent: &str) -> &'a Value {
 }
 
 #[test]
-fn compiled_in_eggs_cover_every_agent() {
+fn nothing_is_installed_by_default() {
     let dir = tempfile::tempdir().unwrap();
-    let list = listed(dir.path());
-    for agent in ["claude", "codex", "acp", "pi", "opencode", "t3"] {
-        let e = entry(&list, agent);
-        assert_eq!(e["source"], "builtin");
-        assert_eq!(e["status"], "ok");
-        // The data folder a driver gets as PARROT_DRIVER_DATA is written out.
-        assert!(
-            Path::new(e["data"].as_str().unwrap())
-                .join("driver.kdl")
-                .is_file()
-        );
-    }
-    ok(parrot(&["eggs", "check"], dir.path()));
+    assert!(listed(dir.path()).is_empty());
+    let out = ok(parrot(&["eggs", "list"], dir.path()));
+    assert!(out.contains("parrot eggs install"), "{out}");
 }
 
 #[test]
 fn installs_from_the_in_repo_registry() {
     let dir = tempfile::tempdir().unwrap();
-    let eggs = repo_eggs();
+    // A data-only egg installs straight from the source folders.
+    let out = ok(parrot(
+        &[
+            "eggs",
+            "install",
+            "aiviarium/acp",
+            "--registry",
+            repo_eggs().to_str().unwrap(),
+        ],
+        dir.path(),
+    ));
+    assert!(out.contains("installed aiviarium/acp 0.1.0"), "{out}");
+    // A driver egg needs its binary, so it installs from the folders with the variants in.
+    let staged = common::egg_template()
+        .parent()
+        .expect("the template has a parent")
+        .join("registry");
     let out = ok(parrot(
         &[
             "eggs",
@@ -72,18 +81,27 @@ fn installs_from_the_in_repo_registry() {
             "aiviarium/claude",
             "codex",
             "--registry",
-            eggs.to_str().unwrap(),
+            staged.to_str().unwrap(),
         ],
         dir.path(),
     ));
     assert!(out.contains("installed aiviarium/claude 0.1.0"), "{out}");
     let list = listed(dir.path());
-    assert_eq!(entry(&list, "claude")["source"], "installed");
-    assert_eq!(entry(&list, "codex")["source"], "installed");
-    assert_eq!(entry(&list, "pi")["source"], "builtin");
+    for agent in ["acp", "claude", "codex"] {
+        assert_eq!(entry(&list, agent)["source"], "installed");
+        assert_eq!(entry(&list, agent)["status"], "ok");
+    }
+    assert!(list.iter().all(|e| e["agent"] != "pi"), "{list:?}");
     let data = entry(&list, "claude")["data"].as_str().unwrap().to_string();
-    assert!(data.contains("eggs"), "{data}");
     assert!(Path::new(&data).join("driver.kdl").is_file());
+    let key = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    assert!(
+        Path::new(&data)
+            .join("variants")
+            .join(key)
+            .join("parrot-driver-claude")
+            .is_file()
+    );
     ok(parrot(&["eggs", "check"], dir.path()));
 }
 
@@ -103,13 +121,25 @@ fn packs_and_installs_from_a_static_registry() {
         &[
             "eggs",
             "install",
-            "aiviarium/pi",
+            "aiviarium/acp",
             "--registry",
             registry.to_str().unwrap(),
         ],
         &state,
     ));
-    assert_eq!(entry(&listed(&state), "pi")["source"], "installed");
+    assert_eq!(entry(&listed(&state), "acp")["source"], "installed");
+    // pi's driver binary is a variant this registry doesn't have, so its install fails.
+    let out = parrot(
+        &[
+            "eggs",
+            "install",
+            "aiviarium/pi",
+            "--registry",
+            registry.to_str().unwrap(),
+        ],
+        &state,
+    );
+    assert!(!out.status.success());
 
     let eggs = dir.path().join("eggs");
     let out = ok(Command::new(PARROT)

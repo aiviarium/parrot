@@ -6,16 +6,39 @@ use std::sync::OnceLock;
 use parrot_proto::driver_data::{Builtin, DriverData};
 
 pub const BUILTIN: Builtin = Builtin {
-    driver: "",
+    driver: include_str!("../../../eggs/claude/parrot/driver.kdl"),
     options: include_str!("../../../eggs/claude/parrot/options.kdl"),
     levels: include_str!("../../../eggs/claude/parrot/levels.kdl"),
     correlate: include_str!("../../../eggs/claude/parrot/correlate.kdl"),
+    shims: &[(
+        "shims/2.1.325",
+        "options.kdl",
+        include_str!("../../../eggs/claude/parrot/shims/2.1.325/options.kdl"),
+    )],
 };
 
 static DATA: OnceLock<(DriverData, Option<String>)> = OnceLock::new();
 
+/// The version `claude --version` reports, which picks the egg's version shim (spec 31). Only a
+/// driver the runtime started from an egg (`PARROT_DRIVER_DATA` set) asks, so the compiled-in
+/// data stays the same wherever the driver runs on its own, as in tests.
+fn cli_version() -> Option<String> {
+    std::env::var_os(parrot_proto::driver_data::DRIVER_DATA_ENV)?;
+    let bin = std::env::var_os(crate::driver::CLAUDE_BIN_ENV).unwrap_or_else(|| "claude".into());
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
+}
+
 fn loaded() -> &'static (DriverData, Option<String>) {
-    DATA.get_or_init(|| match DriverData::load(BUILTIN) {
+    DATA.get_or_init(|| match DriverData::load_for(BUILTIN, cli_version().as_deref()) {
         Ok(d) => (d, None),
         Err(e) => (
             DriverData::builtin(BUILTIN).expect("the compiled-in data parses"),

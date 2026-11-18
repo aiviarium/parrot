@@ -4,6 +4,8 @@ on:
     tags: ["v*"]
 permissions:
   contents: write
+  pages: write
+  id-token: write
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -12,7 +14,8 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_VERSION: 1.99.0
 jobs:
-  # One `parrot` per OS and architecture, with a checksum beside each archive.
+  # One `parrot` per OS and architecture, with a checksum beside each archive, and the driver
+  # binaries the eggs ship as Hatchery variants.
   build:
     strategy:
       fail-fast: false
@@ -47,7 +50,11 @@ jobs:
         with:
           shared-key: release-${{ matrix.target }}
       - name: Build
-        run: cargo build --locked --release -p parrot-cli --target "${{ matrix.target }}"
+        shell: bash
+        run: |
+          cargo build --locked --release --target "${{ matrix.target }}" --bin parrot \
+            --bin parrot-driver-claude --bin parrot-driver-codex --bin parrot-driver-pi \
+            --bin parrot-driver-opencode --bin parrot-driver-t3
       - name: Package
         shell: bash
         run: |
@@ -66,16 +73,85 @@ jobs:
           name: parrot-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
+      - name: Collect the driver binaries
+        shell: bash
+        run: |
+          mkdir -p drivers
+          for d in claude codex pi opencode t3; do
+            cp target/${{ matrix.target }}/release/parrot-driver-$d* drivers/ 2>/dev/null || true
+          done
+          rm -f drivers/*.d drivers/*.pdb
+          ls drivers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drivers-${{ matrix.target }}
+          path: drivers/*
+          if-no-files-found: error
+
+  # Packs each egg with every platform's driver binary as a variant and publishes a static
+  # Hatchery registry: as release assets, and on GitHub Pages at the default registry URL,
+  # https://aiviarium.github.io/parrot/eggs.
+  eggs:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: drivers-*
+          path: drivers
+      - uses: actions/download-artifact@v4
+        with:
+          name: parrot-x86_64-unknown-linux-gnu
+          path: parrot
+      - name: Put the binaries in their variant folders
+        run: |
+          for t in x86_64-unknown-linux-gnu:linux-x86_64 aarch64-unknown-linux-gnu:linux-aarch64 \
+                   aarch64-apple-darwin:macos-aarch64 x86_64-pc-windows-msvc:windows-x86_64; do
+            triple="${t%%:*}"; key="${t##*:}"
+            for d in claude codex pi opencode t3; do
+              dest="eggs/$d/parrot/variants/$key"
+              mkdir -p "$dest"
+              cp drivers/drivers-$triple/parrot-driver-$d* "$dest/"
+              chmod +x "$dest"/*
+            done
+          done
+      - name: Pack and publish the registry
+        run: |
+          tar -xzf parrot/parrot-x86_64-unknown-linux-gnu.tar.gz -C parrot
+          mkdir -p site
+          ./parrot/parrot eggs pack eggs --publish site/eggs
+          mkdir -p dist
+          tar -czf dist/parrot-eggs-registry.tar.gz -C site eggs
+          find site/eggs -name '*.egg' -exec cp {} dist/ \;
+          (cd dist && sha256sum parrot-eggs-registry.tar.gz > parrot-eggs-registry.tar.gz.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eggs
+          path: dist/*
+          if-no-files-found: error
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
 
   publish:
-    needs: build
+    needs: [build, eggs]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: parrot-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: eggs
+          path: dist
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

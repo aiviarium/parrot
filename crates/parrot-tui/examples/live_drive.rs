@@ -21,6 +21,7 @@ use parrot_tui::{Automation, Profile, TuiError};
 
 struct Cli {
     name: &'static str,
+    /// The egg whose `parrot/profile.kdl` is the live profile.
     profile: &'static str,
     cmd: &'static [&'static str],
     approve: &'static str,
@@ -29,7 +30,7 @@ struct Cli {
 
 const CLAUDE: Cli = Cli {
     name: "claude",
-    profile: "claude-code.kdl",
+    profile: "claude",
     cmd: &[
         "claude",
         "--model",
@@ -45,7 +46,7 @@ const CLAUDE: Cli = Cli {
 
 const CODEX: Cli = Cli {
     name: "codex",
-    profile: "codex.kdl",
+    profile: "codex",
     cmd: &[
         "codex",
         "--no-daemon",
@@ -316,11 +317,12 @@ async fn main() {
             .to_string_lossy()
             .to_string()
     }));
-    // The live profiles are the agent package's, not the frozen copies in `fixtures/profiles`.
+    // The live profiles are the eggs', not the frozen copies in `fixtures/profiles`.
     let profile = Profile::load(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/parrot-agents/tui")
-            .join(cli.profile),
+            .join("../../eggs")
+            .join(cli.profile)
+            .join("parrot/profile.kdl"),
     )
     .expect("profile");
     let stamp = std::time::SystemTime::now()

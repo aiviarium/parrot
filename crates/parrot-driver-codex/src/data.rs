@@ -10,6 +10,7 @@ pub const BUILTIN: Builtin = Builtin {
     options: include_str!("../../../eggs/codex/parrot/options.kdl"),
     levels: include_str!("../../../eggs/codex/parrot/levels.kdl"),
     correlate: include_str!("../../../eggs/codex/parrot/correlate.kdl"),
+    shims: &[],
 };
 
 static DATA: OnceLock<(DriverData, Option<String>)> = OnceLock::new();

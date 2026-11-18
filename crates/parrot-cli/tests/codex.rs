@@ -2,6 +2,8 @@
 //! client on the local socket.
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -15,27 +17,9 @@ use tokio::sync::mpsc;
 const PARROT: &str = env!("CARGO_BIN_EXE_parrot");
 const WAIT: Duration = Duration::from_secs(10);
 
-/// Builds `fake-codex` once and returns its path, beside the `parrot` binary.
 fn fake_codex() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "parrot-driver-codex",
-                "--bin",
-                "fake-codex",
-            ])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "building fake-codex failed");
-        let path = Path::new(PARROT).with_file_name(format!("fake-codex{}", std::env::consts::EXE_SUFFIX));
-        assert!(path.exists(), "no fake-codex at {}", path.display());
-        path
-    })
+    PATH.get_or_init(|| common::workspace_bin("fake-codex"))
 }
 
 fn scenario(name: &str) -> PathBuf {
@@ -58,7 +42,7 @@ impl Serve {
         let socket = dir.path().join("sock");
         let mut cmd = Command::new(PARROT);
         cmd.args(["serve", "--state-dir"])
-            .arg(dir.path().join("state"))
+            .arg(common::with_eggs(dir.path().join("state")))
             .env("PARROT_SOCKET", &socket)
             .stdin(Stdio::null());
         if let Some(scenario) = scenario {

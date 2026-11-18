@@ -54,9 +54,8 @@ Without a directive the answer is `You said: <message>`. The file headers list e
 
 ## TUI profiles
 
-`tui/claude-code.kdl` and `tui/codex.kdl` describe what the terminal UIs of Claude Code and Codex look
-like: screen states, rules to recognise them and the actions that answer their dialogs. The Rust crate
-`crates/parrot-tui` reads them. The fake terminal UIs draw screens these profiles recognise.
+The TUI profiles live in the driver eggs, as `eggs/claude/parrot/profile.kdl` and
+`eggs/codex/parrot/profile.kdl`. The fake terminal UIs draw screens these profiles recognise.
 
 ## Development
 

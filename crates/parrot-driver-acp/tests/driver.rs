@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use parrot_driver_acp::data::Data;
+use parrot_driver_acp::data;
 use parrot_driver_acp::driver::{Config, serve};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf};
@@ -27,7 +27,7 @@ impl Client {
         let config = Config {
             env: vec![],
             guard: false,
-            data: Data::default(),
+            data: data::load_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../eggs/acp/parrot")),
         };
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         let (r, w) = tokio::io::split(theirs);
