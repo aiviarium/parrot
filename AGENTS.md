@@ -32,7 +32,27 @@ vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/R
 
 Run the tests with [cargo-nextest](https://nexte.st), which runs every test binary at once. `cargo test --workspace` still works but runs the binaries one after another. A test that needs a workspace binary, such as a fake CLI, calls `workspace_bin` in `crates/parrot-cli/tests/common/mod.rs`. Do not start `cargo build -p` from a test: a narrower build resolves features differently and rebuilds the dependency graph.
 
-CI runs the Rust jobs for a change to `crates/`, `Cargo.toml` or `Cargo.lock`. It runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
+For a fast local loop on one crate, filter inside `--workspace` instead of passing `-p`:
+
+```bash
+cargo nextest run --locked --workspace -E 'package(parrot-core)'
+TMPDIR=/tmp cargo nextest run --locked --workspace -E 'package(parrot-cli)'
+```
+
+Passing `-p` resolves features differently from `--workspace` and triggers a dependency rebuild, which `workspace_bin` then reverses. Keeping `--workspace` avoids that rebuild. Setting `TMPDIR=/tmp` avoids the 108-byte `SUN_LEN` Unix socket limit when `$TMPDIR` is deep in a workspace directory.
+
+Measured on an 8-core Linux laptop with a warm `target/` directory:
+
+| Check | Time |
+| --- | --- |
+| Single library crate (`-E 'package(parrot-core)'`) | ~1.1s |
+| Full `parrot-cli` suite (`-E 'package(parrot-cli)'`) | ~25s |
+| Full Rust nextest suite (`--workspace`) | ~26s |
+| Incremental `cargo clippy --all-targets` | ~2.1s |
+| Doctests (`--workspace --doc`) | ~2.6s |
+| TypeScript (`bun install`, `check`, `typecheck`, `test`) | ~1.5s |
+
+CI runs the Linux Rust jobs for a change to `crates/`, `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `.config/nextest.toml` or `.github/workflows/ci.yml`. Pull requests run the macOS and Windows `platform` matrix only for changes to the platform crates listed in `.github/workflows/ci.yml` or workspace build files. Pushes to `main`, merge queues and nightly scheduled runs test every Rust change on macOS and Windows. CI runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
 
 ## Drivers and eggs
 

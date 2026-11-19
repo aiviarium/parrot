@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+  schedule:
+    - cron: '23 3 * * *'
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,16 +16,18 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
   RUST_VERSION: 1.99.0
   VALE_VERSION: 3.25.1
 jobs:
-  # Which areas the change touches. Started by hand, or with no base to
+  # Which areas the change touches. Started by hand, scheduled, or with no base to
   # compare with, every area runs.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       rust: ${{ steps.areas.outputs.rust }}
+      platform: ${{ steps.areas.outputs.platform }}
       typescript: ${{ steps.areas.outputs.typescript }}
       docs: ${{ steps.areas.outputs.docs }}
     steps:
@@ -35,8 +40,8 @@ jobs:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
-          all() { for a in rust typescript docs; do echo "$a=true" >> "$GITHUB_OUTPUT"; done; }
-          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          all() { for a in rust platform typescript docs; do echo "$a=true" >> "$GITHUB_OUTPUT"; done; }
+          if [ "$EVENT" = workflow_dispatch ] || [ "$EVENT" = schedule ] || [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             all; exit 0
           fi
           files=$(git diff --name-only "$BASE" "$HEAD")
@@ -44,11 +49,57 @@ jobs:
           # Markdown alone runs only the docs job.
           code=$(printf '%s\n' "$files" | grep -v '\.md$' || true)
           has() { printf '%s\n' "$3" | grep -qE "$1" && echo "$2=true" >> "$GITHUB_OUTPUT" || true; }
-          has '^(crates/|Cargo\.(toml|lock)$|rustfmt\.toml$|\.config/nextest\.toml$|\.github/workflows/ci\.yml$)' rust "$code"
+          rust_re='^(crates/|Cargo\.(toml|lock)$|rustfmt\.toml$|\.config/nextest\.toml$|\.github/workflows/ci\.yml$)'
+          platform_re='^(crates/parrot-(term|guard|driver|serve|link|eggs|tui|driver-tui|cli)/|Cargo\.(toml|lock)$|\.config/nextest\.toml$|\.github/workflows/ci\.yml$)'
+          has "$rust_re" rust "$code"
+          if [ "$EVENT" = push ] || [ "$EVENT" = merge_group ]; then
+            has "$rust_re" platform "$code"
+          else
+            has "$platform_re" platform "$code"
+          fi
           has '^(packages/|package\.json$|bun\.lock$|biome\.json$|tsconfig\.base\.json$|\.github/workflows/ci\.yml$)' typescript "$code"
           has '(\.md$|^\.vale\.ini$|^\.vale/|^\.github/workflows/ci\.yml$)' docs "$files"
 
   rust-lint:
+    needs: changes
+    if: needs.changes.outputs.rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-
+            cargo-clippy-${{ runner.os }}-
+      - run: python3 ci/mtimes.py restore target
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          rm -rf target/debug/incremental target/tmp target/*/tmp
+          python3 ci/mtimes.py save target
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+
+  rust-tests:
     needs: changes
     if: needs.changes.outputs.rust
     runs-on: ubuntu-latest
@@ -57,58 +108,75 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install the toolchain
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt --no-self-update
-          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-
-  rust-tests:
-    needs: changes
-    if: needs.changes.outputs.rust
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install the toolchain
-        run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
           echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache/restore@v4
         with:
-          shared-key: test
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-
+            cargo-test-${{ runner.os }}-
+      - run: python3 ci/mtimes.py restore target
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
       - run: cargo nextest run --locked --workspace --profile ci
       - run: cargo test --locked --workspace --doc
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          rm -rf target/debug/incremental target/debug/.workspace-bins-* target/debug/test-eggs-* target/tmp target/*/tmp
+          python3 ci/mtimes.py save target
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
 
   # macOS and Windows build the whole workspace; their platform code (PTYs, guards, pipes) has
   # no test on Linux. Tests that need a shell are Unix only, so each OS runs what applies to it.
+  # Pull requests run this matrix only for changes to those platform crates or workspace build
+  # files; pushes to main, merge queues and nightly runs test all of them.
   platform:
     needs: changes
-    if: needs.changes.outputs.rust
+    if: needs.changes.outputs.platform
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Install the toolchain
         shell: bash
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
           echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache/restore@v4
         with:
-          shared-key: platform-${{ matrix.os }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-platform-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-platform-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}-
+            cargo-platform-${{ matrix.os }}-
+      - shell: bash
+        run: python ci/mtimes.py restore target
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -121,6 +189,20 @@ jobs:
           package(parrot-guard) | package(parrot-driver) | package(parrot-serve) |
           package(parrot-link) | package(parrot-eggs) | package(parrot-tui) |
           package(parrot-driver-tui) | package(parrot-cli)'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          rm -rf target/debug/incremental target/debug/.workspace-bins-* target/debug/test-eggs-* target/tmp target/*/tmp
+          python ci/mtimes.py save target
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-platform-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
 
   typescript:
     needs: changes

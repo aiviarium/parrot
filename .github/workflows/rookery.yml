@@ -69,6 +69,9 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/repo:ro" -e ANSIBLE_CORE_VERSION="$ANSIBLE_CORE_VERSION" ubuntu:26.04 bash -euo pipefail -c '
             export DEBIAN_FRONTEND=noninteractive
+            # The runners are next to the Azure mirror of Ubuntu; archive.ubuntu.com can stall for minutes.
+            sed -i "s|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g" /etc/apt/sources.list.d/ubuntu.sources
+            printf "Acquire::Retries \"3\";\nAcquire::http::Timeout \"30\";\n" > /etc/apt/apt.conf.d/80-ci
             apt-get update -q
             apt-get install -y --no-install-recommends \
               ca-certificates curl gzip jq nodejs npm python3 python3-venv sudo tar xz-utils

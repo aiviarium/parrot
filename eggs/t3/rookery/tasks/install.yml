@@ -45,6 +45,11 @@
     checksum: "sha256:{{ (rookery_t3_server_sha256 | default('', true) | trim | regex_replace('^sha256:', '')) or rookery_t3_server_known_sha256[rookery_t3_server_version | default('0.1.10')] }}"
     dest: "/opt/rookery-tools/t3-{{ rookery_t3_server_version | default('0.1.10') }}.tar.gz"
     mode: '0644'
+    timeout: 60
+  register: rookery_t3_archive
+  retries: 3
+  delay: 5
+  until: rookery_t3_archive is succeeded
 - name: Extract T3 runtime
   ansible.builtin.unarchive:
     src: "/opt/rookery-tools/t3-{{ rookery_t3_server_version | default('0.1.10') }}.tar.gz"
