@@ -82,17 +82,35 @@ mod unix {
 
     /// Accepts connections forever, refusing peers that run as another user.
     pub async fn serve_socket(rt: Runtime, listener: UnixListener) -> io::Result<()> {
-        serve_uid(rt, listener, uid()).await
+        serve_uid(rt, listener, uid(), Peer::Owner).await
     }
 
     /// The controller connects as root to a socket created by systemd. The runtime
     /// itself can run unprivileged and never creates or unlinks the broker socket.
     #[cfg(target_os = "linux")]
     pub async fn serve_broker(rt: Runtime, listener: UnixListener) -> io::Result<()> {
-        serve_uid(rt, listener, 0).await
+        // Rookery checks use on the host. Its clients can work with sessions but cannot
+        // administer links or tokens, act as a session, or register client functions.
+        let peer = Peer::Token {
+            token: "rookery-broker".into(),
+            scopes: [
+                "read",
+                "prompt",
+                "answer",
+                "configure",
+                "manage",
+                "delegate",
+                "workspace",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            sessions: None,
+            provides: Some(vec![]),
+        };
+        serve_uid(rt, listener, 0, peer).await
     }
 
-    async fn serve_uid(rt: Runtime, listener: UnixListener, peer_uid: u32) -> io::Result<()> {
+    async fn serve_uid(rt: Runtime, listener: UnixListener, peer_uid: u32, peer: Peer) -> io::Result<()> {
         loop {
             let (stream, _) = listener.accept().await?;
             // `peer_cred` is SO_PEERCRED on Linux and getpeereid on macOS.
@@ -101,9 +119,10 @@ mod unix {
                 _ => continue,
             }
             let rt = rt.clone();
+            let peer = peer.clone();
             tokio::spawn(async move {
                 let (r, w) = stream.into_split();
-                let _ = serve_lines(rt, Peer::Owner, r, w).await;
+                let _ = serve_lines(rt, peer, r, w).await;
             });
         }
     }

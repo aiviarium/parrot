@@ -187,7 +187,11 @@ async fn broker_authenticates_the_unix_peer() {
 
     if local_uid == 0 {
         let conns = wait_for_conns(&rt, 1).await;
-        assert_eq!(conns[0].1, Peer::Owner);
+        let Peer::Token { scopes, .. } = &conns[0].1 else {
+            panic!("the broker does not get owner privileges");
+        };
+        assert!(scopes.iter().any(|scope| scope == "answer"));
+        assert!(!scopes.iter().any(|scope| scope == "functions"));
     } else {
         // A permissive file mode on the listener still grants no protocol access.
         let mut output = String::new();
