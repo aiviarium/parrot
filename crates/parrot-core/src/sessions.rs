@@ -433,7 +433,8 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "session/delete" => delete(cx, conn, params),
         "session/screen" => return tui_call(cx, conn, id, params, "binding/screen"),
         "session/keys" => return tui_call(cx, conn, id, params, "binding/keys"),
-        // Adopting harness sessions (9.5) is outside the implemented profiles (40).
+        // Adopting harness sessions (9.5) is outside the implemented profiles (40): no profile
+        // covers it, and the agents leave `session.history` out so clients don't ask.
         "session/discover" | "session/adopt" => {
             Err(RpcError::new(-32001, format!("{method} is not implemented"))
                 .with_data(json!({ "feature": "session.history" })))
