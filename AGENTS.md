@@ -11,6 +11,8 @@ protocols and calls model APIs. This file is for coding agents working in this r
 | `crates/parrot-tui/` | The labelled tree and automation. `tree/` segments a screen into nodes and gives a node the same id in every frame. `profile/` reads TOML profiles and evaluates them. `locator.rs` finds text and boxes, `automate.rs` has waits and actions, and `measure.rs` scores a profile against labelled casts. `src/bin/parrot-term-tool/` is the command line |
 | `crates/parrot-models/` | OpenAI-compatible model clients behind the `Transport` trait, all in `src/lib.rs` |
 | `packages/parrot-agents/` | `@aiviarium/parrot-agents`. `src/` has the protocol translators and `test/` their tests. `fake/` has the fake CLIs |
+| `site/` | The documentation site, following aiviarium/docs-base. `docs/` holds the pages as Markdown |
+| `docs/` | The documentation pages, which read on GitHub and build the site |
 
 Fixtures sit beside the crate that uses them, in `fixtures/`. `crates/parrot-tui/fixtures/casts/README.md` says how each cast was recorded and what it shows.
 
@@ -27,7 +29,11 @@ bun install --frozen-lockfile
 bun run check
 bun run typecheck
 bun run test
-vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md
+vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md docs
+
+cd site
+npm ci
+npm run check   # typecheck, lint, link check and build
 ```
 
 Run the tests with [cargo-nextest](https://nexte.st), which runs every test binary at once. `cargo test --workspace` still works but runs the binaries one after another. A test that needs a workspace binary, such as a fake CLI, calls `workspace_bin` in `crates/parrot-cli/tests/common/mod.rs`. Do not start `cargo build -p` from a test: a narrower build resolves features differently and rebuilds the dependency graph.
@@ -52,11 +58,11 @@ Measured on an 8-core Linux laptop with a warm `target/` directory:
 | Doctests (`--workspace --doc`) | ~2.6s |
 | TypeScript (`bun install`, `check`, `typecheck`, `test`) | ~1.5s |
 
-CI runs the Linux Rust jobs for a change to `crates/`, `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `.config/nextest.toml` or `.github/workflows/ci.yml`. Pull requests run the macOS and Windows `platform` matrix only for changes to the platform crates listed in `.github/workflows/ci.yml` or workspace build files. Pushes to `main`, merge queues and nightly scheduled runs test every Rust change on macOS and Windows. CI runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
+CI runs the Linux Rust jobs for a change to `crates/`, `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `.config/nextest.toml` or `.github/workflows/ci.yml`. It builds the documentation site for a change to `docs/` or `site/`. Pull requests run the macOS and Windows `platform` matrix only for changes to the platform crates listed in `.github/workflows/ci.yml` or workspace build files. Pushes to `main`, merge queues and nightly scheduled runs test every Rust change on macOS and Windows. CI runs the TypeScript job for a change to `packages/` or the Bun and Biome files at the root. A change to Markdown runs only Vale. Started by hand, CI runs everything.
 
 ## Drivers and eggs
 
-- `parrot` builds in only the ACP and TUI cores. The Claude, Codex, pi, opencode and T3 drivers are binaries, `parrot-driver-<agent>`, packed into the eggs in `eggs/`. `eggs/README.md` describes the eggs and `docs/drivers.md` the driver protocol for authors.
+- `parrot` builds in only the ACP and TUI cores. The Claude, Codex, pi, opencode and T3 drivers are binaries, `parrot-driver-<agent>`, packed into the eggs in `eggs/`. `eggs/README.md` describes the eggs and `docs/writing-drivers.md` the driver protocol for authors.
 - `parrot eggs pack eggs --build --publish target/eggs-registry` builds this machine's driver binaries, copies them into `eggs/<agent>/parrot/variants/<os>-<arch>/` and packs every egg into a static registry in `target/eggs-registry`. Install from it with `parrot eggs install aiviarium/claude --registry target/eggs-registry`.
 - The CLI tests install the in-repo eggs, with freshly built driver binaries, into each test's state directory. Start `parrot serve` through `common::Serve`, or pass the state directory through `common::with_eggs`.
 

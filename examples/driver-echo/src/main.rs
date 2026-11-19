@@ -1,6 +1,6 @@
 //! An example third-party Parrot driver. It speaks the driver protocol (spec 30) on stdio and is
 //! its own harness: every prompt is answered with `echo: <text>`, prefixed by the first line of
-//! `prefix.txt` from the egg's folder when there is one. See `docs/drivers.md`.
+//! `prefix.txt` from the egg's folder when there is one. See `docs/writing-drivers.md`.
 
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};

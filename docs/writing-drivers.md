@@ -5,12 +5,16 @@ standard input and output, packed in a Hatchery egg with the `parrot` target. Pa
 only two general cores, for ACP agents and for agents driven through their terminal. Every other
 driver is a program in an egg, built and released on its own.
 
+The drivers in this repository have a page each: [Claude Code](drivers/claude.md), [Codex](drivers/codex.md),
+[opencode](drivers/opencode.md), [pi](drivers/pi.md), [ACP](drivers/acp.md), [T3](drivers/t3.md) and
+[TUI control](drivers/tui.md). This page is for writing another one.
+
 `examples/driver-echo/` is a complete driver in one file. It builds outside the Parrot workspace,
 the way a third-party driver would.
 
 ## The protocol
 
-Messages are JSON-RPC 2.0, one per line. Spec section 30 has every message type. A driver must answer
+Messages are JSON-RPC 2.0, one per line. [Spec section 30](../spec/protocol.md#30-driver-protocol) has every message type. A driver must answer
 these:
 
 | Method | Answer |
@@ -65,6 +69,8 @@ A driver reads the version where the CLI reports one:
 
 | Agent | Where the version comes from |
 | --- | --- |
+| Claude Code | the first version `claude --version` prints, and `claude_code_version` in the first message |
+| Codex | the first version `codex --version` prints, and the version in the app server's user agent |
 | ACP | `agentInfo.version` or `info.version` in the `initialize` answer |
 | T3 | `serverInfo.version` in the MCP `initialize` answer |
 | pi | the first version `pi --version` prints |
@@ -163,6 +169,29 @@ The TUI core reads items from the CLI's own transcript when `transcript` names o
 | `transcript "jsonl" dir=…` | Reads the newest `.jsonl` in the folder, in Claude Code's message format |
 | `mcp "mcp-config"` | Passes the `parrot` MCP server as `--mcp-config` JSON |
 | `mcp "config-override"` | Passes it as `-c mcp_servers.parrot.*` overrides |
+
+## Carrier eggs
+
+A carrier egg gives links a channel of a platform's own, for machines that SSH, a command or TCP can't reach. Its `parrot` folder holds `carrier.kdl` and the program it runs, and no `driver.kdl`. The runtime loads installed carrier eggs at start, and the `carrier.kind` of a link's `add` selects one.
+
+```kdl
+carrier "relay" title="Relay" max-message=16384 containment="restricted"
+run "bin/carrier"
+target "{\"type\":\"object\"}"
+```
+
+| Node | Meaning |
+| --- | --- |
+| `carrier "kind"` | The kind a link's carrier selects. `title`, `max-message`, `containment` and `listens` are optional |
+| `listens=#true` | The runtime runs `<program> listen` beside itself for inbound channels |
+| `max-message=…` | The largest message on the channel, at least 4096 bytes |
+| `containment=…` | `restricted` or `shell`; without it the egg counts as `shell` |
+| `run "path" args…` | The program, relative to the `parrot` folder |
+| `target "json"` | The JSON Schema of the carrier's target |
+
+The runtime starts `<program> dial` for each connection and writes the target as JSON on its first input line. The program answers `{"ready":true}` on its first output line, and from then on its standard input and output are the channel. A channel that sends messages rather than a byte stream sends each Noise message as one message of its own. Neither side's Noise messages exceed `max-message`, which the dialling runtime states in its handshake.
+
+A carrier egg with `listens=#true` takes inbound channels as well. The runtime starts `<program> listen` under `parrot guard` and starts it again when it ends. For each inbound channel the program either runs `$PARROT_BIN connect --link --socket $PARROT_SOCKET --fd <n>` with the channel's descriptor inherited, or connects to `$PARROT_LINK_SOCKET` and copies bytes both ways.
 
 ## Rookery target
 

@@ -30,6 +30,7 @@ jobs:
       platform: ${{ steps.areas.outputs.platform }}
       typescript: ${{ steps.areas.outputs.typescript }}
       docs: ${{ steps.areas.outputs.docs }}
+      site: ${{ steps.areas.outputs.site }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,7 +41,7 @@ jobs:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
-          all() { for a in rust platform typescript docs; do echo "$a=true" >> "$GITHUB_OUTPUT"; done; }
+          all() { for a in rust platform typescript docs site; do echo "$a=true" >> "$GITHUB_OUTPUT"; done; }
           if [ "$EVENT" = workflow_dispatch ] || [ "$EVENT" = schedule ] || [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             all; exit 0
           fi
@@ -59,6 +60,7 @@ jobs:
           fi
           has '^(packages/|package\.json$|bun\.lock$|biome\.json$|tsconfig\.base\.json$|\.github/workflows/ci\.yml$)' typescript "$code"
           has '(\.md$|^\.vale\.ini$|^\.vale/|^\.github/workflows/ci\.yml$)' docs "$files"
+          has '^(docs/|site/|\.github/workflows/(ci|docs)\.yml$)' site "$files"
 
   rust-lint:
     needs: changes
@@ -204,6 +206,24 @@ jobs:
             target
           key: cargo-platform-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
 
+  site:
+    needs: changes
+    if: needs.changes.outputs.site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The full history gives each page its "Last updated" date.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci --no-audit --no-fund && npm run check
+        working-directory: site
+
   typescript:
     needs: changes
     if: needs.changes.outputs.typescript
@@ -231,4 +251,6 @@ jobs:
           curl -fsSL "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" vale
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      - run: vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md
+      # The ai-tells and Voices packages are not committed; fetch them before the check.
+      - run: vale sync
+      - run: vale --minAlertLevel=warning README.md AGENTS.md crates/*/README.md packages/*/README.md docs site/AGENTS.md
