@@ -49,7 +49,7 @@ pub struct TranscriptConfig {
 pub struct TuiAgent {
     /// The harness command and its arguments.
     pub command: Vec<String>,
-    /// The TUI profile (TOML).
+    /// The TUI profile (KDL).
     pub profile: PathBuf,
     #[serde(default)]
     pub name: Option<String>,

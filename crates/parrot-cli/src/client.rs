@@ -38,6 +38,7 @@ pub enum Command {
         /// The folder the agent works in; the current one by default.
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// The session's title.
         #[arg(long)]
         title: Option<String>,
         #[command(flatten)]
