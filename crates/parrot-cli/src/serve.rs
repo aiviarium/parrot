@@ -151,7 +151,27 @@ pub async fn run(
     hub.attach(rt.clone());
 
     let socket = socket_path().map_err(|e| e.to_string())?;
-    let local = serve_local(rt.clone(), socket.clone());
+    // Bind the local sockets before serving anything, so a second `parrot serve` fails here and
+    // never reaches the cleanup below, which would unlink a running runtime's sockets (spec 3.3).
+    let bound = bind_local(&socket)?;
+    #[cfg(unix)]
+    let link_bound = match bind_link(&socket) {
+        Ok(listener) => listener,
+        Err(e) => {
+            // The local socket is this process's own, so take it back before failing.
+            let _ = std::fs::remove_file(&socket);
+            return Err(e);
+        }
+    };
+    #[cfg(windows)]
+    let link_bound = bind_link(&socket)?;
+    #[cfg(unix)]
+    let local = serve_local(rt.clone(), bound);
+    #[cfg(windows)]
+    let local = {
+        let _ = bound;
+        serve_local(rt.clone(), socket.clone())
+    };
     let link_tcp = async {
         let Some(addr) = link_listen else {
             return std::future::pending().await;
@@ -166,7 +186,7 @@ pub async fn run(
             .await
             .map_err(|e| format!("link listener: {e}"))
     };
-    let link_local = serve_link_local(hub.clone(), &socket);
+    let link_local = serve_link_local(hub.clone(), &socket, link_bound);
     let remote = async {
         let Some(addr) = ws else {
             return std::future::pending().await;
@@ -228,13 +248,18 @@ fn load_drivers(dir: &std::path::Path) -> parrot_serve::drivers::Drivers {
 }
 
 /// The link endpoint: `link.sock` beside the socket, or the local pipe with `-link` (E9).
+#[cfg(unix)]
+fn bind_link(socket: &std::path::Path) -> Result<parrot_link::endpoint::LinkListener, String> {
+    let path = parrot_link::endpoint::link_socket_path(socket);
+    parrot_link::endpoint::bind_link_socket(&path).map_err(|e| format!("cannot bind {}: {e}", path.display()))
+}
+
+#[cfg(unix)]
 async fn serve_link_local(
     hub: Arc<parrot_serve::link_hub::LinkHub>,
     socket: &std::path::Path,
+    listener: parrot_link::endpoint::LinkListener,
 ) -> Result<(), String> {
-    let path = parrot_link::endpoint::link_socket_path(socket);
-    let listener = parrot_link::endpoint::bind_link_socket(&path)
-        .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
     // Carrier eggs that listen hand their inbound channels to this endpoint.
     match std::env::current_exe() {
         Ok(parrot) => hub.start_listeners(socket.to_path_buf(), parrot),
@@ -246,12 +271,25 @@ async fn serve_link_local(
 }
 
 #[cfg(unix)]
-async fn serve_local(rt: Runtime, path: PathBuf) -> Result<(), String> {
-    let listener = parrot_serve::socket::bind_socket(&path)
-        .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+fn bind_local(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+    parrot_serve::socket::bind_socket(path).map_err(|e| format!("cannot bind {}: {e}", path.display()))
+}
+
+#[cfg(unix)]
+async fn serve_local(rt: Runtime, listener: tokio::net::UnixListener) -> Result<(), String> {
     parrot_serve::socket::serve_socket(rt, listener)
         .await
         .map_err(|e| format!("socket: {e}"))
+}
+
+#[cfg(windows)]
+fn bind_local(_path: &PathBuf) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn bind_link(_path: &std::path::Path) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -260,6 +298,24 @@ async fn serve_local(rt: Runtime, path: PathBuf) -> Result<(), String> {
     parrot_serve::socket::serve_pipe(rt, &name)
         .await
         .map_err(|e| format!("pipe {name}: {e}"))
+}
+
+#[cfg(windows)]
+async fn serve_link_local(
+    hub: Arc<parrot_serve::link_hub::LinkHub>,
+    socket: &std::path::Path,
+    _bound: (),
+) -> Result<(), String> {
+    let path = parrot_link::endpoint::link_socket_path(socket);
+    let listener = parrot_link::endpoint::bind_link_socket(&path)
+        .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    match std::env::current_exe() {
+        Ok(parrot) => hub.start_listeners(socket.to_path_buf(), parrot),
+        Err(e) => eprintln!("parrot: cannot start listening carriers: {e}"),
+    }
+    parrot_serve::link_hub::serve_link_socket(hub, listener)
+        .await
+        .map_err(|e| format!("link socket: {e}"))
 }
 
 #[cfg(unix)]
