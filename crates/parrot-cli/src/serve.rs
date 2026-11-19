@@ -74,7 +74,13 @@ pub async fn run(
     ws: Option<String>,
     link_listen: Option<String>,
     workspace_root: Option<PathBuf>,
+    #[cfg(target_os = "linux")] broker_socket: bool,
+    #[cfg(target_os = "linux")] driver_state_dir: Option<PathBuf>,
 ) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let broker = broker_socket.then(broker_listener).transpose()?;
+    #[cfg(not(target_os = "linux"))]
+    let broker_socket = false;
     let dir = match state_dir {
         Some(dir) => dir,
         None => default_state_dir().map_err(|e| e.to_string())?,
@@ -85,14 +91,20 @@ pub async fn run(
         parrot_link::StaticKey::load_or_create(&dir).map_err(|e| format!("cannot read the link key: {e}"))?;
     let link_store = Store::open(&db).map_err(|e| format!("cannot open {}: {e}", db.display()))?;
     let hub = parrot_serve::link_hub::LinkHub::with_store(key, link_store, Some(dir.join("links.json")));
-    load_carriers(&dir, &hub);
+    if !broker_socket {
+        load_carriers(&dir, &hub);
+    }
     let mut core = Core::new(Box::new(SystemClock), Box::new(UlidIds));
-    let drivers = load_drivers(&dir);
+    #[cfg(not(target_os = "linux"))]
+    let driver_state_dir: Option<PathBuf> = None;
+    let drivers = load_drivers(driver_state_dir.as_deref().unwrap_or(&dir));
     parrot_core::agents::load(&mut core.state, drivers.agents());
     core.state.principals.runtime = hub.runtime_id();
     core.state.principals.env = hub.runtime_id().replacen("rt_", "env_", 1);
     // The injected MCP server is this program's `parrot mcp` (spec 26).
-    core.state.functions.mcp = std::env::current_exe().ok().map(|p| p.display().to_string());
+    if !broker_socket {
+        core.state.functions.mcp = std::env::current_exe().ok().map(|p| p.display().to_string());
+    }
     if parrot_serve::desktop::available() {
         for spec in parrot_serve::desktop::specs() {
             let name = spec["name"].as_str().unwrap_or_default().to_string();
@@ -149,6 +161,17 @@ pub async fn run(
             .with_workspace_root(workspace_root)
     });
     hub.attach(rt.clone());
+
+    #[cfg(target_os = "linux")]
+    if let Some(listener) = broker {
+        return tokio::select! {
+            r = parrot_serve::socket::serve_broker(rt, listener) => {
+                r.map_err(|e| format!("broker socket: {e}"))
+            }
+            _ = tokio::signal::ctrl_c() => Ok(()),
+            _ = terminated() => Ok(()),
+        };
+    }
 
     let socket = socket_path().map_err(|e| e.to_string())?;
     // Bind the local sockets before serving anything, so a second `parrot serve` fails here and
@@ -211,6 +234,36 @@ pub async fn run(
     #[cfg(unix)]
     let _ = std::fs::remove_file(parrot_link::endpoint::link_socket_path(&socket));
     result
+}
+
+/// systemd passes its socket as descriptor 3 and names this process as the recipient.
+#[cfg(target_os = "linux")]
+fn broker_listener() -> Result<tokio::net::UnixListener, String> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::net::UnixListener;
+
+    let received = std::env::var("LISTEN_PID").ok().and_then(|pid| pid.parse().ok());
+    if received != Some(std::process::id()) || std::env::var("LISTEN_FDS").as_deref() != Ok("1") {
+        return Err("--broker-socket needs one systemd socket".into());
+    }
+
+    // SAFETY: fcntl accepts an arbitrary descriptor and returns an error when it is invalid.
+    if unsafe { libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(format!(
+            "cannot take the systemd socket: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: systemd passed ownership of descriptor 3 and fcntl verified it is open.
+    let listener = UnixListener::from(unsafe { OwnedFd::from_raw_fd(3) });
+    let address = listener
+        .local_addr()
+        .map_err(|e| format!("invalid broker socket: {e}"))?;
+    if address.as_pathname().is_none() {
+        return Err("the broker socket must have a Unix socket path".into());
+    }
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    tokio::net::UnixListener::from_std(listener).map_err(|e| e.to_string())
 }
 
 /// The folders client paths must be inside (spec 7, 8): the configuration's `roots`, else the
