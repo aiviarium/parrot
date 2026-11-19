@@ -246,6 +246,12 @@ fn broker_listener() -> Result<tokio::net::UnixListener, String> {
     if received != Some(std::process::id()) || std::env::var("LISTEN_FDS").as_deref() != Ok("1") {
         return Err("--broker-socket needs one systemd socket".into());
     }
+    // The variables are systemd's alone: a driver this runtime starts must not think that it was
+    // handed the same socket.
+    // SAFETY: called before the runtime starts its threads, and nothing else reads these.
+    for name in ["LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"] {
+        unsafe { std::env::remove_var(name) };
+    }
 
     // SAFETY: fcntl accepts an arbitrary descriptor and returns an error when it is invalid.
     if unsafe { libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
@@ -253,6 +259,9 @@ fn broker_listener() -> Result<tokio::net::UnixListener, String> {
             "cannot take the systemd socket: {}",
             io::Error::last_os_error()
         ));
+    }
+    if !is_listening_stream(3)? {
+        return Err("systemd socket 3 is not a listening stream socket".into());
     }
     // SAFETY: systemd passed ownership of descriptor 3 and fcntl verified it is open.
     let listener = UnixListener::from(unsafe { OwnedFd::from_raw_fd(3) });
@@ -264,6 +273,52 @@ fn broker_listener() -> Result<tokio::net::UnixListener, String> {
     }
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     tokio::net::UnixListener::from_std(listener).map_err(|e| e.to_string())
+}
+
+/// Whether `fd` is a stream socket that is listening: what systemd passes for a `ListenStream`
+/// socket, and nothing else.
+#[cfg(target_os = "linux")]
+fn is_listening_stream(fd: libc::c_int) -> Result<bool, String> {
+    let mut kind: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: a socket's type is an int of the length given, into a place of that size.
+    let read = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            (&raw mut kind).cast(),
+            &raw mut len,
+        )
+    };
+    if read < 0 {
+        return Err(format!(
+            "cannot read systemd socket 3: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    if kind != libc::SOCK_STREAM {
+        return Ok(false);
+    }
+    let mut listening: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: the same for whether it takes connections, which is 1 when it does.
+    let read = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ACCEPTCONN,
+            (&raw mut listening).cast(),
+            &raw mut len,
+        )
+    };
+    if read < 0 {
+        return Err(format!(
+            "cannot read systemd socket 3: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(listening == 1)
 }
 
 /// The folders client paths must be inside (spec 7, 8): the configuration's `roots`, else the
@@ -419,5 +474,34 @@ fn load_carriers(dir: &std::path::Path, hub: &parrot_serve::link_hub::LinkHub) {
         if let Err(e) = hub.add_carrier(egg) {
             eprintln!("parrot: refused the carrier egg {}: {e}", c.package);
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::is_listening_stream;
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn only_a_listening_stream_socket_is_taken_for_systemd() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broker.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(is_listening_stream(listener.as_raw_fd()).unwrap());
+
+        // A stream socket of a connection takes nothing.
+        let client = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        assert!(!is_listening_stream(client.as_raw_fd()).unwrap());
+
+        // Nor does a datagram socket, which systemd's `ListenDatagram` would pass.
+        // SAFETY: socket returns a new descriptor, closed here, or -1 which the test reports.
+        let datagram = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0) };
+        assert!(datagram >= 0, "{}", std::io::Error::last_os_error());
+        assert!(!is_listening_stream(datagram).unwrap());
+        // SAFETY: the descriptor was made above and is not used again.
+        unsafe { libc::close(datagram) };
+
+        // A descriptor that is no socket is an error, not a rejection.
+        assert!(is_listening_stream(-1).is_err());
     }
 }
