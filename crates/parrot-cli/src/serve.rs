@@ -100,6 +100,8 @@ pub async fn run(
         }
     }
     let config = parrot_serve::config::Config::load(&dir)?;
+    let workspace_root = workspace_root.unwrap_or_else(|| dir.join("workspaces"));
+    core.state.principals.roots = roots(&config, &workspace_root);
     for (agent, a) in &config.tui {
         core.state
             .sessions
@@ -134,7 +136,6 @@ pub async fn run(
     );
     let backend_tokens = tokens.clone();
     let backend_hub = hub.clone();
-    let workspace_root = workspace_root.unwrap_or_else(|| dir.join("workspaces"));
     let transfers = dir.join("transfers");
     let (rt, _task) = Runtime::spawn(core, Box::new(SystemClock), move |rt| {
         RuntimeBackend::new(rt, store)
@@ -190,6 +191,26 @@ pub async fn run(
     #[cfg(unix)]
     let _ = std::fs::remove_file(parrot_link::endpoint::link_socket_path(&socket));
     result
+}
+
+/// The folders client paths must be inside (spec 7, 8): the configuration's `roots`, else the
+/// owner's home and the workspace root, which is where workspaces from links land.
+fn roots(config: &parrot_serve::config::Config, workspace_root: &std::path::Path) -> Vec<PathBuf> {
+    if !config.roots.is_empty() {
+        return config.roots.clone();
+    }
+    let mut roots = Vec::new();
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    if let Some(home) = home {
+        roots.push(home);
+    }
+    if !roots.iter().any(|r| workspace_root.starts_with(r)) {
+        roots.push(workspace_root.to_path_buf());
+    }
+    roots
 }
 
 /// The driver eggs of this state directory, with refused ones reported on stderr.

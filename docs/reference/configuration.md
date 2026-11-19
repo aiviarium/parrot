@@ -53,9 +53,12 @@ A missing file is an empty configuration. A file that doesn't parse stops the ru
 | `notify` | `string[]` | Push targets, each `webhook:<url>` or `ntfy:<server>/<topic>` |
 | `notifyUrl` | `string` | A link put in a push body, with the session id appended |
 | `notifyCa` | `string` | A PEM file of the only roots HTTPS push targets are checked against |
+| `roots` | `string[]` | The folders workspaces and session folders must be inside |
 | `tui` | `{ <agent>: TuiAgent }` | Agents driven through their terminal |
 
 `notifyCa` is relative to the state directory. Configuration holds no secrets.
+
+`roots` defaults to the owner's home folder and the runtime's `workspaces/` folder. `env/list` reports the list the runtime enforces, and a folder outside it is refused with `forbidden`. [Workspaces](../workspaces.md#roots) has the rule.
 
 ### TuiAgent
 

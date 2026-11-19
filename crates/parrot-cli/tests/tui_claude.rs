@@ -50,7 +50,11 @@ async fn claude_under_tui_control_uses_its_egg_profile() {
         ],
         ..Setup::default()
     });
-    assert!(!serve.state_dir().join("config.json").exists());
+    // The agent is driven by its egg's profile, not by a `tui` entry in the configuration.
+    let config: Value =
+        serde_json::from_str(&std::fs::read_to_string(serve.state_dir().join("config.json")).unwrap())
+            .unwrap();
+    assert!(config.get("tui").is_none(), "{config}");
     let mut c = Client::connect(&serve, "phone").await;
     c.initialize().await;
     let agents = c.ok("agent/list", json!({})).await;

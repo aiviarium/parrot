@@ -6,6 +6,7 @@
 //! | `notify` | `string[]` | Push targets: `webhook:<url>` or `ntfy:<server>/<topic>` (spec 36) |
 //! | `notifyUrl` | `string` | A link put in push bodies, with the session appended |
 //! | `notifyCa` | `string` | A PEM file of the only roots HTTPS push targets are checked against |
+//! | `roots` | `string[]` | The folders workspaces and session folders must be inside (spec 7) |
 //!
 //! A missing file is the empty configuration. Configuration holds no secrets.
 
@@ -27,6 +28,10 @@ pub struct Config {
     pub notify_url: Option<String>,
     #[serde(default)]
     pub notify_ca: Option<PathBuf>,
+    /// The folders workspaces and session folders must be inside (spec 7, 8). Empty means the
+    /// owner's home and the workspace root.
+    #[serde(default)]
+    pub roots: Vec<PathBuf>,
 }
 
 /// One agent under TUI control.

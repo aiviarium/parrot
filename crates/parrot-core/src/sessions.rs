@@ -457,11 +457,19 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
 
 /// The local environment (spec 7).
 pub fn env_json(state: &State) -> Value {
+    let roots: Vec<String> = state
+        .principals
+        .roots
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
     json!({
         "id": state.principals.env,
         "name": "local",
         "runtime": state.principals.runtime,
         "status": "online",
+        "roots": roots,
+        "features": { "git": {}, "workspace.worktree": {} },
     })
 }
 
@@ -572,7 +580,11 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
         }
     }
     let ceiling = plan.as_ref().map(|p| p.node.ceiling.clone()).unwrap_or_default();
-    let fenced = |path: &str| crate::ceilings::check_path(&ceiling, path);
+    // A folder a client picks is inside the environment's roots and its ceiling (spec 7, 8, 22).
+    let fenced = |path: &str| {
+        crate::roots::check(cx.state, path)?;
+        crate::ceilings::check_path(&ceiling, path)
+    };
     let (workspace, path) = match &request {
         WorkspaceRequest::Dir { path } => {
             if let Err(e) = fenced(path) {
@@ -668,6 +680,16 @@ pub fn finish_new(
     sid: Option<String>,
 ) {
     let sid = sid.unwrap_or_else(|| cx.ids.next("ses"));
+    let cwd = p.cwd.clone().unwrap_or_else(|| path.clone());
+    if let Err(e) = crate::roots::check_cwd(cx.state, &path, &cwd) {
+        if let Some(plan) = &plan {
+            crate::tree::unplan(cx, plan);
+        }
+        if let Some(id) = id {
+            cx.reply(conn, id.clone(), Err(e));
+        }
+        return;
+    }
     let origin = match crate::principals::session_principal(cx.state, conn) {
         Some(s) => json!({ "kind": "session", "principal": s }),
         None => json!({ "kind": "client", "principal": principal_of(cx.state, conn) }),
@@ -708,7 +730,7 @@ pub fn finish_new(
         SessionInfo {
             title: p.title.clone(),
             workspace,
-            cwd: p.cwd.clone().unwrap_or(path),
+            cwd,
             origin,
             grant,
             options: p.options.clone().unwrap_or_default(),

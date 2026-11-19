@@ -41,9 +41,16 @@ impl Serve {
         if !state.join("eggs").exists() {
             install_eggs(&state);
         }
-        if let Some(config) = &setup.config {
-            std::fs::write(state.join("config.json"), config.to_string()).unwrap();
+        // The test's directory is its only root, so paths a test picks outside it are refused.
+        let mut config = setup.config.clone().unwrap_or_else(|| json!({}));
+        if config.get("roots").is_none() {
+            let root = dir
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| dir.path().to_path_buf());
+            config["roots"] = json!([root]);
         }
+        std::fs::write(state.join("config.json"), config.to_string()).unwrap();
         let socket = test_socket(dir.path());
         let _ = std::fs::remove_file(&socket);
         let mut cmd = Command::new(PARROT);
