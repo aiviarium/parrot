@@ -89,9 +89,23 @@ mod unix {
     /// itself can run unprivileged and never creates or unlinks the broker socket.
     #[cfg(target_os = "linux")]
     pub async fn serve_broker(rt: Runtime, listener: UnixListener) -> io::Result<()> {
-        // Rookery checks use on the host. Its clients can work with sessions but cannot
-        // administer links or tokens, act as a session, or register client functions.
-        let peer = Peer::Token {
+        serve_uid(rt, listener, 0, broker_peer()).await
+    }
+
+    /// [`serve_broker`] accepting a peer of `peer_uid`, for a test that cannot run as root: it
+    /// runs both the accept path and the reject path of the same broker.
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    pub async fn serve_broker_for_test(rt: Runtime, listener: UnixListener, peer_uid: u32) -> io::Result<()> {
+        serve_uid(rt, listener, peer_uid, broker_peer()).await
+    }
+
+    /// What a host's Parrot may do: Rookery checks use on the host itself.
+    #[cfg(target_os = "linux")]
+    fn broker_peer() -> Peer {
+        // Its clients can work with sessions but cannot administer links or tokens, act as a
+        // session, or register client functions.
+        Peer::Token {
             token: "rookery-broker".into(),
             scopes: [
                 "read",
@@ -106,13 +120,27 @@ mod unix {
             .to_vec(),
             sessions: None,
             provides: Some(vec![]),
-        };
-        serve_uid(rt, listener, 0, peer).await
+        }
     }
 
     async fn serve_uid(rt: Runtime, listener: UnixListener, peer_uid: u32, peer: Peer) -> io::Result<()> {
+        // A socket that cannot take a connection for a moment is waited out, so one aborted
+        // connection or a short lack of descriptors does not end the runtime's socket.
+        let mut backoff = std::time::Duration::from_millis(10);
         loop {
-            let (stream, _) = listener.accept().await?;
+            let (stream, _) = match listener.accept().await {
+                Ok(taken) => {
+                    backoff = std::time::Duration::from_millis(10);
+                    taken
+                }
+                Err(error) if transient(&error) => {
+                    eprintln!("parrot: cannot accept a connection: {error}");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(std::time::Duration::from_secs(1));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             // `peer_cred` is SO_PEERCRED on Linux and getpeereid on macOS.
             match stream.peer_cred() {
                 Ok(cred) if cred.uid() == peer_uid => {}
@@ -125,6 +153,19 @@ mod unix {
                 let _ = serve_lines(rt, peer, r, w).await;
             });
         }
+    }
+
+    /// Whether an `accept` error is one to wait out: a connection the peer ended before it was
+    /// taken, a signal, or no descriptor for the moment. A listener that is no socket any more
+    /// stays an error.
+    fn transient(error: &io::Error) -> bool {
+        use rustix::io::Errno;
+        matches!(
+            error.kind(),
+            io::ErrorKind::ConnectionAborted | io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+        ) || [Errno::MFILE, Errno::NFILE, Errno::NOBUFS, Errno::NOMEM]
+            .into_iter()
+            .any(|errno| error.raw_os_error() == Some(errno.raw_os_error()))
     }
 }
 

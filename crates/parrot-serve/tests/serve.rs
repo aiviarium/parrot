@@ -172,38 +172,56 @@ async fn websocket_with_token() {
     wait_for_conns(&rt, 0).await;
 }
 
+/// A broker on a socket of its own, taking a peer that runs as `peer_uid`, and the runtime it
+/// answers on.
+#[cfg(target_os = "linux")]
+async fn broker_for(peer_uid: u32) -> (Runtime, tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broker.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let rt = runtime();
+    let served = rt.clone();
+    tokio::spawn(async move {
+        // The broker systemd starts takes root alone, which a test that runs as root uses as it
+        // is. Any other uid is one the same broker takes through the test entry point.
+        if peer_uid == 0 {
+            socket::serve_broker(served, listener).await
+        } else {
+            socket::serve_broker_for_test(served, listener, peer_uid).await
+        }
+    });
+    (rt, dir, path)
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn broker_authenticates_the_unix_peer() {
     use std::os::unix::fs::MetadataExt;
 
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("broker.sock");
     let local_uid = std::fs::metadata(dir.path()).unwrap().uid();
-    let listener = tokio::net::UnixListener::bind(&path).unwrap();
-    let rt = runtime();
-    let server = tokio::spawn(socket::serve_broker(rt.clone(), listener));
-    let stream = UnixStream::connect(path).await.unwrap();
+    // The accept path: the peer runs as the uid the broker takes, and gets the broker's scopes.
+    let (rt, _dir, path) = broker_for(local_uid).await;
+    let _stream = UnixStream::connect(&path).await.unwrap();
+    let conns = wait_for_conns(&rt, 1).await;
+    let Peer::Token { scopes, .. } = &conns[0].1 else {
+        panic!("the broker does not get owner privileges");
+    };
+    assert!(scopes.iter().any(|scope| scope == "answer"));
+    assert!(!scopes.iter().any(|scope| scope == "functions"));
 
-    if local_uid == 0 {
-        let conns = wait_for_conns(&rt, 1).await;
-        let Peer::Token { scopes, .. } = &conns[0].1 else {
-            panic!("the broker does not get owner privileges");
-        };
-        assert!(scopes.iter().any(|scope| scope == "answer"));
-        assert!(!scopes.iter().any(|scope| scope == "functions"));
-    } else {
-        // A permissive file mode on the listener still grants no protocol access.
-        let mut output = String::new();
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            BufReader::new(stream).read_to_string(&mut output),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(output.is_empty());
-        assert!(rt.connections().await.unwrap().is_empty());
-    }
-    server.abort();
+    // The reject path: a peer of another account gets no protocol access, whatever the socket's
+    // file mode is.
+    let (rt, _dir, path) = broker_for(local_uid.wrapping_add(1)).await;
+    let stream = UnixStream::connect(&path).await.unwrap();
+    let mut output = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        BufReader::new(stream).read_to_string(&mut output),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(output.is_empty());
+    assert!(rt.connections().await.unwrap().is_empty());
 }
