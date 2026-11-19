@@ -82,11 +82,22 @@ mod unix {
 
     /// Accepts connections forever, refusing peers that run as another user.
     pub async fn serve_socket(rt: Runtime, listener: UnixListener) -> io::Result<()> {
+        serve_uid(rt, listener, uid()).await
+    }
+
+    /// The controller connects as root to a socket created by systemd. The runtime
+    /// itself can run unprivileged and never creates or unlinks the broker socket.
+    #[cfg(target_os = "linux")]
+    pub async fn serve_broker(rt: Runtime, listener: UnixListener) -> io::Result<()> {
+        serve_uid(rt, listener, 0).await
+    }
+
+    async fn serve_uid(rt: Runtime, listener: UnixListener, peer_uid: u32) -> io::Result<()> {
         loop {
             let (stream, _) = listener.accept().await?;
             // `peer_cred` is SO_PEERCRED on Linux and getpeereid on macOS.
             match stream.peer_cred() {
-                Ok(cred) if cred.uid() == uid() => {}
+                Ok(cred) if cred.uid() == peer_uid => {}
                 _ => continue,
             }
             let rt = rt.clone();

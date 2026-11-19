@@ -171,3 +171,35 @@ async fn websocket_with_token() {
     ws.close(None).await.unwrap();
     wait_for_conns(&rt, 0).await;
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn broker_authenticates_the_unix_peer() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broker.sock");
+    let local_uid = std::fs::metadata(dir.path()).unwrap().uid();
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let rt = runtime();
+    let server = tokio::spawn(socket::serve_broker(rt.clone(), listener));
+    let stream = UnixStream::connect(path).await.unwrap();
+
+    if local_uid == 0 {
+        let conns = wait_for_conns(&rt, 1).await;
+        assert_eq!(conns[0].1, Peer::Owner);
+    } else {
+        // A permissive file mode on the listener still grants no protocol access.
+        let mut output = String::new();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            BufReader::new(stream).read_to_string(&mut output),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(output.is_empty());
+        assert!(rt.connections().await.unwrap().is_empty());
+    }
+    server.abort();
+}

@@ -36,6 +36,14 @@ enum Command {
         /// A loopback address to serve WebSocket on, such as `127.0.0.1:7777`.
         #[arg(long)]
         ws: Option<String>,
+        /// Serve only on the root-only Unix listener inherited from systemd.
+        #[cfg(target_os = "linux")]
+        #[arg(long, conflicts_with_all = ["ws", "link_listen"])]
+        broker_socket: bool,
+        /// Read installed drivers from this state layout, separate from writable runtime state.
+        #[cfg(target_os = "linux")]
+        #[arg(long, requires = "broker_socket")]
+        driver_state_dir: Option<PathBuf>,
         /// An address to accept links on over TCP, such as `0.0.0.0:7421`.
         #[arg(long)]
         link_listen: Option<String>,
@@ -99,7 +107,20 @@ fn main() {
             ws,
             link_listen,
             workspace_root,
-        } => block_on(serve::run(state_dir, ws, link_listen, workspace_root)),
+            #[cfg(target_os = "linux")]
+            broker_socket,
+            #[cfg(target_os = "linux")]
+            driver_state_dir,
+        } => block_on(serve::run(
+            state_dir,
+            ws,
+            link_listen,
+            workspace_root,
+            #[cfg(target_os = "linux")]
+            broker_socket,
+            #[cfg(target_os = "linux")]
+            driver_state_dir,
+        )),
         Command::Connect { socket, link, fd } => block_on(connect::run(socket, link, fd)),
         Command::Driver { name } => block_on(driver::run(name)),
     };
