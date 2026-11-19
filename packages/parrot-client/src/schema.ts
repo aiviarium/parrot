@@ -103,6 +103,11 @@ export interface AgentRefreshResult {
 export interface Answer {
   choice?: string | null
   value?: unknown
+  /**
+   * The answer to each of a request's `questions`, by question id: a choice id, a label, a
+   * list of them, or text.
+   */
+  answers?: Record<string, unknown> | null
   input?: unknown
   message?: string | null
 }
@@ -839,21 +844,51 @@ export interface IsolationData {
 }
 
 export type ItemBody =
-  | UserItem
-  | TextItem
-  | ReasoningItem
-  | ToolItem
-  | ScriptItem
-  | CommandItem
-  | FileChangeItem
-  | PlanItem
-  | SubagentItem
-  | WebItem
-  | ReviewItem
-  | CompactionItem
-  | HookItem
-  | HandoffItem
-  | ErrorItem
+  | (UserItem & {
+      kind: "user"
+    })
+  | (TextItem & {
+      kind: "assistant"
+    })
+  | (ReasoningItem & {
+      kind: "reasoning"
+    })
+  | (ToolItem & {
+      kind: "tool"
+    })
+  | (ScriptItem & {
+      kind: "script"
+    })
+  | (CommandItem & {
+      kind: "command"
+    })
+  | (FileChangeItem & {
+      kind: "file_change"
+    })
+  | (PlanItem & {
+      kind: "plan"
+    })
+  | (SubagentItem & {
+      kind: "subagent"
+    })
+  | (WebItem & {
+      kind: "web"
+    })
+  | (ReviewItem & {
+      kind: "review"
+    })
+  | (CompactionItem & {
+      kind: "compaction"
+    })
+  | (HookItem & {
+      kind: "hook"
+    })
+  | (HandoffItem & {
+      kind: "handoff"
+    })
+  | (ErrorItem & {
+      kind: "error"
+    })
 
 /** Fields every item kind has. */
 export interface ItemCommon {
@@ -1231,6 +1266,19 @@ export type PlanStatus = "pending" | "active" | "done"
 
 export type PromptDisposition = "started" | "steered" | "queued" | "handled"
 
+/** One question of a request that asks several (spec 14). */
+export interface Question {
+  /** The id `Answer.answers` uses. */
+  id: string
+  header?: string | null
+  /** The question itself. */
+  question: string
+  /** Whether more than one option may be picked. */
+  multiSelect?: boolean | null
+  /** The options to pick from; empty for free text. */
+  options?: Choice[]
+}
+
 export interface QueueEditParams {
   session: string
   id: string
@@ -1323,6 +1371,11 @@ export interface Request {
   level: PermissionLevel
   network?: boolean | null
   choices?: Choice[] | null
+  /**
+   * A request with several questions: one entry per question, answered by id in
+   * `Answer.answers`. Absent for a single question, which uses `choices`.
+   */
+  questions?: Question[] | null
   input?: unknown
   blocking: boolean
   answerable: Answerable
@@ -1535,6 +1588,15 @@ export interface SessionGetResult {
   session: Session
 }
 
+/** `session/keys` (Appendix E4): text and named keys for a binding under TUI control. */
+export interface SessionKeysParams {
+  session: string
+  /** Text to type, as if pasted. */
+  text?: string | null
+  /** Named keys to press in order, such as `enter`, `tab` or `ctrl-c`. */
+  press?: string[] | null
+}
+
 export type SessionKind = "root" | "child" | "embedded"
 
 export interface SessionListParams {
@@ -1563,6 +1625,10 @@ export interface SessionNewParams {
   title?: string | null
   control?: Control | null
   start?: boolean | null
+  /** A first prompt, queued once the binding starts; saves a round trip and an empty session. */
+  prompt?: string | null
+  context?: ContextEntry[] | null
+  attachments?: Attachment[] | null
   grant?: Scope[] | null
   parent?: string | null
   /** A `TaskRequest` (19). */
@@ -1648,6 +1714,11 @@ export interface SessionRebindParams {
   workspace?: WorkspaceRequest | null
   require?: RebindRequire | null
   interrupt?: boolean | null
+  /**
+   * Switch the binding to the other control (32.2). The harness session isn't resumed across
+   * the switch, so its history travels as a bundle (23.2).
+   */
+  control?: Control | null
   key?: string | null
 }
 
@@ -1702,6 +1773,10 @@ export interface SessionSummary {
   parent?: string | null
   agent?: string | null
   env?: string | null
+  /** The folder the session works in, so a list can show or filter by it without `session/get`. */
+  cwd?: string | null
+  /** The workspace the session works in. */
+  workspace?: string | null
   task?: OpenTaskStatus | null
   archived: boolean
   updated: string
@@ -2282,7 +2357,7 @@ export interface Methods {
   "session/delete": { params: SessionRef; result: Empty }
   "session/discover": { params: SessionDiscoverParams; result: SessionDiscoverResult }
   "session/get": { params: SessionRef; result: SessionGetResult }
-  "session/keys": { params: SessionRef; result: Empty }
+  "session/keys": { params: SessionKeysParams; result: Empty }
   "session/list": { params: SessionListParams; result: SessionListResult }
   "session/new": { params: SessionNewParams; result: SessionNewResult }
   "session/offer": { params: SessionOfferParams; result: SessionOfferResult }
