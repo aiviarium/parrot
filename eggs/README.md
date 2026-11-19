@@ -2,7 +2,7 @@
 
 Each folder here is a Hatchery package for one agent. The runtime installs the `parrot` target of each package. The `parrot` binary contains no eggs. An agent exists only when its egg is installed. A release publishes these eggs, with their driver binaries, to the registry at `https://aiviarium.github.io/parrot/eggs`.
 
-`docs/drivers.md` explains how to write a driver and pack it as an egg.
+`docs/writing-drivers.md` explains how to write a driver and pack it as an egg.
 
 ## Layout
 

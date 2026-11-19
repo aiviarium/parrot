@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+.source/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local screenshots, never committed
+screens/

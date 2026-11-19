@@ -1,0 +1,19 @@
+{
+  "title": "Parrot",
+  "pages": [
+    "---Guide---",
+    "README",
+    "install",
+    "quick-start",
+    "concepts",
+    "items",
+    "workspaces",
+    "links",
+    "rookery",
+    "---Drivers---",
+    "drivers",
+    "writing-drivers",
+    "---Reference---",
+    "reference"
+  ]
+}

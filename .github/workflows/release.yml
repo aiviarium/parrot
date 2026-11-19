@@ -138,32 +138,53 @@ jobs:
           PARROT_EGG_SIGNING_KEY: ${{ secrets.PARROT_EGG_SIGNING_KEY }}
         run: |
           tar -xzf parrot/parrot-x86_64-unknown-linux-gnu.tar.gz -C parrot
-          mkdir -p site
-          args=(eggs pack eggs --publish site/eggs)
+          mkdir -p pages
+          args=(eggs pack eggs --publish pages/eggs)
           if [ -n "$PARROT_EGG_SIGNING_KEY" ]; then
             args+=(--sign-key-env "$SIGN_KEY_ENV")
           fi
           ./parrot/parrot "${args[@]}" | tee pack.log
-          grep '^public key ' pack.log | sed 's/^public key //' > site/eggs/key.txt || true
-          if [ -s site/eggs/key.txt ]; then
-            key="$(cat site/eggs/key.txt)"
+          grep '^public key ' pack.log | sed 's/^public key //' > pages/eggs/key.txt || true
+          if [ -s pages/eggs/key.txt ]; then
+            key="$(cat pages/eggs/key.txt)"
             echo "The registry is signed with \`$key\`." >> "$GITHUB_STEP_SUMMARY"
             echo "Give it to Hatchery as key=\"$key\" to check an egg against it." >> "$GITHUB_STEP_SUMMARY"
           fi
           mkdir -p dist
-          tar -czf dist/parrot-eggs-registry.tar.gz -C site eggs
-          find site/eggs -name '*.egg' -exec cp {} dist/ \;
+          tar -czf dist/parrot-eggs-registry.tar.gz -C pages eggs
+          find pages/eggs -name '*.egg' -exec cp {} dist/ \;
           (cd dist && sha256sum parrot-eggs-registry.tar.gz > parrot-eggs-registry.tar.gz.sha256)
       - uses: actions/upload-artifact@v4
         with:
           name: eggs
           path: dist/*
           if-no-files-found: error
-      - uses: actions/upload-pages-artifact@v3
+      # The docs site and the egg registry share one Pages site, so a release
+      # publishes both: the docs at the root, the registry under /eggs.
+      - id: pages
+        if: github.event_name == 'push'
+        uses: actions/configure-pages@v5
+      - uses: actions/setup-node@v7
         if: github.event_name == 'push'
         with:
-          path: site
-      - uses: actions/deploy-pages@v4
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Build the docs site with the registry
+        if: github.event_name == 'push'
+        working-directory: site
+        env:
+          DOCS_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          mkdir -p out/eggs
+          cp -r ../pages/eggs/. out/eggs/
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name == 'push'
+        with:
+          path: site/out
+      - uses: actions/deploy-pages@v5
         if: github.event_name == 'push'
 
   publish:

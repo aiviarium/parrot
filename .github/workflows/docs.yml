@@ -1,0 +1,75 @@
+name: Docs
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'site/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The full history gives each page its "Last updated" date.
+          fetch-depth: 0
+      # Where Pages serves the site: a folder named after the repository on
+      # github.io, the root on a domain of its own. The custom domain,
+      # parrot.helight.dev, is set in the repository's Pages settings, as it is
+      # for the other projects.
+      - id: pages
+        uses: actions/configure-pages@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install and check
+        working-directory: site
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run lint
+          npm run links
+      - run: npm run build
+        working-directory: site
+        env:
+          DOCS_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+      # The egg registry shares this Pages site at /eggs. A release publishes it
+      # as an asset; this step puts the newest one back beside the docs.
+      - name: Add the egg registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view --json assets --jq '.assets[].name' | grep -qx parrot-eggs-registry.tar.gz; then
+            gh release download --pattern parrot-eggs-registry.tar.gz --dir "$RUNNER_TEMP"
+            tar -xzf "$RUNNER_TEMP/parrot-eggs-registry.tar.gz" -C site/out
+          fi
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/out
+  # Needs Pages with the source "GitHub Actions" in the repository's settings.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
