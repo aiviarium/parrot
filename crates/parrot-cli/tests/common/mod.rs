@@ -641,11 +641,31 @@ fn share(src: &Path, dst: &Path) {
     }
 }
 
-/// `state`, with the in-repo eggs installed into it unless it has eggs already.
+/// `state`, with the in-repo eggs installed into it unless it has eggs already, and the folder
+/// holding `state` as the runtime's only root.
 pub fn with_eggs(state: PathBuf) -> PathBuf {
     if !state.join("eggs").exists() {
         std::fs::create_dir_all(&state).unwrap();
         install_eggs(&state);
     }
+    if let Some(dir) = state.parent() {
+        set_roots(&state, dir);
+    }
     state
+}
+
+/// Keeps the settings in `<state>/config.json` and makes `root` its only `roots` entry.
+///
+/// A test's scratch folder is usually outside the owner's home, which is the default root, so a
+/// test that starts a runtime says which folder it works in.
+pub fn set_roots(state: &Path, root: &Path) {
+    std::fs::create_dir_all(state).unwrap();
+    let path = state.join("config.json");
+    let mut config: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    config["roots"] = serde_json::json!([root]);
+    std::fs::write(path, config.to_string()).unwrap();
 }

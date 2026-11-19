@@ -374,7 +374,8 @@ async fn agent_list_reports_tui_control() {
 
 #[tokio::test]
 async fn attachments_go_through_the_attach_action_and_frames_rebuild_items() {
-    let (mut h, started) = Harness::start(false).await;
+    // Wide enough that the attachment's temporary path fits on one line.
+    let (mut h, started) = Harness::start_with(false, |c| c.size = Size::new(20, 160)).await;
     started.unwrap();
     h.state("idle").await;
     h.clear();

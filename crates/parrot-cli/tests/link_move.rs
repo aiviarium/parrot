@@ -300,9 +300,10 @@ async fn a_session_moves_over_a_link_and_outlives_its_first_runtime() {
     }
 
     // A session runs one turn on the laptop.
-    // Both runtimes reach this directory; moving the workspace itself is `workspace/transfer`.
-    let shared = tempfile::tempdir().unwrap();
-    let work = shared.path().to_path_buf();
+    // Both runtimes reach this directory, which is inside the laptop's roots; moving the
+    // workspace itself is `workspace/transfer`.
+    let work = laptop.dir.path().join("shared");
+    std::fs::create_dir_all(&work).unwrap();
     let work_str = work.to_str().unwrap();
     let mut l = Client::connect(&laptop, "laptop-client").await;
     l.initialize().await;

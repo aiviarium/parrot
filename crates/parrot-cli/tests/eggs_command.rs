@@ -89,6 +89,7 @@ struct Serve {
 
 impl Serve {
     fn start(dir: &Path, cli_version: &str) -> Self {
+        common::set_roots(&dir.join("state"), dir);
         let socket = common::test_socket(dir);
         let child = Command::new(PARROT)
             .args(["serve", "--state-dir"])

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use parrot_conform::target::{self, Process};
 use parrot_conform::{Bindings, Meta, Report, Step, Target};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -298,6 +298,12 @@ fn link_eggs(from: &Path, state: &Path) -> Result<(), String> {
 
 #[cfg(unix)]
 fn start_serve(dir: &Path, socket: &Path, env: &[(OsString, OsString)]) -> Result<Serve, String> {
+    // A fixture works in this scratch folder, which is outside the default root, so it is named.
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).map_err(|e| format!("cannot create {}: {e}", state.display()))?;
+    let config = json!({ "roots": [dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())] });
+    std::fs::write(state.join("config.json"), config.to_string())
+        .map_err(|e| format!("cannot write the runtime's configuration: {e}"))?;
     let exe = std::env::current_exe().map_err(|e| format!("cannot find parrot: {e}"))?;
     let child = Command::new(exe)
         .args(["serve", "--state-dir"])
