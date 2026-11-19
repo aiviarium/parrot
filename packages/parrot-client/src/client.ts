@@ -11,7 +11,6 @@ import type {
 } from "./protocol"
 import { Connection } from "./rpc"
 import type { ClientMethods, Methods, Notifications } from "./schema"
-import { type StdioOptions, stdioTransport } from "./stdio"
 import type { Transport } from "./transport"
 import { type WebSocketOptions, webSocketTransport } from "./websocket"
 
@@ -44,15 +43,6 @@ export class Client {
     options: WebSocketOptions & { client?: ClientOptions } = {},
   ): Client {
     return new Client(webSocketTransport(url, options))
-  }
-
-  /** A client of a child process that speaks JSON-RPC lines on stdio, such as `parrot serve`. */
-  static overStdio(
-    command: string,
-    args: string[] = [],
-    options: StdioOptions & { client?: ClientOptions } = {},
-  ): Client {
-    return new Client(stdioTransport(command, args, options))
   }
 
   /** The handshake result, once `initialize` succeeded. */

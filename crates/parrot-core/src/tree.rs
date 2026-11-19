@@ -481,9 +481,6 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "workspace/status" => later(status(cx, conn, id, params)),
         "workspace/merge" => later(merge(cx, conn, id, params)),
         "workspace/remove" => later(remove(cx, conn, id, params)),
-        "workspace/transfer" => Reply::Now(Err(
-            RpcError::new(-32001, "unsupported").with_data(json!({ "feature": "profile.link" }))
-        )),
         _ => Reply::Now(Err(RpcError::new(-32601, format!("method not found: {method}")))),
     }
 }
@@ -723,6 +720,7 @@ fn create(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
     let owner = session_principal(cx.state, conn).map(str::to_string);
     match p.request {
         WorkspaceRequest::Dir { path } => {
+            crate::roots::check(cx.state, &path)?;
             ceilings::check_path(&ceiling, &path)?;
             let existing = cx
                 .state
@@ -757,6 +755,7 @@ fn create(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Res
             Ok(Some(json!({ "workspace": workspace_json(cx.state, &workspace) })))
         }
         WorkspaceRequest::Worktree { repo, branch, base } => {
+            crate::roots::check(cx.state, &repo)?;
             ceilings::check_path(&ceiling, &repo)?;
             let wid = cx.ids.next("wsp");
             let branch =

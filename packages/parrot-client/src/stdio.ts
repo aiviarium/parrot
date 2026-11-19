@@ -1,5 +1,9 @@
+//! The stdio transport. It starts a child process, so it is imported from
+//! `@aiviarium/parrot-client/stdio`, not from the root entry, which stays browser-safe.
+
 import { spawn } from "node:child_process"
 import { createInterface } from "node:readline"
+import { Client, type ClientOptions } from "./client"
 import type { Transport, TransportHandlers } from "./transport"
 
 export interface StdioOptions {
@@ -56,4 +60,13 @@ export function stdioTransport(command: string, args: string[] = [], options: St
       handlers = next
     },
   }
+}
+
+/** A client of a child process that speaks JSON-RPC lines on stdio, such as `parrot serve`. */
+export function stdioClient(
+  command: string,
+  args: string[] = [],
+  options: StdioOptions & { client?: ClientOptions } = {},
+): Client {
+  return new Client(stdioTransport(command, args, options))
 }

@@ -30,6 +30,7 @@ struct Serve {
 
 impl Serve {
     fn start(dir: &Path, env: &[(&str, &Path)]) -> Self {
+        common::set_roots(&dir.join("state"), dir);
         let socket = dir.join("sock");
         let mut cmd = Command::new(PARROT);
         cmd.args(["serve", "--state-dir"])

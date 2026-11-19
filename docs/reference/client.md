@@ -21,10 +21,12 @@ await client.prompt("ses_01J8Q4T7N3K2M9X8C6V5B4A3S2", "Summarise the README.")
 
 A WebSocket connection needs a client token. Make one over a local connection, where the caller is the owner, with `token/create` (`{ name, scopes, sessions?, expires? }`). The secret is returned once.
 
-For a program that speaks the protocol on standard input and output:
+For a program that speaks the protocol on standard input and output, import the stdio entry. The root entry doesn't import child-process code, and it builds for the browser:
 
 ```ts
-const local = Client.overStdio("parrot", ["connect"])
+import { stdioClient } from "@aiviarium/parrot-client/stdio"
+
+const local = stdioClient("parrot", ["connect"])
 await local.initialize()
 ```
 
@@ -33,7 +35,7 @@ await local.initialize()
 | Member | Does |
 | --- | --- |
 | `Client.overWebSocket(url, options)` | A client of `ws://` or `wss://`, with a client `token` and client options |
-| `Client.overStdio(command, args, options)` | A client of a child process's standard input and output |
+| `stdioClient(command, args, options)` | From `@aiviarium/parrot-client/stdio`: a client of a child process's standard input and output |
 | `initialize(options?)` | Sends the handshake and returns its result |
 | `subscribe(target, options?)` | Subscribes to a session, a tree or the index |
 | `unsubscribe(subscription)` | Ends a subscription |
@@ -64,8 +66,10 @@ After a change to the schema, run `bun run generate` in the package. `bun run te
 
 | Transport | Entry point |
 | --- | --- |
-| WebSocket | `Client.overWebSocket(url, { token })` |
-| stdio | `Client.overStdio(command, args)` |
+| WebSocket | `Client.overWebSocket(url, { token })`, from the root entry |
+| stdio | `stdioClient(command, args)`, from `@aiviarium/parrot-client/stdio` |
+
+A test walks the root entry's imports and fails if any module reaches `node:`. `stdioTransport` sits beside `stdioClient` in the stdio entry, for a client built another way.
 
 Each message is one WebSocket text frame or one line. Messages sent before a WebSocket opens wait for it. `parrot connect` gives a stdio client the local socket without opening it directly.
 

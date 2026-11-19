@@ -189,6 +189,8 @@ pub fn summary_json(state: &State, id: &str) -> Option<Value> {
     if let Some(p) = &r.parent {
         v["parent"] = json!(p);
     }
+    v["cwd"] = json!(s.cwd);
+    v["workspace"] = json!(s.workspace);
     crate::tree::decorate_summary(state, id, &mut v);
     Some(v)
 }
@@ -433,7 +435,8 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
         "session/delete" => delete(cx, conn, params),
         "session/screen" => return tui_call(cx, conn, id, params, "binding/screen"),
         "session/keys" => return tui_call(cx, conn, id, params, "binding/keys"),
-        // Adopting harness sessions (9.5) is outside the implemented profiles (40).
+        // Adopting harness sessions (9.5) is outside the implemented profiles (40): no profile
+        // covers it, and the agents leave `session.history` out so clients don't ask.
         "session/discover" | "session/adopt" => {
             Err(RpcError::new(-32001, format!("{method} is not implemented"))
                 .with_data(json!({ "feature": "session.history" })))
@@ -457,11 +460,19 @@ pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, param
 
 /// The local environment (spec 7).
 pub fn env_json(state: &State) -> Value {
+    let roots: Vec<String> = state
+        .principals
+        .roots
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
     json!({
         "id": state.principals.env,
         "name": "local",
         "runtime": state.principals.runtime,
         "status": "online",
+        "roots": roots,
+        "features": { "git": {}, "workspace.worktree": {} },
     })
 }
 
@@ -572,7 +583,11 @@ fn new(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: Value) -> Result
         }
     }
     let ceiling = plan.as_ref().map(|p| p.node.ceiling.clone()).unwrap_or_default();
-    let fenced = |path: &str| crate::ceilings::check_path(&ceiling, path);
+    // A folder a client picks is inside the environment's roots and its ceiling (spec 7, 8, 22).
+    let fenced = |path: &str| {
+        crate::roots::check(cx.state, path)?;
+        crate::ceilings::check_path(&ceiling, path)
+    };
     let (workspace, path) = match &request {
         WorkspaceRequest::Dir { path } => {
             if let Err(e) = fenced(path) {
@@ -668,6 +683,16 @@ pub fn finish_new(
     sid: Option<String>,
 ) {
     let sid = sid.unwrap_or_else(|| cx.ids.next("ses"));
+    let cwd = p.cwd.clone().unwrap_or_else(|| path.clone());
+    if let Err(e) = crate::roots::check_cwd(cx.state, &path, &cwd) {
+        if let Some(plan) = &plan {
+            crate::tree::unplan(cx, plan);
+        }
+        if let Some(id) = id {
+            cx.reply(conn, id.clone(), Err(e));
+        }
+        return;
+    }
     let origin = match crate::principals::session_principal(cx.state, conn) {
         Some(s) => json!({ "kind": "session", "principal": s }),
         None => json!({ "kind": "client", "principal": principal_of(cx.state, conn) }),
@@ -708,7 +733,7 @@ pub fn finish_new(
         SessionInfo {
             title: p.title.clone(),
             workspace,
-            cwd: p.cwd.clone().unwrap_or(path),
+            cwd,
             origin,
             grant,
             options: p.options.clone().unwrap_or_default(),
@@ -750,7 +775,8 @@ pub fn finish_new(
     if let Some(id) = id {
         cx.reply(conn, id.clone(), Ok(result));
     }
-    // The first prompt: the task's brief, else the seed's (spec 19, 23.2).
+    // The first prompt: the task's brief, else the seed's (spec 19, 23.2), then the one the
+    // request carried.
     if let Some(plan) = plan {
         if let Some(task) = plan.task {
             crate::tasks::begin(cx, &sid, task);
@@ -766,6 +792,25 @@ pub fn finish_new(
             );
             queue::dispatch(cx, &sid);
         }
+    }
+    if let Some(text) = p.prompt {
+        let origin = json!({ "kind": "client", "principal": principal_of(cx.state, conn) });
+        let mut params = json!({});
+        if let Some(context) = &p.context {
+            params["context"] = json!(context);
+        }
+        if let Some(attachments) = &p.attachments {
+            params["attachments"] = json!(attachments);
+        }
+        queue::enqueue(
+            cx,
+            &sid,
+            parrot_proto::prompt::QueueEntryKind::Prompt,
+            text,
+            origin,
+            params,
+        );
+        queue::dispatch(cx, &sid);
     }
 }
 

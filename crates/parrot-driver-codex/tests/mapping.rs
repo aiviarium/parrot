@@ -5,7 +5,7 @@ use parrot_driver_codex::wire::{Message, RequestId, ServerNotification, short_co
 use parrot_proto::driver::{BindingDisposition, BindingPromptParams, Pin};
 use parrot_proto::option::PermissionLevel;
 use parrot_proto::request::Answer;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 const T: &str = "01a1de18-b7f0-78a0-aa1a-9082ae1a8fe6";
 const U: &str = "01a1de18-b809-7723-900b-c585bea1163d";
@@ -148,6 +148,11 @@ fn a_question_from_request_user_input() {
     assert_eq!(r["title"], "Tea?");
     assert_eq!(r["input"]["properties"]["q1"]["oneOf"][1]["const"], "Coffee");
     assert_eq!(r["choices"][1]["description"], "Strong");
+    // The same question is typed, so a client doesn't read the JSON Schema in `input`.
+    assert_eq!(r["questions"][0]["id"], "q1");
+    assert_eq!(r["questions"][0]["header"], "H");
+    assert_eq!(r["questions"][0]["question"], "Tea?");
+    assert_eq!(r["questions"][0]["options"][1]["label"], "Coffee");
     let (msg, _) = s
         .answer(
             "req-5",
@@ -160,6 +165,37 @@ fn a_question_from_request_user_input() {
     assert_eq!(
         msg.to_value(),
         json!({"id": 5, "result": {"answers": {"q1": {"answers": ["Tea"]}}}})
+    );
+}
+
+#[test]
+fn typed_answers_name_each_question() {
+    let mut s = running();
+    let out = feed(
+        &mut s,
+        json!({"method": "item/tool/requestUserInput", "id": 6, "params": {"threadId": T, "turnId": U, "itemId": "q",
+            "questions": [
+                {"id": "q1", "question": "Tea?", "options": [{"label": "Tea"}, {"label": "Coffee"}]},
+                {"id": "q2", "question": "Size?", "options": [{"label": "S"}, {"label": "L"}]}
+            ],
+            "isBlocking": true}}),
+    );
+    assert_eq!(out[0]["request"]["questions"].as_array().unwrap().len(), 2);
+    let mut answers = Map::new();
+    answers.insert("q1".into(), json!("option-1"));
+    answers.insert("q2".into(), json!(["S"]));
+    let (msg, _) = s
+        .answer(
+            "req-6",
+            &Answer {
+                answers: Some(answers),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        msg.to_value(),
+        json!({"id": 6, "result": {"answers": {"q1": {"answers": ["Coffee"]}, "q2": {"answers": ["S"]}}}})
     );
 }
 

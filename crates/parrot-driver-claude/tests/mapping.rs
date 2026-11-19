@@ -310,6 +310,17 @@ fn questions_and_plans() {
     assert_eq!(req["update"]["request"]["kind"], "question");
     assert_eq!(req["update"]["request"]["title"], "Which colour?");
     assert_eq!(req["update"]["request"]["choices"][1]["label"], "Blue");
+    // The question is typed too, so a client doesn't read Claude Code's raw input.
+    assert_eq!(req["update"]["request"]["questions"][0]["id"], "question-0");
+    assert_eq!(
+        req["update"]["request"]["questions"][0]["question"],
+        "Which colour?"
+    );
+    assert_eq!(req["update"]["request"]["questions"][0]["header"], "Colour");
+    assert_eq!(
+        req["update"]["request"]["questions"][0]["options"][1]["label"],
+        "Blue"
+    );
     let answer = Answer {
         choice: Some("option-1".into()),
         ..Default::default()
@@ -319,6 +330,35 @@ fn questions_and_plans() {
     assert_eq!(
         line["response"]["response"]["updatedInput"]["answers"],
         json!({"Which colour?": "Blue"})
+    );
+
+    // Two questions answered by id: each becomes Claude Code's answer for its question text.
+    let multi = json!({"type": "control_request", "request_id": "q-2", "request": {
+        "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "toolu_q2",
+        "input": {"questions": [
+            {"question": "Which colour?", "header": "Colour",
+             "options": [{"label": "Red"}, {"label": "Blue"}], "multiSelect": false},
+            {"question": "Which size?", "header": "Size",
+             "options": [{"label": "S"}, {"label": "L"}], "multiSelect": false}]}}});
+    let u = state.step(&wire::parse_line(&multi.to_string()).unwrap(), NOW);
+    let req = u
+        .iter()
+        .map(|u| serde_json::to_value(u).unwrap())
+        .find(|u| u["update"]["type"] == "request")
+        .unwrap();
+    assert_eq!(req["update"]["request"]["questions"].as_array().unwrap().len(), 2);
+    let mut answers = serde_json::Map::new();
+    answers.insert("question-0".into(), json!("option-1"));
+    answers.insert("question-1".into(), json!("L"));
+    let answer = Answer {
+        answers: Some(answers),
+        ..Default::default()
+    };
+    let (line, _) = state.answer("q-2", &answer).unwrap();
+    let line: Value = serde_json::from_str(&wire::to_line(&line)).unwrap();
+    assert_eq!(
+        line["response"]["response"]["updatedInput"]["answers"],
+        json!({"Which colour?": "Blue", "Which size?": "L"})
     );
 
     let plan = json!({"type": "control_request", "request_id": "p-1", "request": {

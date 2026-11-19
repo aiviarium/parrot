@@ -32,6 +32,7 @@ pub struct Args {
     /// The folder the harness works in; the current one by default.
     #[arg(long)]
     dir: Option<PathBuf>,
+    /// The state directory whose driver eggs are used; the default one otherwise.
     #[arg(long)]
     state_dir: Option<PathBuf>,
 }

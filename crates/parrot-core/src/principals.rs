@@ -6,6 +6,7 @@ use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 /// Protocol versions this runtime serves.
 pub const SUPPORTED: [u32; 1] = [1];
@@ -22,6 +23,9 @@ pub struct Principals {
     pub runtime: String,
     /// The local environment's id (`env_…`).
     pub env: String,
+    /// The folders workspaces and session folders must be inside (spec 7, 8). Empty means the
+    /// integrator hasn't set any, which allows every path.
+    pub roots: Vec<PathBuf>,
 }
 
 impl Default for Principals {
@@ -30,6 +34,7 @@ impl Default for Principals {
             conns: BTreeMap::new(),
             runtime: "rt_local".into(),
             env: "env_local".into(),
+            roots: Vec::new(),
         }
     }
 }

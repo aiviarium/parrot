@@ -42,6 +42,14 @@ pub fn agents(r: &Value) -> String {
             s(&a["auth"]).into(),
         ]);
     }
+    let hint = s(&r["hint"]);
+    if rows.len() == 1 {
+        return if hint.is_empty() {
+            "no agents".into()
+        } else {
+            hint.to_string()
+        };
+    }
     table(rows)
 }
 
@@ -230,5 +238,12 @@ mod tests {
             &json!({"agents": [{"id": "claude", "name": "Claude Code", "usable": true, "auth": "unknown"}]}),
         );
         assert_eq!(out.lines().nth(1), Some("claude  Claude Code  yes     unknown"));
+    }
+
+    #[test]
+    fn no_agents_prints_the_runtimes_hint() {
+        let hint = "No driver eggs are installed. Install one with `parrot eggs install aiviarium/claude`.";
+        assert_eq!(agents(&json!({ "agents": [], "hint": hint })), hint);
+        assert_eq!(agents(&json!({ "agents": [] })), "no agents");
     }
 }

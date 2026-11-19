@@ -15,8 +15,8 @@ use parrot_proto::open::Open;
 use parrot_proto::option::{Applies, ConfigOption, DependsOn, OptionRole, PermissionLevel};
 use parrot_proto::principal::Isolation;
 use parrot_proto::request::{
-    Answer, Answerable, Choice, ChoiceIntent, ChoiceScope, Notify, Request, RequestKind, RequestStatus,
-    Subject,
+    Answer, Answerable, Choice, ChoiceIntent, ChoiceScope, Notify, Question, Request, RequestKind,
+    RequestStatus, Subject,
 };
 use parrot_proto::session::{McpServer, McpStatus, Ref, RefStrength};
 use parrot_proto::state::{State, Turn, TurnError, TurnStatus, TurnStop};
@@ -686,6 +686,10 @@ impl MapState {
         let reason = params.get("reason").and_then(Value::as_str).map(str::to_owned);
         let mut decisions = BTreeMap::new();
         let mut input = None;
+        // Codex's questions, typed for clients that don't read the JSON Schema in `input`.
+        let typed_questions = (method == sr::USER_INPUT)
+            .then(|| questions_of(params.get("questions")))
+            .filter(|q| !q.is_empty());
         let (kind, title, subject, level, network, choices) = match method {
             sr::COMMAND_APPROVAL | sr::EXEC_APPROVAL_V1 => {
                 let raw_cmd = match params.get("command") {
@@ -931,6 +935,7 @@ impl MapState {
             level,
             network: Some(network),
             choices: (!choices.is_empty()).then_some(choices),
+            questions: typed_questions,
             input,
             blocking,
             answerable: Answerable::Connection,
@@ -938,6 +943,7 @@ impl MapState {
             fallback: auto_ms.map(|_| Answer {
                 choice: None,
                 value: None,
+                answers: None,
                 input: None,
                 message: Some("Codex goes on without an answer".into()),
             }),
@@ -1263,6 +1269,7 @@ impl MapState {
             level: PermissionLevel::Write,
             network: Some(true),
             choices: Some(vec![choice("cancel", "Cancel", ChoiceIntent::Deny, None, None)]),
+            questions: None,
             input: None,
             blocking: false,
             answerable: Answerable::Connection,
@@ -1335,6 +1342,7 @@ impl MapState {
                 level: PermissionLevel::Write,
                 network: Some(true),
                 choices: None,
+                questions: None,
                 input: None,
                 blocking: false,
                 answerable: Answerable::Connection,
@@ -2077,19 +2085,42 @@ fn response_of(p: &PendingRequest, a: &Answer) -> Value {
                 let Some(id) = q.get("id").and_then(Value::as_str) else {
                     continue;
                 };
-                let given = a.input.as_ref().and_then(|i| i.get(id)).cloned().or_else(|| {
-                    (questions.len() == 1)
-                        .then(|| {
-                            chosen
-                                .clone()
-                                .or_else(|| a.value.clone())
-                                .or_else(|| a.message.clone().map(Value::String))
-                        })
-                        .flatten()
-                });
+                let given = a
+                    .answers
+                    .as_ref()
+                    .and_then(|m| m.get(id))
+                    .cloned()
+                    .or_else(|| a.input.as_ref().and_then(|i| i.get(id)).cloned())
+                    .or_else(|| {
+                        (questions.len() == 1)
+                            .then(|| {
+                                chosen
+                                    .clone()
+                                    .or_else(|| a.value.clone())
+                                    .or_else(|| a.message.clone().map(Value::String))
+                            })
+                            .flatten()
+                    });
+                // An option id, as the typed question gives it, becomes its label.
+                let label = |v: Value| {
+                    let Some(given) = v.as_str() else {
+                        return v;
+                    };
+                    let options = q.get("options").and_then(Value::as_array);
+                    if let Some(options) = options {
+                        for (i, o) in options.iter().enumerate() {
+                            let by_id = given == format!("option-{i}");
+                            let by_label = o.get("label").and_then(Value::as_str) == Some(given);
+                            if by_id || by_label {
+                                return o.get("label").cloned().unwrap_or_else(|| json!(given));
+                            }
+                        }
+                    }
+                    json!(given)
+                };
                 let list: Vec<Value> = match given {
-                    Some(Value::Array(v)) => v,
-                    Some(Value::String(s)) => vec![Value::String(s)],
+                    Some(Value::Array(v)) => v.into_iter().map(label).collect(),
+                    Some(v @ Value::String(_)) => vec![label(v)],
                     Some(Value::Null) | None => continue,
                     Some(other) => vec![Value::String(other.to_string())],
                 };
@@ -2318,4 +2349,48 @@ fn choice(
         amends,
         description: None,
     }
+}
+
+/// Codex's `questions`, typed for clients (spec 14). An entry without an id or text is skipped.
+fn questions_of(questions: Option<&Value>) -> Vec<Question> {
+    questions
+        .and_then(Value::as_array)
+        .map(|qs| {
+            qs.iter()
+                .filter_map(|q| {
+                    Some(Question {
+                        id: q.get("id").and_then(Value::as_str)?.to_owned(),
+                        header: q.get("header").and_then(Value::as_str).map(str::to_owned),
+                        question: q.get("question").and_then(Value::as_str)?.to_owned(),
+                        multi_select: q.get("multiSelect").and_then(Value::as_bool),
+                        options: q
+                            .get("options")
+                            .and_then(Value::as_array)
+                            .map(|options| {
+                                options
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(i, o)| {
+                                        let label = o.get("label").and_then(Value::as_str)?;
+                                        Some(Choice {
+                                            id: format!("option-{i}"),
+                                            label: label.to_owned(),
+                                            intent: Some(ChoiceIntent::Neutral),
+                                            scope: None,
+                                            amends: None,
+                                            description: o
+                                                .get("description")
+                                                .and_then(Value::as_str)
+                                                .filter(|d| !d.is_empty())
+                                                .map(str::to_owned),
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }

@@ -984,6 +984,7 @@ impl MapState {
             level: self.data.tool_level("Pi extension"),
             network: None,
             choices,
+            questions: None,
             input,
             blocking: true,
             answerable: Answerable::Connection,

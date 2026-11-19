@@ -83,6 +83,11 @@ pub fn restore(state: &mut State, id: String, mut value: Value) {
 
 /// Overlay what the egg says (driver kind and data version, refusal, harness coverage).
 fn apply_egg(state: &State, id: &str, a: &mut Value) {
+    // The runtime has no `session/discover` or `session/adopt` (spec 9.5), so an agent must not
+    // report the driver's `session.history`: a client would find the methods `unsupported`.
+    if let Some(features) = a.get_mut("features").and_then(Value::as_object_mut) {
+        features.remove("session.history");
+    }
     let Some(egg) = state.sessions.eggs.get(id) else {
         return;
     };
@@ -273,6 +278,7 @@ pub fn on_agent_reply(cx: &mut Cx, agent: &str, call: u64, result: Result<Value,
         cx.persist(json!({ "op": "put", "kind": "agent", "id": id, "value": a }));
         cx.publish(None, json!({ "type": "agent", "agent": a }));
         cx.state.sessions.agents.insert(id.clone(), a);
+        crate::queue::agent_discovered(cx, &id);
         if session_harness(cx.state, &id) != before {
             let sessions: Vec<String> = cx
                 .state
@@ -315,5 +321,15 @@ mod tests {
         assert!(!covers(">=2.0", "1.9.9"));
         assert!(!covers(">=2.0", "unknown"));
         assert!(!covers("not a range", "2.0.0"));
+    }
+
+    #[test]
+    fn drops_history_a_client_could_not_use() {
+        let mut a = json!({
+            "id": "claude",
+            "features": { "session.history": {}, "session.fork": {}, "usage": {} },
+        });
+        apply_egg(&State::default(), "claude", &mut a);
+        assert_eq!(a["features"], json!({ "session.fork": {}, "usage": {} }), "{a}");
     }
 }

@@ -87,7 +87,7 @@ These are the methods the schema defines, grouped as a client meets them.
 
 The runtime also has methods that only a link uses, `session/offer`, `session/commit`, `workspace/receive` and `blob/put`, and methods it sends to drivers.
 
-`session/discover` and `session/adopt` are not implemented and answer `-32001` with `data.feature`. `session/rebind` to another environment and a child session in a linked environment also answer `unsupported`. A root session can be created in a peer's environment, and a workspace can be transferred to it.
+`session/discover` and `session/adopt` are not implemented and answer `-32001` with `data.feature`. The runtime leaves `session.history` out of what its agents report for that reason, so a client doesn't offer to import a CLI session. `session/rebind` to another environment and a child session in a linked environment also answer `unsupported`. A root session can be created in a peer's environment, and a workspace can be transferred to it.
 
 ### Driver methods
 

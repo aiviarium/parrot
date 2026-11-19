@@ -373,6 +373,8 @@ interface Session {
 interface SessionSummary {         // what lists and the index feed carry
   id: string; runtime: string; title?: string; state: State; kind: Session["kind"]
   parent?: string; agent?: string; env?: string; task?: Task["status"]; archived: boolean; updated: string
+  cwd?: string                     // the folder it works in, without a `session/get`
+  workspace?: string
 }
 interface Binding {
   id: string
@@ -413,6 +415,9 @@ interface NewSession {
   title?: string
   control?: "native" | "tui"
   start?: boolean                  // default true
+  prompt?: string                  // a first prompt, queued once the binding starts
+  context?: ContextEntry[]
+  attachments?: Attachment[]
   grant?: Scope[]
   parent?: string                  // 18
   task?: TaskRequest               // 19
@@ -425,6 +430,8 @@ interface NewSession {
 ```
 
 - Returns when the session exists; its binding is `starting`. The caller is subscribed to it.
+- `prompt` saves a `session/prompt` and an empty session: it is queued as if sent once the binding
+  starts, after a task's brief or a seed's brief. `context` and `attachments` go with it.
 - A session on another environment is created by that environment's runtime, which owns it
   ([24](#24-links)). `session/list` merges the runtime's sessions with those its links offer.
 
@@ -443,7 +450,7 @@ interface NewSession {
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `session/rebind` | `{ session, agent?, env?, workspace?: WorkspaceRequest, require?: "exact" \| "any", interrupt?: boolean, key? }` | `{ binding }` |
+| `session/rebind` | `{ session, agent?, env?, workspace?: WorkspaceRequest, require?: "exact" \| "any", interrupt?: boolean, control?: "native" \| "tui", key? }` | `{ binding }` |
 
 Steps, each recorded in the log before it runs ([34](#34-durability-and-restarts)):
 
@@ -462,6 +469,8 @@ Steps, each recorded in the log before it runs ([34](#34-durability-and-restarts
    (`Session.movedTo`) and answers calls for the session with `-32050` and `data.runtime`. Clients
    reconnect there, through the link or directly.
 8. A `handoff` item records the change; the queue resumes unless it was paused before.
+9. With `control`, the new binding uses the other control ([32.2](#322-tui-control)). The harness
+   session isn't resumed across the switch: its history travels as a bundle.
 
 ### 9.4 Rewind, rename, archive, delete
 
@@ -759,6 +768,7 @@ interface Request {
   level: PermissionLevel           // the lowest level that allows this without asking; "host" when unknown
   network?: boolean                // it needs network access
   choices?: Choice[]
+  questions?: Question[]           // a request that asks several
   input?: JsonSchema               // enums as oneOf with const and title
   blocking: boolean
   answerable: "connection" | "process" | "message"
@@ -777,6 +787,13 @@ interface Choice {
   amends?: Json
   description?: string
 }
+interface Question {
+  id: string                       // what `Answer.answers` uses
+  header?: string
+  question: string
+  multiSelect?: boolean
+  options: Choice[]                // empty for free text
+}
 type Subject =                     // open
   | { type: "tool"; tool: string; input: Json; editable?: boolean }
   | { type: "command"; command: string; cwd: string }
@@ -784,7 +801,13 @@ type Subject =                     // open
   | { type: "network"; host: string }
   | { type: "plan"; text: string }
   | { type: "function"; function: string; input: Json }
-interface Answer { choice?: string; value?: Json; input?: Json; message?: string }
+interface Answer {
+  choice?: string
+  value?: Json
+  answers?: Record<string, Json>   // the answer to each `Question`, by id: a choice id, a label, a list of them, or text
+  input?: Json
+  message?: string
+}
 ```
 
 | Method | Params | Result |
@@ -798,7 +821,8 @@ interface Answer { choice?: string; value?: Json; input?: Json; message?: string
 | `process` | survives | survives (deduplicated by `ref`) | expires |
 | `message` | survives | survives | survives; the answer is sent as a follow-up prompt |
 
-- Questions with several parts are one request with one `input` property per question.
+- Questions with several parts are one request whose `questions` lists them; the answer names each
+  question by its id. `input` still carries the harness's schema for a form the client renders itself.
 - The first valid answer wins and goes to every subscriber; later ones fail with `-32013`, except a
   repeat with the same key.
 - Under a ceiling, choices with `scope` other than `once` are removed before the request is shown, so

@@ -36,6 +36,10 @@ pub struct Request {
     pub network: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<Choice>>,
+    /// A request with several questions: one entry per question, answered by id in
+    /// `Answer.answers`. Absent for a single question, which uses `choices`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub questions: Option<Vec<Question>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
     pub blocking: bool,
@@ -135,10 +139,32 @@ pub struct Answer {
     pub choice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
+    /// The answer to each of a request's `questions`, by question id: a choice id, a label, a
+    /// list of them, or text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers: Option<Map<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// One question of a request that asks several (spec 14).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    /// The id `Answer.answers` uses.
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The question itself.
+    pub question: String,
+    /// Whether more than one option may be picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_select: Option<bool>,
+    /// The options to pick from; empty for free text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<Choice>,
 }
 
 /// Who can still answer once things go away. `process` was removed (Appendix E8).

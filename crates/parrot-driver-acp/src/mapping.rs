@@ -901,6 +901,7 @@ impl MapState {
             level: self.data.tool_level(&tool, call.title.as_deref().unwrap_or("")),
             network: None,
             choices: Some(choices),
+            questions: None,
             input: None,
             blocking: true,
             answerable: Answerable::Connection,

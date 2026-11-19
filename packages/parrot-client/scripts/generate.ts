@@ -47,7 +47,17 @@ function union(parts: string[], indent: string): string {
 function typeOf(spec: Schema | undefined, indent: string): string {
   if (spec === undefined || spec === true) return "unknown"
   if (spec === false) return "never"
-  if (typeof spec.$ref === "string") return refName(spec.$ref)
+  if (typeof spec.$ref === "string") {
+    // A tagged union's variant names a type and narrows it, as in `{ $ref: "#/$defs/UserItem",
+    // properties: { kind: { const: "user" } } }`; both parts make the discriminator.
+    const name = refName(spec.$ref)
+    const extra = { ...spec }
+    delete extra.$ref
+    delete extra.description
+    if (Object.keys(extra).length === 0) return name
+    const body = typeOf(extra as Schema, indent)
+    return `${name} & ${body.includes("\n") ? `(${body})` : body}`
+  }
   if (Array.isArray(spec.enum)) return spec.enum.map(literal).join(" | ")
   if ("const" in spec) return literal(spec.const)
   if (Array.isArray(spec.anyOf))

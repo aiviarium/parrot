@@ -834,6 +834,7 @@ impl MapState {
                 ),
                 choice("deny", "Deny", ChoiceIntent::Deny, ChoiceScope::Once),
             ]),
+            questions: None,
             input: None,
             blocking: true,
             answerable: Answerable::Connection,

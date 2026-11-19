@@ -3,6 +3,7 @@
 
 use crate::principals::{check_session, parse};
 use crate::{CallOwner, Cx, Effect, Reply, State};
+use parrot_proto::agent::Control;
 use parrot_proto::principal::Scope;
 use parrot_proto::rpc::{RequestId, RpcError};
 use parrot_proto::session::{BindingStatus, BindingVia, SessionRebindParams, SessionRewindParams};
@@ -88,6 +89,8 @@ pub struct Rebind {
     pub old_agent: String,
     pub agent: String,
     pub interrupt: bool,
+    /// The control to switch to; the harness session isn't resumed across a switch.
+    pub control: Option<Control>,
     /// The new binding, once started.
     pub new: Option<String>,
     /// When the running turn is interrupted if it hasn't ended (E9: 30 seconds).
@@ -737,6 +740,14 @@ fn rebind(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
             .with_data(json!({ "feature": "session.resume" })));
     }
     let old = crate::directory::binding_of(cx.state, &p.session).unwrap_or_default();
+    // The control changes with the new binding, not before it starts.
+    let control = p.control.filter(|c| {
+        cx.state
+            .sessions
+            .info
+            .get(&p.session)
+            .is_none_or(|i| i.control != *c)
+    });
     cx.state.seeds.rebinding.insert(
         p.session.clone(),
         Rebind {
@@ -744,6 +755,7 @@ fn rebind(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError> {
             old_agent,
             agent,
             interrupt: p.interrupt.unwrap_or(false),
+            control,
             new: None,
             deadline_ms: cx.now_ms + 30_000,
         },
@@ -809,7 +821,9 @@ fn proceed(cx: &mut Cx, session: &str) {
     if r.new.is_some() {
         return;
     }
-    let same_harness = r.agent == r.old_agent && current_ref(cx.state, session).is_some();
+    // Another control means another run of the harness: its history travels as a bundle.
+    let same_harness =
+        r.control.is_none() && r.agent == r.old_agent && current_ref(cx.state, session).is_some();
     if !same_harness {
         // A bundle carries the history to the new harness.
         let b = crate::bundle::build(cx.state, session, None, crate::bundle::DEFAULT_CHARS);
@@ -825,6 +839,11 @@ fn proceed(cx: &mut Cx, session: &str) {
     }
     if let Some(rec) = cx.state.sessions.by_id.get_mut(session) {
         rec.agent = r.agent.clone();
+    }
+    if let Some(control) = r.control
+        && let Some(info) = cx.state.sessions.info.get_mut(session)
+    {
+        info.control = control;
     }
     let via = if same_harness {
         BindingVia::Resume

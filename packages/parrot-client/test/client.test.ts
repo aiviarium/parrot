@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "node:path"
 import { Client, type Notifications, RpcError } from "../src"
+import { stdioClient } from "../src/stdio"
 import { answer, answers } from "./fake"
 
 let server: ReturnType<typeof Bun.serve> | undefined
@@ -114,7 +115,7 @@ describe("Client", () => {
 
   test("initializes, subscribes and prompts over stdio", async () => {
     const script = join(import.meta.dir, "fake-stdio.ts")
-    const client = Client.overStdio(process.execPath, [script])
+    const client = stdioClient(process.execPath, [script])
     try {
       const opened = await client.initialize()
       expect(opened.connection.principal).toBe("owner")
@@ -131,7 +132,7 @@ describe("Client", () => {
   })
 
   test("fails pending calls when the other side closes", async () => {
-    const client = Client.overStdio(process.execPath, ["-e", "process.stdin.resume()"])
+    const client = stdioClient(process.execPath, ["-e", "process.stdin.resume()"])
     try {
       const call = client.request("session/list")
       client.close()

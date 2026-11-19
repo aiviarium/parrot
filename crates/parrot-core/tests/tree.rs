@@ -834,6 +834,44 @@ fn rebinds_hold_the_queue_and_never_overlap() {
 }
 
 #[test]
+fn an_initial_prompt_is_sent_when_the_binding_starts() {
+    let mut sim = Sim::new();
+    let (r, effects) = sim.call(
+        OWNER,
+        "session/new",
+        json!({ "agent": "claude", "workspace": { "kind": "dir", "path": "/work/demo" },
+            "prompt": "Hello" }),
+    );
+    r.unwrap();
+    let b = start_of(&effects).expect("StartBinding");
+    let e = sim.bring_up(&b);
+    let prompt = &driver_calls(&e, "binding/prompt")[0].1;
+    assert_eq!(prompt["text"], "Hello");
+    assert_eq!(prompt["binding"], b.as_str());
+    assert!(prompt["message"].as_str().is_some_and(|m| m.starts_with("msg_")));
+}
+
+#[test]
+fn a_rebind_can_switch_the_control() {
+    let mut sim = Sim::new();
+    let (s, b) = sim.root(json!({}));
+    let e = sim
+        .call(OWNER, "session/rebind", json!({ "session": s, "control": "tui" }))
+        .1;
+    let start = start_params(&e).expect("the new binding starts");
+    assert_eq!(start["control"], "tui");
+    assert!(
+        start.get("resume").is_none(),
+        "another control doesn't resume the old run: {start}"
+    );
+    let nb = start_of(&e).unwrap();
+    let e = sim.bring_up(&nb);
+    // The old binding stops once the new one runs, and the session keeps its history as a bundle.
+    assert_eq!(driver_calls(&e, "binding/stop")[0].1["binding"], b.as_str());
+    assert_eq!(sim.get(&s)["binding"]["control"], "tui");
+}
+
+#[test]
 fn a_failed_handoff_starts_the_old_binding_again() {
     let mut sim = Sim::new();
     let (s, b) = sim.root(json!({}));

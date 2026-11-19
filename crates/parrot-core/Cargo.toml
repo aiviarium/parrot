@@ -14,9 +14,11 @@ doctest = false
 sha2.workspace = true
 semver.workspace = true
 parrot-proto.workspace = true
+parrot-workspace.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+tempfile.workspace = true

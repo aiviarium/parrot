@@ -26,11 +26,19 @@ The `parrot new` command sends a `dir` request for its `--dir` folder, which def
 
 ## Fences
 
-A workspace must be inside the creating principal's ceiling `paths`. The runtime checks that when it creates a `dir` or `worktree` workspace, and refuses one outside with `forbidden`.
+A workspace must be inside one of its environment's `roots` and inside the creating principal's ceiling `paths`. The runtime checks both when it creates a `dir` or `worktree` workspace, and refuses a folder outside either with `forbidden`. The comparison resolves `..` and symbolic links first, so a path that names its way out, or a link that points out, is refused.
 
-The protocol also says a workspace must be inside one of its environment's roots, which default to the owner's home folder. The runtime reports no `roots` for its environment and does not check a roots list today, so the ceiling is the fence it enforces. [Workspaces in the protocol](../spec/protocol.md#8-workspaces) states the full rule.
+A session's `cwd` must be inside its workspace, and a folder a client picks for a session goes through the same check. That stops a token or a child session from creating or using a workspace outside what its grant allows.
 
-This stops a token or a child session from creating a workspace outside what its grant allows.
+## Roots
+
+An environment's `roots` are the folders workspaces and session folders may be in. `env/list` reports them. By default they are the owner's home folder and the workspace folder a runtime keeps for workspaces that arrive over a link. `roots` in the configuration names them instead:
+
+```json
+{ "roots": ["/home/me/src", "/srv/work"] }
+```
+
+A runtime with an empty list, as an embedded runtime starts, fences nothing.
 
 ## Status and merge
 
