@@ -590,3 +590,67 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn a_steer_waits_for_the_agents_capabilities() {
+    let mut sim = Sim::new();
+    sim.connect("con_owner");
+    let (session, binding) = sim.idle_session("con_owner");
+    sim.driver(
+        &binding,
+        json!({ "type": "state", "state": "running", "background": [] }),
+    );
+
+    // The driver's `agent/list` is on its way, so whether it steers isn't known yet.
+    let effects = sim
+        .call("con_owner", "agent/refresh", json!({ "agent": "claude" }))
+        .1;
+    let call = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::AgentCall { call, .. } => Some(*call),
+            _ => None,
+        })
+        .expect("the discovery is asked");
+
+    // The steer is held, not refused with `unsupported`.
+    let id = json!(sim.next_id + 1);
+    let effects = sim.core.handle(Input::Call {
+        conn: "con_owner".into(),
+        id: Some(id.clone()),
+        method: "session/prompt".into(),
+        params: json!({ "session": session, "text": "And wave.", "delivery": "steer" }),
+    });
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::Reply { id: rid, .. } if *rid == id)),
+        "the steer waits for the agent's capabilities"
+    );
+
+    // The agent reports `session.steer`: the steer goes out and its call is answered.
+    let effects = sim.core.handle(Input::AgentReply {
+        agent: "claude".into(),
+        call,
+        result: Ok(json!({
+            "agents": [{ "id": "claude", "features": { "session.steer": { "when": "next_step" } } }]
+        })),
+    });
+    let reply = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Reply { id: rid, result, .. } if *rid == id => Some(result.clone()),
+            _ => None,
+        })
+        .expect("the steer is answered");
+    assert_eq!(reply.unwrap()["disposition"], "steered");
+    let prompt = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::DriverCall { method, params, .. } if method == "binding/prompt" => Some(params),
+            _ => None,
+        })
+        .expect("the steer reaches the driver");
+    assert_eq!(prompt["steer"], true);
+    assert_eq!(prompt["text"], "And wave.");
+}

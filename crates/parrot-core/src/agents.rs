@@ -278,6 +278,7 @@ pub fn on_agent_reply(cx: &mut Cx, agent: &str, call: u64, result: Result<Value,
         cx.persist(json!({ "op": "put", "kind": "agent", "id": id, "value": a }));
         cx.publish(None, json!({ "type": "agent", "agent": a }));
         cx.state.sessions.agents.insert(id.clone(), a);
+        crate::queue::agent_discovered(cx, &id);
         if session_harness(cx.state, &id) != before {
             let sessions: Vec<String> = cx
                 .state

@@ -21,6 +21,18 @@ pub struct Queues {
     pub calls: BTreeMap<u64, PendingCall>,
     /// Prompts waiting for their checkpoint, by the workspace call that records it.
     pub deferred: BTreeMap<u64, Deferred>,
+    /// Steers held because the session's agent hasn't reported its capabilities yet.
+    pub held_steers: Vec<HeldSteer>,
+}
+
+/// A steer the runtime couldn't judge yet: the driver's `agent/list` is still on its way, so
+/// whether the agent has `session.steer` is unknown (spec 13.1).
+#[derive(Debug, Clone)]
+pub struct HeldSteer {
+    pub agent: String,
+    pub conn: String,
+    pub id: RequestId,
+    pub params: Value,
 }
 
 /// A prompt held until the workspace is recorded (spec 35).
@@ -390,7 +402,12 @@ pub fn forget(cx: &mut Cx, session: &str) {
 /// Handle a client method of this area.
 pub fn call(cx: &mut Cx, conn: &str, id: Option<&RequestId>, method: &str, params: Value) -> Reply {
     let result = match method {
-        "session/prompt" => prompt(cx, conn, params),
+        "session/prompt" => {
+            if let Some(reply) = hold_steer(cx, conn, id, &params) {
+                return reply;
+            }
+            prompt(cx, conn, params)
+        }
         "session/cancel" => return cancel(cx, conn, id, params),
         "queue/list" => parse::<QueueSessionParams>(params).and_then(|p| {
             check_session(cx.state, conn, Scope::Read, &p.session)?;
@@ -500,6 +517,54 @@ fn move_entry(cx: &mut Cx, conn: &str, params: Value) -> Result<Value, RpcError>
     q.entries.insert(index, e);
     publish_queue(cx, &p.session);
     Ok(json!({}))
+}
+
+/// Holds a steer whose agent hasn't answered `agent/list` yet, rather than refusing a capability
+/// the runtime doesn't know. `agent_discovered` runs it once the answer arrives.
+fn hold_steer(cx: &mut Cx, conn: &str, id: Option<&RequestId>, params: &Value) -> Option<Reply> {
+    let id = id?;
+    let p: SessionPromptParams = parse(params.clone()).ok()?;
+    if p.delivery != Some(Delivery::Steer) {
+        return None;
+    }
+    let starting = !sessions::active(cx.state, &p.session);
+    if starting || ready(cx.state, &p.session) || steer_supported(cx.state, &p.session) {
+        return None;
+    }
+    let agent = cx.state.sessions.by_id.get(&p.session)?.agent.clone();
+    if !discovering(cx.state, &agent) {
+        return None;
+    }
+    cx.state.queue.held_steers.push(HeldSteer {
+        agent,
+        conn: conn.to_string(),
+        id: id.clone(),
+        params: params.clone(),
+    });
+    Some(Reply::Later)
+}
+
+/// Whether the agent's `agent/list` is on its way.
+fn discovering(state: &State, agent: &str) -> bool {
+    state.sessions.discovery.values().any(|(asked, _)| asked == agent)
+}
+
+/// An agent answered `agent/list`: steers that waited for its capabilities go on.
+pub fn agent_discovered(cx: &mut Cx, agent: &str) {
+    let mut held = Vec::new();
+    cx.state.queue.held_steers.retain(|h| {
+        let mine = h.agent == agent;
+        if mine {
+            held.push(h.clone());
+        }
+        !mine
+    });
+    for h in held {
+        match prompt(cx, &h.conn, h.params) {
+            Ok(result) => cx.reply(&h.conn, h.id, Ok(result)),
+            Err(e) => cx.reply(&h.conn, h.id, Err(e)),
+        }
+    }
 }
 
 fn steer_supported(state: &State, session: &str) -> bool {
