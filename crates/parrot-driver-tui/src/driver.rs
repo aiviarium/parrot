@@ -1159,6 +1159,7 @@ fn build_request(
         level: PermissionLevel::Host,
         network: None,
         choices,
+        questions: None,
         input,
         blocking: true,
         answerable: Answerable::Connection,

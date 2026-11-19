@@ -16,8 +16,8 @@ use parrot_proto::item::{ItemKind, ItemPatch};
 use parrot_proto::open::Open;
 use parrot_proto::option::{ConfigOption, PermissionLevel};
 use parrot_proto::request::{
-    Answer, Answerable, Choice, ChoiceIntent, ChoiceScope, Notify, Request, RequestKind, RequestStatus,
-    Subject,
+    Answer, Answerable, Choice, ChoiceIntent, ChoiceScope, Notify, Question, Request, RequestKind,
+    RequestStatus, Subject,
 };
 use parrot_proto::session::{Ref, RefStrength};
 use parrot_proto::state::{State, Turn, TurnError, TurnStatus, TurnStop};
@@ -973,6 +973,9 @@ impl MapState {
             level: tool_level(tool),
             network: None,
             choices,
+            questions: (tool == "AskUserQuestion")
+                .then(|| ask_questions(&c.input))
+                .filter(|q| !q.is_empty()),
             input: (kind == RequestKind::Question).then(|| c.input.clone()),
             blocking: true,
             answerable: Answerable::Connection,
@@ -1028,8 +1031,10 @@ fn permission_result(p: &PendingRequest, a: &Answer) -> PermissionResult {
         if a.choice.as_deref() == Some("deny") {
             return deny(a.message.as_deref());
         }
-        let mut answers = match &a.value {
-            Some(Value::Object(m)) => m.clone(),
+        let mut answers = match (&a.answers, &a.value) {
+            // A typed answer names each question by the id of the request's `questions`.
+            (Some(typed), _) => ask_answers(&p.input, typed),
+            (None, Some(Value::Object(m))) => m.clone(),
             _ => Map::new(),
         };
         let first = p.input.pointer("/questions/0/question").and_then(Value::as_str);
@@ -1177,4 +1182,92 @@ fn tool_set(name: &str, input: &Value, status: &str) -> Map<String, Value> {
     m.insert("status".into(), json!(status));
     m.insert("caller".into(), json!("model"));
     m
+}
+
+/// The `questions` of an `AskUserQuestion` call (spec 14), one per question it asks.
+fn ask_questions(input: &Value) -> Vec<Question> {
+    let questions = input.get("questions").and_then(Value::as_array);
+    questions
+        .map(|qs| {
+            qs.iter()
+                .enumerate()
+                .filter_map(|(i, q)| {
+                    Some(Question {
+                        id: format!("question-{i}"),
+                        header: q.get("header").and_then(Value::as_str).map(str::to_owned),
+                        question: q.get("question").and_then(Value::as_str)?.to_owned(),
+                        multi_select: q.get("multiSelect").and_then(Value::as_bool),
+                        options: options_of(q),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The options of one question, with ids that `ask_answers` resolves back to their labels.
+fn options_of(question: &Value) -> Vec<Choice> {
+    question
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .enumerate()
+                .filter_map(|(i, o)| {
+                    let label = o.get("label").and_then(Value::as_str)?;
+                    Some(Choice {
+                        id: format!("option-{i}"),
+                        label: label.to_owned(),
+                        intent: Some(ChoiceIntent::Neutral),
+                        scope: None,
+                        amends: None,
+                        description: o.get("description").and_then(Value::as_str).map(str::to_owned),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The labels to send as Claude Code's `answers`, keyed by each question's text.
+fn ask_answers(input: &Value, typed: &Map<String, Value>) -> Map<String, Value> {
+    let empty = Vec::new();
+    let questions = input.get("questions").and_then(Value::as_array).unwrap_or(&empty);
+    let mut out = Map::new();
+    for (id, given) in typed {
+        let Some(index) = id.strip_prefix("question-").and_then(|n| n.parse::<usize>().ok()) else {
+            continue;
+        };
+        let Some(question) = questions.get(index) else {
+            continue;
+        };
+        let Some(text) = question.get("question").and_then(Value::as_str) else {
+            continue;
+        };
+        let options = question
+            .get("options")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let label = |v: &Value| {
+            let Some(given) = v.as_str() else {
+                return v.clone();
+            };
+            for (i, o) in options.iter().enumerate() {
+                let by_id = given == format!("option-{i}");
+                let by_label = o.get("label").and_then(Value::as_str) == Some(given);
+                if by_id || by_label {
+                    return o.get("label").cloned().unwrap_or_else(|| json!(given));
+                }
+            }
+            json!(given)
+        };
+        let value = match given {
+            Value::Array(list) => Value::Array(list.iter().map(label).collect()),
+            other => label(other),
+        };
+        out.insert(text.to_owned(), value);
+    }
+    out
 }

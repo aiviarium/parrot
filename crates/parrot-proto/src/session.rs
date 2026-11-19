@@ -124,6 +124,12 @@ pub struct SessionSummary {
     pub agent: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<EnvId>,
+    /// The folder the session works in, so a list can show or filter by it without `session/get`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// The workspace the session works in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<Open<TaskStatus>>,
     pub archived: bool,
@@ -245,6 +251,13 @@ pub struct SessionNewParams {
     pub control: Option<Control>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<bool>,
+    /// A first prompt, queued once the binding starts; saves a round trip and an empty session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Vec<crate::prompt::ContextEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<crate::prompt::Attachment>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<Vec<Scope>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -323,6 +336,19 @@ pub struct SessionRef {
 
 pub type SessionGetParams = SessionRef;
 pub type SessionDeleteParams = SessionRef;
+
+/// `session/keys` (Appendix E4): text and named keys for a binding under TUI control.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionKeysParams {
+    pub session: SessionId,
+    /// Text to type, as if pasted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Named keys to press in order, such as `enter`, `tab` or `ctrl-c`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub press: Option<Vec<String>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -404,6 +430,10 @@ pub struct SessionRebindParams {
     pub require: Option<RebindRequire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interrupt: Option<bool>,
+    /// Switch the binding to the other control (32.2). The harness session isn't resumed across
+    /// the switch, so its history travels as a bundle (23.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<Control>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
 }

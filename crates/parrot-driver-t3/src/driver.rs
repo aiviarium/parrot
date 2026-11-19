@@ -14,7 +14,9 @@ use parrot_proto::driver::{
 use parrot_proto::open::Open;
 use parrot_proto::option::{Applies, ConfigOption, OptionRole, PermissionLevel};
 use parrot_proto::principal::Isolation;
-use parrot_proto::request::{Answerable, Choice, Notify, Request, RequestKind, RequestStatus, Subject};
+use parrot_proto::request::{
+    Answerable, Choice, ChoiceIntent, Notify, Question, Request, RequestKind, RequestStatus, Subject,
+};
 use parrot_proto::rpc::{Message, Notification, Response, RpcError};
 use parrot_proto::session::{Ref, RefStrength};
 use parrot_proto::state::{State, Turn, TurnStatus, TurnStop};
@@ -302,10 +304,13 @@ impl Driver {
                 let p: BindingAnswerParams = params(p)?;
                 let b = self.binding(&p.binding)?;
                 let mcp = self.mcp_for(&b).await?;
+                // A typed answer already names each question by its id.
                 let answers = p
                     .answer
-                    .value
+                    .answers
                     .clone()
+                    .map(Value::Object)
+                    .or_else(|| p.answer.value.clone())
                     .unwrap_or_else(|| json!(p.answer.choice.clone().map(|c| json!({ "choice": c }))));
                 mcp.call(
                     "t3_pending_request",
@@ -926,6 +931,7 @@ async fn pending(driver: &Driver, b: &Binding, mcp: &Mcp) {
             continue;
         };
         let questions = read.get("questions").cloned().unwrap_or(Value::Null);
+        let typed = questions_of(&questions);
         let request = Request {
             id: id.clone(),
             session: String::new(),
@@ -944,6 +950,7 @@ async fn pending(driver: &Driver, b: &Binding, mcp: &Mcp) {
             level: PermissionLevel::Read,
             network: None,
             choices: Some(Vec::<Choice>::new()),
+            questions: (!typed.is_empty()).then_some(typed),
             input: Some(questions),
             blocking: true,
             answerable: Answerable::Message,
@@ -1095,4 +1102,50 @@ pub fn now() -> String {
         rem % 60,
         d.subsec_millis()
     )
+}
+
+/// T3's pending questions as typed questions (spec 14). Its shape is read defensively: an entry
+/// needs a question text, and takes an id, a header, a multi-select flag and label options.
+fn questions_of(questions: &Value) -> Vec<Question> {
+    let Some(list) = questions.as_array() else {
+        return Vec::new();
+    };
+    list.iter()
+        .enumerate()
+        .filter_map(|(i, q)| {
+            let question = q.get("question").and_then(Value::as_str)?.to_owned();
+            let id = q
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("question-{i}"));
+            Some(Question {
+                id,
+                header: q.get("header").and_then(Value::as_str).map(str::to_owned),
+                question,
+                multi_select: q.get("multiSelect").and_then(Value::as_bool),
+                options: q
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .map(|options| {
+                        options
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(j, o)| {
+                                let label = o.as_str().or_else(|| o.get("label").and_then(Value::as_str))?;
+                                Some(Choice {
+                                    id: format!("option-{j}"),
+                                    label: label.to_owned(),
+                                    intent: Some(ChoiceIntent::Neutral),
+                                    scope: None,
+                                    amends: None,
+                                    description: None,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
 }

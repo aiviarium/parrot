@@ -416,6 +416,14 @@
           ]
         },
         "value": true,
+        "answers": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The answer to each of a request's `questions`, by question id: a choice id, a label, a\nlist of them, or text."
+        },
         "input": true,
         "message": {
           "type": [
@@ -4759,6 +4767,44 @@
         "handled"
       ]
     },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id `Answer.answers` uses."
+        },
+        "header": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "type": "string",
+          "description": "The question itself."
+        },
+        "multiSelect": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether more than one option may be picked."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Choice"
+          },
+          "description": "The options to pick from; empty for free text."
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ],
+      "description": "One question of a request that asks several (spec 14)."
+    },
     "QueueEditParams": {
       "type": "object",
       "properties": {
@@ -5117,6 +5163,16 @@
           "items": {
             "$ref": "#/$defs/Choice"
           }
+        },
+        "questions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Question"
+          },
+          "description": "A request with several questions: one entry per question, answered by id in\n`Answer.answers`. Absent for a single question, which uses `choices`."
         },
         "input": true,
         "blocking": {
@@ -5936,6 +5992,35 @@
         "session"
       ]
     },
+    "SessionKeysParams": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Text to type, as if pasted."
+        },
+        "press": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Named keys to press in order, such as `enter`, `tab` or `ctrl-c`."
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "`session/keys` (Appendix E4): text and named keys for a binding under TUI control."
+    },
     "SessionKind": {
       "type": "string",
       "enum": [
@@ -6070,6 +6155,31 @@
             "boolean",
             "null"
           ]
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A first prompt, queued once the binding starts; saves a round trip and an empty session."
+        },
+        "context": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ContextEntry"
+          }
+        },
+        "attachments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          }
         },
         "grant": {
           "type": [
@@ -6415,6 +6525,17 @@
             "null"
           ]
         },
+        "control": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Control"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Switch the binding to the other control (32.2). The harness session isn't resumed across\nthe switch, so its history travels as a bundle (23.2)."
+        },
         "key": {
           "type": [
             "string",
@@ -6624,6 +6745,20 @@
             "string",
             "null"
           ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder the session works in, so a list can show or filter by it without `session/get`."
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The workspace the session works in."
         },
         "task": {
           "anyOf": [
@@ -9211,7 +9346,7 @@
     },
     "session/keys": {
       "params": {
-        "$ref": "#/$defs/SessionRef"
+        "$ref": "#/$defs/SessionKeysParams"
       },
       "result": {
         "$ref": "#/$defs/Empty"

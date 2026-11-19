@@ -106,6 +106,7 @@ pub fn register(r: &mut Registry) {
     r.add::<session::SessionListParams>();
     r.add::<session::SessionListResult>();
     r.add::<session::SessionRef>();
+    r.add::<session::SessionKeysParams>();
     r.add::<session::SessionGetResult>();
     r.add::<session::SessionTreeParams>();
     r.add::<session::SessionTreeResult>();
@@ -201,6 +202,7 @@ pub fn register(r: &mut Registry) {
     r.add::<request::Request>();
     r.add::<request::RequestKind>();
     r.add::<request::Choice>();
+    r.add::<request::Question>();
     r.add::<request::ChoiceIntent>();
     r.add::<request::ChoiceScope>();
     r.add::<request::Subject>();
@@ -303,7 +305,7 @@ pub fn register(r: &mut Registry) {
     r.method::<session::SessionRebindParams, session::SessionRebindResult>("session/rebind");
     r.method::<session::SessionRewindParams, ids::Empty>("session/rewind");
     r.method::<session::SessionRef, driver::BindingScreenResult>("session/screen");
-    r.method::<session::SessionRef, ids::Empty>("session/keys");
+    r.method::<session::SessionKeysParams, ids::Empty>("session/keys");
     r.method::<prompt::SessionPromptParams, prompt::SessionPromptResult>("session/prompt");
     r.method::<prompt::SessionCancelParams, prompt::SessionCancelResult>("session/cancel");
     r.method::<prompt::QueueListParams, prompt::QueueListResult>("queue/list");

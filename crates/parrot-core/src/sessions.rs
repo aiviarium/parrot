@@ -189,6 +189,8 @@ pub fn summary_json(state: &State, id: &str) -> Option<Value> {
     if let Some(p) = &r.parent {
         v["parent"] = json!(p);
     }
+    v["cwd"] = json!(s.cwd);
+    v["workspace"] = json!(s.workspace);
     crate::tree::decorate_summary(state, id, &mut v);
     Some(v)
 }
@@ -773,7 +775,8 @@ pub fn finish_new(
     if let Some(id) = id {
         cx.reply(conn, id.clone(), Ok(result));
     }
-    // The first prompt: the task's brief, else the seed's (spec 19, 23.2).
+    // The first prompt: the task's brief, else the seed's (spec 19, 23.2), then the one the
+    // request carried.
     if let Some(plan) = plan {
         if let Some(task) = plan.task {
             crate::tasks::begin(cx, &sid, task);
@@ -789,6 +792,25 @@ pub fn finish_new(
             );
             queue::dispatch(cx, &sid);
         }
+    }
+    if let Some(text) = p.prompt {
+        let origin = json!({ "kind": "client", "principal": principal_of(cx.state, conn) });
+        let mut params = json!({});
+        if let Some(context) = &p.context {
+            params["context"] = json!(context);
+        }
+        if let Some(attachments) = &p.attachments {
+            params["attachments"] = json!(attachments);
+        }
+        queue::enqueue(
+            cx,
+            &sid,
+            parrot_proto::prompt::QueueEntryKind::Prompt,
+            text,
+            origin,
+            params,
+        );
+        queue::dispatch(cx, &sid);
     }
 }
 
