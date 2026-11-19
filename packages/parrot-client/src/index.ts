@@ -13,6 +13,5 @@ export type {
 } from "./protocol"
 export { CONNECTION_CLOSED, Connection, METHOD_NOT_FOUND, RpcError } from "./rpc"
 export * from "./schema"
-export { type StdioOptions, stdioTransport } from "./stdio"
 export type { Transport, TransportHandlers } from "./transport"
 export { type WebSocketOptions, webSocketTransport } from "./websocket"

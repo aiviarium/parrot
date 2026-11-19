@@ -3,6 +3,9 @@
 The TypeScript client of the Parrot runtime. It has the protocol types generated from
 `spec/schema/parrot.schema.json`, and a JSON-RPC client over a WebSocket or a child process's stdio.
 
+The root entry is browser-safe. The stdio transport starts a child process, so it lives in
+`@aiviarium/parrot-client/stdio`.
+
 ```ts
 import { Client } from "@aiviarium/parrot-client"
 
@@ -42,7 +45,9 @@ client.provide("function/call", (call) => ({ output: { echoed: call.input } }))
 | Transport | Entry point | Use |
 | --- | --- | --- |
 | WebSocket | `Client.overWebSocket(url, { token })` | A runtime at `/parrot`, with a client token |
-| stdio | `Client.overStdio(command, args)` | A process that speaks JSON-RPC lines, such as a driver |
+| stdio | `stdioClient(command, args)` from `@aiviarium/parrot-client/stdio` | A process that speaks JSON-RPC lines, such as `parrot connect` |
+
+`stdioTransport` is exported beside `stdioClient` for a client that is built another way.
 
 Each message is one WebSocket text frame or one line, as spec 3.1 says. Messages sent before a
 WebSocket opens wait for it.
