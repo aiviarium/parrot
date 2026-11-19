@@ -9,6 +9,11 @@
     url: https://claude.ai/install.sh
     dest: /opt/rookery-tools/claude-install.sh
     mode: '0644'
+    timeout: 60
+  register: rookery_claude_installer
+  retries: 3
+  delay: 5
+  until: rookery_claude_installer is succeeded
 # The selected version is the least one: a newer one from Update stays, even
 # after claude update has cleaned up the older version's files.
 - name: Read the Claude Code version in use

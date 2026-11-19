@@ -307,9 +307,12 @@ fn start_serve(dir: &Path, socket: &Path, env: &[(OsString, OsString)]) -> Resul
         .stdin(Stdio::null())
         .spawn()
         .map_err(|e| format!("cannot start parrot serve: {e}"))?;
-    let serve = Serve(child);
+    let mut serve = Serve(child);
     let deadline = Instant::now() + Duration::from_secs(20);
     while std::os::unix::net::UnixStream::connect(socket).is_err() {
+        if let Ok(Some(status)) = serve.0.try_wait() {
+            return Err(format!("parrot serve exited early with {status}"));
+        }
         if Instant::now() > deadline {
             return Err("parrot serve never listened".into());
         }

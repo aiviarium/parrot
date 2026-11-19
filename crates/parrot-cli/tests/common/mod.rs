@@ -55,9 +55,12 @@ impl Serve {
         for (k, v) in &setup.env {
             cmd.env(k, v);
         }
-        let child = cmd.spawn().expect("serve starts");
+        let mut child = cmd.spawn().expect("serve starts");
         let deadline = Instant::now() + WAIT;
         while connect_once(&socket).is_err() {
+            if let Some(status) = child.try_wait().expect("poll serve child") {
+                panic!("serve exited early with {status}");
+            }
             assert!(Instant::now() < deadline, "serve never listened");
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -331,46 +334,113 @@ pub fn fake_claude() -> &'static Path {
     PATH.get_or_init(|| workspace_bin("fake-claude"))
 }
 
-/// A binary of the workspace, beside `parrot`. The first call in a test process builds every
-/// binary, test and example the way `cargo test --workspace` does, which is a no-op after that
-/// build. A narrower `cargo build -p` resolves features differently and would rebuild the
-/// dependency graph.
+/// A binary of the workspace, beside `parrot`. The first call builds the workspace binaries
+/// and examples with the full workspace's feature resolution so sibling test processes do not
+/// contend on cargo or rebuild dependencies.
 pub fn workspace_bin(name: &str) -> PathBuf {
     static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     BUILT.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let mut cmd = Command::new(cargo);
-        cmd.args([
-            "build",
-            "--locked",
-            "--quiet",
-            "--workspace",
-            "--bins",
-            "--tests",
-            "--examples",
-        ]);
-        // Cargo sets these for the test process. Build scripts that watch them (ring watches
-        // CARGO_MANIFEST_DIR) would rerun and rebuild what the outer build just made.
-        const PER_PACKAGE: &[&str] = &[
-            "CARGO_MANIFEST_DIR",
-            "CARGO_MANIFEST_PATH",
-            "CARGO_CRATE_NAME",
-            "CARGO_PRIMARY_PACKAGE",
-            "CARGO_BIN_NAME",
-            "CARGO_TARGET_TMPDIR",
-        ];
-        for (key, _) in std::env::vars_os() {
-            let key = key.to_string_lossy().into_owned();
-            if key.starts_with("CARGO_PKG_") || PER_PACKAGE.contains(&key.as_str()) {
-                cmd.env_remove(&key);
-            }
+        if let Some(run_id) = std::env::var_os("NEXTEST_RUN_ID") {
+            build_workspace_once(&run_id.to_string_lossy());
+        } else {
+            run_cargo_build_bins();
         }
-        let status = cmd.status().expect("cargo runs");
-        assert!(status.success(), "building the workspace binaries failed");
     });
     let path = bin_dir().join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     assert!(path.exists(), "no {name} at {}", path.display());
     path
+}
+
+fn build_workspace_once(run_id: &str) {
+    let dir = bin_dir();
+    let done = dir.join(format!(".workspace-bins-{run_id}"));
+    if done.exists() {
+        return;
+    }
+    let lock = dir.join(format!(".workspace-bins-{run_id}.lock"));
+    struct LockGuard(Option<PathBuf>);
+    impl Drop for LockGuard {
+        fn drop(&mut self) {
+            if let Some(path) = self.0.take() {
+                let _ = std::fs::remove_dir(path);
+            }
+        }
+    }
+    let _guard = loop {
+        if done.exists() {
+            return;
+        }
+        match std::fs::create_dir(&lock) {
+            Ok(()) => break LockGuard(Some(lock)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stale = lock
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(600));
+                if stale {
+                    let _ = std::fs::remove_dir(&lock);
+                    continue;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => break LockGuard(None),
+        }
+    };
+    if done.exists() {
+        return;
+    }
+    // Remove stamps from earlier nextest runs after one hour.
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(3600));
+        if !old {
+            continue;
+        }
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".workspace-bins-") {
+            if name.ends_with(".lock") {
+                let _ = std::fs::remove_dir(e.path());
+            } else {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    run_cargo_build_bins();
+    let _ = std::fs::write(&done, "");
+}
+
+fn run_cargo_build_bins() {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut cmd = Command::new(cargo);
+    cmd.args([
+        "build",
+        "--locked",
+        "--quiet",
+        "--workspace",
+        "--bins",
+        "--examples",
+    ]);
+    // Cargo sets these for the test process. Build scripts that watch them (ring watches
+    // CARGO_MANIFEST_DIR) would rerun and rebuild what the outer build just made.
+    const PER_PACKAGE: &[&str] = &[
+        "CARGO_MANIFEST_DIR",
+        "CARGO_MANIFEST_PATH",
+        "CARGO_CRATE_NAME",
+        "CARGO_PRIMARY_PACKAGE",
+        "CARGO_BIN_NAME",
+        "CARGO_TARGET_TMPDIR",
+    ];
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy().into_owned();
+        if key.starts_with("CARGO_PKG_") || PER_PACKAGE.contains(&key.as_str()) {
+            cmd.env_remove(&key);
+        }
+    }
+    let status = cmd.status().expect("cargo runs");
+    assert!(status.success(), "building the workspace binaries failed");
 }
 
 /// An example of a workspace crate, built by [`workspace_bin`].
