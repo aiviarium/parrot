@@ -120,7 +120,7 @@ The per-driver variables are useful for a wrapper, a version manager or a test. 
 
 ## Notifications
 
-A request that opens with `notify` other than `none` becomes a push event. The current runtime pushes only requests; the specification also lists task ends and lost sessions, which it does not send yet. A webhook receives a small JSON body:
+Three things are push events: a request that opens with `notify` other than `none`, a task that ends (`done`, `failed`, `cancelled` or `interrupted`), and a session that becomes `lost` because its agent exited unasked. A webhook receives a small JSON body:
 
 ```json
 {
@@ -133,4 +133,12 @@ A request that opens with `notify` other than `none` becomes a push event. The c
 }
 ```
 
+| `event` | Also carries |
+| --- | --- |
+| `request` | `request`: the request id, so a client can answer from the push |
+| `task` | `task` and `status`; `title` is the task's, and `text` is the status or the error |
+| `session` | `state: "lost"`; `title` is the session's |
+
 `url` appears only when `notifyUrl` is set. An ntfy target posts the text to `<server>/<topic>` with the title in a `Title` header. A body carries a title and at most 200 characters of text, never an item or code.
+
+Each event is pushed once. A session that runs again after a loss and is lost again is a new event.

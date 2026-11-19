@@ -2,8 +2,9 @@
 //! `{ event, session, title, text, url? }`, or an ntfy topic. Targets are configuration; bodies
 //! carry titles and short text only, never items or code.
 //!
-//! The backend sees every record the core persists; a request that opens with `notify` other
-//! than `none` is an event. Delivery is HTTP or HTTPS, off the actor thread.
+//! The backend sees every record the core persists. An open request with `notify` other than
+//! `none`, a task that ends, and a session that becomes `lost` are events. Delivery is HTTP or
+//! HTTPS, off the actor thread.
 
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -27,6 +28,8 @@ pub struct Notifier {
     /// A link for clients to open, put in `url` with the session appended.
     pub url: Option<String>,
     seen: HashSet<String>,
+    /// Sessions that are `lost` now, so a session that comes back and is lost again notifies.
+    lost: HashSet<String>,
     /// The roots HTTPS targets are checked against, in place of the public ones.
     roots: Option<Arc<Vec<Certificate<'static>>>>,
 }
@@ -56,27 +59,12 @@ impl Notifier {
 
     /// Looks at one persist record and delivers the event it is, if any.
     pub fn record(&mut self, record: &Value) {
-        if self.targets.is_empty() || record["op"] != "put" || record["kind"] != "request" {
+        if self.targets.is_empty() {
             return;
         }
-        let r = &record["value"]["request"];
-        let id = r["id"].as_str().unwrap_or_default().to_string();
-        if r["status"] != "open" || r["notify"] == "none" || r["notify"].is_null() || !self.seen.insert(id) {
+        let Some(body) = self.event(record) else {
             return;
-        }
-        let session = r["session"].as_str().unwrap_or_default();
-        let title = r["title"].as_str().unwrap_or("A session needs an answer");
-        let text: String = r["description"]
-            .as_str()
-            .unwrap_or_default()
-            .chars()
-            .take(TEXT_MAX)
-            .collect();
-        // `request` lets a client answer straight from the push.
-        let mut body = json!({ "event": "request", "session": session, "request": r["id"], "title": title, "text": text });
-        if let Some(u) = &self.url {
-            body["url"] = json!(format!("{u}{session}"));
-        }
+        };
         for target in self.targets.clone() {
             let body = body.clone();
             let roots = self.roots.clone();
@@ -86,6 +74,86 @@ impl Notifier {
                 }
             });
         }
+    }
+
+    /// The body to push for one record, or `None` when it is no event or was already sent.
+    fn event(&mut self, record: &Value) -> Option<Value> {
+        if record["op"] != "put" {
+            return None;
+        }
+        let mut body = match record["kind"].as_str()? {
+            "request" => self.request(record)?,
+            "tree" => self.task(record)?,
+            "session" => self.session(record)?,
+            _ => return None,
+        };
+        if let Some(u) = &self.url {
+            let session = body["session"].as_str().unwrap_or_default();
+            body["url"] = json!(format!("{u}{session}"));
+        }
+        Some(body)
+    }
+
+    /// A request that opened and asks to be pushed.
+    fn request(&mut self, record: &Value) -> Option<Value> {
+        let r = &record["value"]["request"];
+        let id = r["id"].as_str().unwrap_or_default().to_string();
+        if r["status"] != "open" || r["notify"] == "none" || r["notify"].is_null() || !self.seen.insert(id) {
+            return None;
+        }
+        let title = r["title"].as_str().unwrap_or("A session needs an answer");
+        let text: String = r["description"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(TEXT_MAX)
+            .collect();
+        // `request` lets a client answer straight from the push.
+        Some(
+            json!({ "event": "request", "session": r["session"], "request": r["id"], "title": title, "text": text }),
+        )
+    }
+
+    /// A task that ended (spec 19): `done`, `failed`, `cancelled` or `interrupted`.
+    fn task(&mut self, record: &Value) -> Option<Value> {
+        let task = record["value"].get("task")?;
+        let id = task["id"].as_str()?;
+        let status = task["status"].as_str()?;
+        if !matches!(status, "done" | "failed" | "cancelled" | "interrupted") {
+            return None;
+        }
+        if !self.seen.insert(format!("task:{id}:{status}")) {
+            return None;
+        }
+        let title = task["title"].as_str().unwrap_or("A task ended");
+        let text: String = match task["error"].as_str() {
+            Some(error) => format!("{status}: {error}"),
+            None => status.to_string(),
+        }
+        .chars()
+        .take(TEXT_MAX)
+        .collect();
+        Some(
+            json!({ "event": "task", "session": record["id"], "task": id, "status": status, "title": title, "text": text }),
+        )
+    }
+
+    /// A session that became `lost`: its agent exited without being asked to (spec 34).
+    fn session(&mut self, record: &Value) -> Option<Value> {
+        let s = &record["value"]["session"];
+        let session = record["id"].as_str().or_else(|| s["id"].as_str())?.to_string();
+        if s["state"] != "lost" {
+            // A session that runs again may be lost again, and that is a new event.
+            self.lost.remove(&session);
+            return None;
+        }
+        if !self.lost.insert(session.clone()) {
+            return None;
+        }
+        let title = s["title"].as_str().unwrap_or("A session was lost");
+        Some(
+            json!({ "event": "session", "session": session, "state": "lost", "title": title, "text": "the agent stopped unexpectedly" }),
+        )
     }
 }
 
@@ -276,5 +344,74 @@ mod tests {
         let mut notifier = Notifier::default();
         assert!(notifier.trust(b"not a pem file").is_err());
         assert!(notifier.trust(KEY).is_err());
+    }
+
+    fn task(status: &str, error: Option<&str>) -> Value {
+        let mut task = json!({ "id": "tsk_1", "title": "Fix the parser", "status": status });
+        if let Some(error) = error {
+            task["error"] = json!(error);
+        }
+        json!({ "op": "put", "kind": "tree", "id": "s-1", "value": { "task": task } })
+    }
+
+    fn session(state: &str) -> Value {
+        json!({ "op": "put", "kind": "session", "id": "s-1",
+            "value": { "session": { "id": "s-1", "state": state, "title": "Port the parser" } } })
+    }
+
+    #[test]
+    fn a_task_that_ends_is_an_event() {
+        let mut notifier = Notifier {
+            url: Some("https://app.example.test/s/".into()),
+            ..Notifier::default()
+        };
+
+        let done = task("done", None);
+        let body = notifier.event(&done).expect("a task end");
+        assert_eq!(body["event"], "task", "{body}");
+        assert_eq!(body["session"], "s-1", "{body}");
+        assert_eq!(body["task"], "tsk_1", "{body}");
+        assert_eq!(body["title"], "Fix the parser", "{body}");
+        assert_eq!(body["text"], "done", "{body}");
+        assert_eq!(body["url"], "https://app.example.test/s/s-1", "{body}");
+        assert!(notifier.event(&done).is_none(), "the same end twice");
+
+        // A failing task says why, and a running one is no event.
+        let failed = task("failed", Some("the harness exited"));
+        let body = notifier.event(&failed).expect("a task failure");
+        assert_eq!(body["text"], "failed: the harness exited", "{body}");
+        assert!(notifier.event(&task("running", None)).is_none());
+        assert!(notifier.event(&task("awaiting", None)).is_none());
+    }
+
+    #[test]
+    fn a_lost_session_is_an_event_each_time_it_is_lost() {
+        let mut notifier = Notifier::default();
+        let lost = session("lost");
+        let body = notifier.event(&lost).expect("a lost session");
+        assert_eq!(body["event"], "session", "{body}");
+        assert_eq!(body["session"], "s-1", "{body}");
+        assert_eq!(body["title"], "Port the parser", "{body}");
+        assert!(notifier.event(&lost).is_none(), "the same loss twice");
+
+        // The session coming back and being lost again is a new event.
+        assert!(notifier.event(&session("running")).is_none());
+        assert!(notifier.event(&lost).is_some());
+    }
+
+    #[test]
+    fn a_request_still_notifies_once() {
+        let mut notifier = Notifier {
+            url: Some("https://app.example.test/s/".into()),
+            ..Notifier::default()
+        };
+        let body = notifier.event(&request("r-1")).expect("a request");
+        assert_eq!(body["event"], "request", "{body}");
+        assert_eq!(body["request"], "r-1", "{body}");
+        assert_eq!(body["url"], "https://app.example.test/s/s-1", "{body}");
+        assert!(
+            notifier.event(&request("r-1")).is_none(),
+            "the same request twice"
+        );
     }
 }
