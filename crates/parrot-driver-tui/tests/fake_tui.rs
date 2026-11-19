@@ -397,12 +397,10 @@ async fn attachments_go_through_the_attach_action_and_frames_rebuild_items() {
         .await;
     let screen = h.screen().await;
     let text = screen["text"].as_str().unwrap();
-    // A long attachment path wraps inside the prompt, so compare with the wrapping flattened.
+    // A long attachment path wraps inside the prompt, and can push the message off the screen,
+    // so compare with the wrapping flattened and look only for the attachment.
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(
-        flat.contains("Done: @") && flat.contains("dot.png look"),
-        "{screen}"
-    );
+    assert!(flat.contains("Done: @") && flat.contains("dot.png"), "{screen}");
 
     let frames: Vec<Value> = h
         .seen
