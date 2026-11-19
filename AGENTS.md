@@ -42,10 +42,10 @@ For a fast local loop on one crate, filter inside `--workspace` instead of passi
 
 ```bash
 cargo nextest run --locked --workspace -E 'package(parrot-core)'
-TMPDIR=/tmp cargo nextest run --locked --workspace -E 'package(parrot-cli)'
+TMPDIR=~/.tmp cargo nextest run --locked --workspace -E 'package(parrot-cli)'
 ```
 
-Passing `-p` resolves features differently from `--workspace` and triggers a dependency rebuild, which `workspace_bin` then reverses. Keeping `--workspace` avoids that rebuild. Setting `TMPDIR=/tmp` avoids the 108-byte `SUN_LEN` Unix socket limit when `$TMPDIR` is deep in a workspace directory.
+Passing `-p` resolves features differently from `--workspace` and triggers a dependency rebuild, which `workspace_bin` then reverses. Keeping `--workspace` avoids that rebuild. Setting `TMPDIR` to a short directory on disk, such as `~/.tmp` (`mkdir -p ~/.tmp`), avoids the 108-byte `SUN_LEN` Unix socket limit when `$TMPDIR` is deep in a workspace directory. Don't use `/tmp`: on some machines it is in memory, and test runs fill it.
 
 Measured on an 8-core Linux laptop with a warm `target/` directory:
 
