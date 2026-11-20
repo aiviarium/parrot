@@ -15,6 +15,7 @@ It is for people building a client or an orchestrator over agent CLIs, and for p
 | [Workspaces](workspaces.md) | Folders, git worktrees, merges and checkpoints |
 | [Links](links.md) | Pairing two runtimes and the carriers between them |
 | [Behind Rookery](rookery.md) | Agents on a provisioned host, and the eggs' `rookery` target |
+| [From the prototype](from-the-prototype.md) | What moved from `helightdev/crow` into Parrot, and the model that changed |
 | [Drivers](drivers/claude.md) | One page for each agent: Claude Code, Codex, opencode, pi, ACP, T3 and the TUI core |
 | [Writing a driver](writing-drivers.md) | The driver protocol and the egg that carries it |
 | [Command line](reference/cli.md) | Every command and flag |

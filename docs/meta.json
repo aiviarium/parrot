@@ -10,6 +10,7 @@
     "workspaces",
     "links",
     "rookery",
+    "from-the-prototype",
     "---Drivers---",
     "drivers",
     "writing-drivers",
